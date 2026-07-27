@@ -9,7 +9,7 @@ import {
 export interface LoggerEnv {
   /** Datadog API key for HTTP log intake. Optional — Cloudflare arm still runs. */
   DATADOG_API_KEY?: string;
-  /** e.g. datadoghq.com or datadoghq.eu. Defaults to datadoghq.com. */
+  /** Datadog site host, e.g. us5.datadoghq.com. Defaults to us5 (this org). */
   DATADOG_SITE?: string;
 }
 
@@ -39,7 +39,7 @@ async function shipDatadogLog(
   site: string | undefined,
   input: DatadogSubmitInput,
 ): Promise<void> {
-  const host = site?.trim() || 'datadoghq.com';
+  const host = site?.trim() || 'us5.datadoghq.com';
   const url = `https://http-intake.logs.${host}/api/v2/logs`;
   const body = [
     {
