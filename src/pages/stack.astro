@@ -1,6 +1,11 @@
 ---
 import Base from '../layouts/Base.astro';
 import { components, SNAPSHOT_DATE } from '../data/components';
+import { planStage } from '../data/live-status';
+
+const withStage = await Promise.all(
+  components.map(async (c) => ({ ...c, stage: await planStage(c.repo, c.plan) })),
+);
 ---
 
 <Base
@@ -14,13 +19,14 @@ import { components, SNAPSHOT_DATE } from '../data/components';
       component <em>refuses</em> to do is part of its contract — read both columns.
     </p>
     <p class="notice">
-      Snapshot as of {SNAPSHOT_DATE}. Each repository's <code>docs/PROJECT_PLAN.md</code> is the
-      source of truth; this page will be compiled from those plans at build time.
+      "Now" lines are compiled at build time from each repository's public
+      <code>docs/PROJECT_PLAN.md</code> where one exists; the rest fall back to a snapshot dated
+      {SNAPSHOT_DATE}. The repos are the source of truth.
     </p>
   </section>
 
   {
-    components.map((c) => (
+    withStage.map((c) => (
       <section class="component" id={c.repo}>
         <header>
           <h3>{c.title}</h3>
@@ -49,7 +55,7 @@ import { components, SNAPSHOT_DATE } from '../data/components';
           </div>
         </div>
         <p class="now-line">
-          <strong>Now:</strong> {c.now} —{' '}
+          <strong>Now:</strong> {c.stage ?? c.now} —{' '}
           <a href={`https://github.com/pegma-dev/${c.repo}`}>repository</a>
           {c.plan && (
             <>

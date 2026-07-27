@@ -1,0 +1,56 @@
+# Pegma
+
+> An MIT-licensed family of composable backend components — storage,
+> authorization, audit, webhooks, sessions, rate limiting, a support desk —
+> designed to be assembled and maintained by AI agents. Early 0.x: some
+> packages published, none stable. npm scope: @pegma. GitHub: pegma-dev.
+
+Governing principle: optimize for a fresh agent context window — minimize
+what must be read to make a correct change; mechanize how the change proves
+itself correct (types and conformance suites over prose). Each component
+states what it REFUSES to do as prominently as what it owns; treat the
+refusals as part of the contract.
+
+The stack runs in production behind retiregolden.org (Azure). This site
+deploys on Cloudflare from a public repo (pegma-dev/pegma.dev) as the second
+reference environment.
+
+## Components
+
+- [Spine](https://github.com/pegma-dev/spine): @pegma/spine — shared
+  contracts (PrincipalId, IsoTimestamp, Clock, Logger, typed events with a
+  best-effort in-process bus). Published.
+- [Storage Core](https://github.com/pegma-dev/storage-core):
+  @pegma/storage-core, @pegma/storage-azure-tables — declared collections,
+  update deciders, conditional deletes, single-partition transactions, and a
+  conformance suite adapters must pass against a real backend. Published.
+- [Authorization Core](https://github.com/pegma-dev/authorization-core):
+  @pegma/authorization-* (contracts, core, policy, auth0, stripe, storage,
+  tokens) — provider-neutral roles, entitlements, permissions, versioned
+  policy. In development; unpublished.
+- [Audit](https://github.com/pegma-dev/audit): @pegma/audit — append-only
+  audit records that commit atomically inside the CALLER's transaction; owns
+  no store of its own. Published.
+- [Support Desk](https://github.com/pegma-dev/support-desk):
+  @pegma/support-desk-* — composable support queue for web and email,
+  authorized by permissions. In development.
+- [Webhooks](https://github.com/pegma-dev/webhooks): @pegma/webhooks —
+  inbound receipt ledger: idempotent dedup, poison quarantine, retention;
+  at-least-once on purpose. Planned.
+- [Sessions](https://github.com/pegma-dev/sessions): @pegma/sessions —
+  server-side session records: hashed ids, absolute + idle expiry,
+  principal-wide revocation. Planned.
+- [Rate Limit](https://github.com/pegma-dev/rate-limit): @pegma/rate-limit —
+  an honest in-memory tier and a durable fail-closed tier. Planned.
+
+Each repository's docs/PROJECT_PLAN.md is the source of truth for its
+status, design decisions, and non-goals.
+
+## Site
+
+- [The stack](https://pegma.dev/stack): every component — owns, refuses,
+  status, links.
+- [Roadmap](https://pegma.dev/roadmap): the aggregate view; status compiled
+  at build time from the repos' plans.
+- [Examples](https://pegma.dev/examples): snippets lifted from real code
+  only, each citing its source.

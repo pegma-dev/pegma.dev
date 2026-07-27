@@ -1,9 +1,16 @@
 ---
 import Base from '../layouts/Base.astro';
 import { components, SNAPSHOT_DATE } from '../data/components';
+import { planStage } from '../data/live-status';
 
 const order: Record<string, number> = { published: 0, 'in development': 1, planned: 2 };
-const sorted = [...components].sort((a, b) => order[a.status] - order[b.status]);
+const sorted = await Promise.all(
+  [...components]
+    .sort((a, b) => order[a.status] - order[b.status])
+    .map(async (c) => ({ ...c, stage: await planStage(c.repo, c.plan) })),
+);
+const compiledCount = sorted.filter((c) => c.stage).length;
+const builtOn = new Date().toISOString().slice(0, 10);
 ---
 
 <Base
@@ -17,9 +24,10 @@ const sorted = [...components].sort((a, b) => order[a.status] - order[b.status])
       consumers rather than dates. This page is the aggregate view.
     </p>
     <p class="notice">
-      Hand-written snapshot as of {SNAPSHOT_DATE}. A later site phase compiles this page from each
-      repository's <code>docs/PROJECT_PLAN.md</code> at build time, so it cannot drift; until then,
-      the repos win any disagreement.
+      Status lines below are compiled at build time ({builtOn}) from each repository's public
+      <code>docs/PROJECT_PLAN.md</code> — {compiledCount} of {components.length} components carry a
+      plan; the rest (and any fetch miss) fall back to a hand-written snapshot dated
+      {SNAPSHOT_DATE}. The repos win any disagreement.
     </p>
   </section>
 
@@ -45,7 +53,7 @@ const sorted = [...components].sort((a, b) => order[a.status] - order[b.status])
                   {c.status}
                 </span>
               </td>
-              <td>{c.now}</td>
+              <td>{c.stage ?? c.now}</td>
             </tr>
           ))
         }
