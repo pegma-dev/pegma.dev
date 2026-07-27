@@ -155,7 +155,7 @@ export const components: readonly PegmaComponent[] = [
     repo: 'sessions',
     title: 'Sessions',
     packages: ['@pegma/sessions'],
-    status: 'planned',
+    status: 'in development',
     summary: 'Server-side session records: hashed ids, dual expiry, revoke-everywhere.',
     owns: [
       'SHA-256-hashed identifiers, non-optionally — a leaked table hands out no sessions',
@@ -166,7 +166,7 @@ export const components: readonly PegmaComponent[] = [
       'Authentication — no OIDC, cookies, or CSRF; the host logs people in, this store remembers',
       'Tokens at rest, ever',
     ],
-    now: 'Plan published; extraction from the production reference implementation is next.',
+    now: 'Phase 1 record store is merged; Phase 2 first-consumer migration is in RetireGolden review; unpublished.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
