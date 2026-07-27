@@ -72,10 +72,10 @@ const builtOn = new Date().toISOString().slice(0, 10);
       (its phase 5). Until then its packages build and test but do not publish.
     </li>
     <li>
-      <strong>Extraction before adoption.</strong> Webhooks and Sessions are extractions of code
-      already in production behind the reference application; the packages can be built at any
-      time, but the application swaps onto them only after its current storage migration finishes
-      its production soak — a deliberate rule: never change the code under observation.
+      <strong>Webhooks is evidence-gated.</strong> The ledger and RetireGolden consumer migration
+      are implemented, but Phase 2 remains operationally open until production Stripe traffic is
+      observed through the package shape. Phase 3 waits for a second real, non-Stripe provider
+      rather than inventing a synthetic consumer.
     </li>
     <li>
       <strong>Consumers pull components into existence.</strong> Rate Limit stays dormant until

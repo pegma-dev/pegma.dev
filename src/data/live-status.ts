@@ -16,7 +16,11 @@ async function fetchStage(repo: string, plan: string): Promise<string | null> {
     const text = await res.text();
     // The house style opens with "## Status" (or "## Current Status") whose
     // first paragraph is the stage line.
-    const section = text.match(/^##\s+(?:Current\s+)?Status\s*\n+([\s\S]*?)(?=\n#{2,3}\s|$)/m);
+    // Avoid multiline mode here: with it, `$` also matches the end of the
+    // first status line and silently drops wrapped paragraph text.
+    const section = text.match(
+      /(?:^|\n)##\s+(?:Current\s+)?Status\s*\r?\n+([\s\S]*?)(?=\r?\n#{2,3}\s|$)/,
+    );
     if (!section) return null;
     const stage = section[1]
       .trim()

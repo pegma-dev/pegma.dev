@@ -136,7 +136,7 @@ export const components: readonly PegmaComponent[] = [
     repo: 'webhooks',
     title: 'Webhooks',
     packages: ['@pegma/webhooks'],
-    status: 'planned',
+    status: 'in development',
     summary: 'Inbound webhook receipts: idempotent dedup, poison quarantine, retention.',
     owns: [
       'One receipt per provider event id — the durable answer to “did we already process this?”',
@@ -148,7 +148,7 @@ export const components: readonly PegmaComponent[] = [
       'Ordering guarantees — domain logic, deliberately excluded',
       'Storing payloads — receipts hold ids and counters, never customer data',
     ],
-    now: 'Plan published; extraction from the production reference implementation is next.',
+    now: 'Phase 2 consumer migration is merged; operational exit awaits production Stripe traffic. Phase 3 is gated on a second real provider; unpublished.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
