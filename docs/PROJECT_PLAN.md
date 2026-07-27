@@ -217,4 +217,9 @@ with a source link where not. Decide in Phase 3.
    changes are edited into `src/data/components.ts` with the snapshot date
    bumped.
 3. Phase 4 waits until the storage-core adapter work is scheduled
-   deliberately.
+   deliberately. When the Workers consumer lands, wire
+   `createTeeLogger` from
+   [pegma-dev/logger-adapters](https://github.com/pegma-dev/logger-adapters)
+   with `@pegma/logger-cloudflare` and `@pegma/logger-datadog` at the
+   composition root (Spine `Logger` port; both reference hosts tee
+   Datadog — see that repo's plan).

@@ -225,4 +225,28 @@ export const components: readonly PegmaComponent[] = [
     now: 'Plan published; deliberately dormant until the support desk pulls it.',
     plan: 'docs/PROJECT_PLAN.md',
   },
+  {
+    repo: 'logger-adapters',
+    title: 'Logger Adapters',
+    packages: [
+      '@pegma/logger-tee',
+      '@pegma/logger-applicationinsights',
+      '@pegma/logger-cloudflare',
+      '@pegma/logger-datadog',
+    ],
+    status: 'published',
+    summary:
+      'Thin Spine Logger implementations for Application Insights, Cloudflare Workers Logs, and multi-sink teeing.',
+    owns: [
+      'Factories that implement Spine’s one-method Logger for named sinks',
+      'A tee that fans one Logger out to many sinks at the composition root',
+    ],
+    refuses: [
+      'A logging-core or Pegma-owned observability vocabulary — the port stays in Spine',
+      'Traces, metrics, APM, or SIEM — hosts use OpenTelemetry or vendor SDKs beside Pegma',
+      'Growing Spine with sink SDKs',
+    ],
+    now: '0.1.1 on npm; trusted publishing configured. Host tee wiring next.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
 ];
