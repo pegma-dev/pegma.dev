@@ -10,8 +10,16 @@ const cache = new Map<string, Promise<string | null>>();
 
 async function fetchStage(repo: string, plan: string): Promise<string | null> {
   try {
-    const url = `https://raw.githubusercontent.com/pegma-dev/${repo}/main/${plan}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    const url = new URL(`https://api.github.com/repos/pegma-dev/${repo}/contents/${plan}`);
+    url.searchParams.set('ref', 'main');
+    const res = await fetch(url, {
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/vnd.github.raw',
+        'User-Agent': 'pegma-dev-status-build',
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!res.ok) return null;
     const text = await res.text();
     // The house style opens with "## Status" (or "## Current Status") whose
