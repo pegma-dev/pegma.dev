@@ -2,7 +2,10 @@
 
 ## Status
 
-**Stage:** planning; repository bootstrapped 2026-07-27, no site code yet.
+**Stage:** LIVE — Phases 1 and 2 complete 2026-07-27. https://pegma.dev
+serves the static site from Cloudflare Pages (project `pegma-dev`;
+`www` 301s to the apex); push-to-main deploys production via the SHA-pinned
+workflow, and same-repo PRs get branch previews. Next: Phase 3.
 
 **Hosting decision:** Cloudflare (Pages for the static site; Workers when a
 dynamic slice exists). Deliberate: the reference application
@@ -141,19 +144,25 @@ by construction; nothing that would require one is allowed on.
 
 ## Delivery phases
 
-### Phase 1 — the static site
+### Phase 1 — the static site ✓ (2026-07-27)
 
 Astro scaffold, brand applied (favicons, lockups, social card from the
 kit), Home + Stack + Roadmap (hand-written once, honestly marked as
 snapshot) + Examples skeleton. Exit: the site builds statically and reads
-correctly to both target audiences.
+correctly to both target audiences. **Done:** four pages rendering from a
+single dated registry (`src/data/components.ts`, the file Phase 3
+replaces); examples lifted from the storage-core and spine READMEs.
 
-### Phase 2 — Cloudflare deployment
+### Phase 2 — Cloudflare deployment ✓ (2026-07-27)
 
 Cloudflare Pages project, `pegma.dev` custom domain, GitHub integration or
 Actions deploy (SHA-pinned, per ecosystem standard), preview deploys on PRs.
 Exit: push-to-main publishes; the domain serves the site with an A grade on
-the obvious security headers.
+the obvious security headers. **Done:** project `pegma-dev`, deploys via
+plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
+Pages:Edit only — deliberately no DNS scope; the custom domain was attached
+in the dashboard); security headers served from `public/_headers`, CSP with
+`script-src 'none'`; `www` 301s to the apex.
 
 ### Phase 3 — the compiled roadmap
 
@@ -195,8 +204,10 @@ with a source link where not. Decide in Phase 3.
 
 ## Near-term backlog
 
-1. Phase 1 scaffold with the brand kit vendored in.
-2. Cloudflare account/zone readiness for `pegma.dev` (DNS is already at
-   Cloudflare per the domain purchase; confirm Pages availability).
-3. Then Phases 2–3 in order; Phase 4 waits until the storage-core adapter
-   work is scheduled deliberately.
+1. Phase 3: build-time roadmap compilation from the component repos'
+   plans, llms.txt, and the stable-URL pass.
+2. Keep the hand-written registry honest until then — component status
+   changes are edited into `src/data/components.ts` with the snapshot date
+   bumped.
+3. Phase 4 waits until the storage-core adapter work is scheduled
+   deliberately.
