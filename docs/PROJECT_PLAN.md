@@ -5,7 +5,8 @@
 **Stage:** LIVE — Phases 1 and 2 complete 2026-07-27. https://pegma.dev
 serves the static site from Cloudflare Pages (project `pegma-dev`;
 `www` 301s to the apex); push-to-main deploys production via the SHA-pinned
-workflow, and same-repo PRs get branch previews. Next: Phase 3.
+workflow, and same-repo PRs get branch previews. **Phase 3 complete
+2026-07-27.** Next: Phase 4, scheduled deliberately.
 
 **Hosting decision:** Cloudflare (Pages for the static site; Workers when a
 dynamic slice exists). Deliberate: the reference application
@@ -164,12 +165,18 @@ Pages:Edit only — deliberately no DNS scope; the custom domain was attached
 in the dashboard); security headers served from `public/_headers`, CSP with
 `script-src 'none'`; `www` 301s to the apex.
 
-### Phase 3 — the compiled roadmap
+### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 
 Build-time aggregation of component PROJECT_PLAN.md statuses into the
 roadmap and per-component pages; llms.txt and stable-URL pass. Exit: a
 component phase change appears on the site at next build with zero site-repo
-edits.
+edits. **Done:** `src/data/live-status.ts` fetches each plan's Status stage
+line at build (fail-soft to the dated registry snapshot; six of eight
+components carry plans), a weekly scheduled rebuild plus workflow_dispatch
+keeps builds fresh without site commits, `/llms.txt` is live, and the build
+emits file-format output so extensionless URLs serve 200 with no
+trailing-slash redirect. Verified live: the roadmap shows plan text the
+registry never contained.
 
 ### Phase 4 — the environment test
 
