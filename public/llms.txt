@@ -42,7 +42,8 @@ reference environment.
   Stripe traffic; Phase 3 is gated on a second real provider.
 - [Sessions](https://github.com/pegma-dev/sessions): @pegma/sessions —
   server-side session records: hashed ids, absolute + idle expiry,
-  principal-wide revocation. Planned.
+  principal-wide revocation. In development and unpublished: Phase 1 is
+  merged, and Phase 2 first-consumer migration is in RetireGolden review.
 - [Rate Limit](https://github.com/pegma-dev/rate-limit): @pegma/rate-limit —
   an honest in-memory tier and a durable fail-closed tier. Planned.
 - [Identity](https://github.com/pegma-dev/identity): @pegma/identity —
