@@ -1,0 +1,68 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const path = Astro.url.pathname.replace(/\/$/, '') || '/';
+const nav = [
+  { href: '/', label: 'Home' },
+  { href: '/stack', label: 'The stack' },
+  { href: '/roadmap', label: 'Roadmap' },
+  { href: '/examples', label: 'Examples' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="canonical" href={new URL(path, Astro.site)} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={new URL('/pegma-social-card-1280x640.png', Astro.site)} />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a href="/" aria-label="Pegma home">
+          <img class="brand-lockup only-light" src="/brand/pegma-lockup-horizontal.svg" alt="Pegma" />
+          <img class="brand-lockup only-dark" src="/brand/pegma-lockup-horizontal-white.svg" alt="Pegma" />
+        </a>
+        <nav>
+          {
+            nav.map((item) => (
+              <a href={item.href} aria-current={path === item.href ? 'page' : undefined}>
+                {item.label}
+              </a>
+            ))
+          }
+          <a href="https://github.com/pegma-dev">GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <main class="wrap">
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <div class="wrap">
+        <p>
+          MIT-licensed and built in the open by RetireGolden, LLC. Source for this site:
+          <a href="https://github.com/pegma-dev/pegma.dev">pegma-dev/pegma.dev</a> — it deploys on
+          Cloudflare, the ecosystem's second reference environment.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

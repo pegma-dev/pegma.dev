@@ -1,0 +1,114 @@
+---
+import Base from '../layouts/Base.astro';
+
+/* Examples are LIFTED FROM REAL CODE, per the site's hard rule — each block
+   cites its source. Do not invent example code for this page. */
+
+const declareExample = `import { defineCollection, createMemoryStore } from "@pegma/storage-core";
+
+interface Session {
+  readonly id: string;
+  readonly principalId: string;
+  readonly expiresAt: string;
+}
+
+const sessions = defineCollection<Session>({
+  name: "sessions",
+  key: (session) => ({ partition: "session", id: session.id }),
+  codec: {
+    encode: (session) => ({ ...session }),
+    decode: (record) => ({
+      id: String(record["id"]),
+      principalId: String(record["principalId"]),
+      expiresAt: String(record["expiresAt"]),
+    }),
+  },
+});
+
+const store = createMemoryStore();
+const collection = store.collection(sessions);`;
+
+const updateExample = `const result = await collection.update(key, (current) => {
+  if (current === null) return { action: "keep" };
+  if (current.version >= incoming.version) return { action: "keep" };
+  return { action: "write", value: applyEvent(current, incoming) };
+});`;
+
+const eventExample = `import { createEventBus, defineEvent, type PrincipalId } from "@pegma/spine";
+
+interface AccountCreated {
+  readonly principalId: PrincipalId;
+  readonly email: string;
+}
+
+// Declared in a component's contracts package and exported as a constant, so
+// publishers and subscribers are checked against the same type.
+const AccountCreated = defineEvent<AccountCreated>("account.created");
+
+// Wired once at the host's composition root.
+const bus = createEventBus();
+
+bus.subscribe(AccountCreated, (envelope) => {
+  welcomeCache.invalidate(envelope.payload.principalId);
+});`;
+---
+
+<Base
+  title="Examples — Pegma"
+  description="Composition examples for the Pegma stack, lifted from real code — never invented for the page."
+>
+  <section class="hero">
+    <h1>Examples</h1>
+    <p class="lede">
+      Every snippet here is lifted from real, maintained sources — component READMEs, conformance
+      tests, or production consumers — and cites where it lives. An example that was never executed
+      is documentation that lies.
+    </p>
+    <p class="notice">
+      This page is a skeleton on purpose: it grows as components publish, and full composition
+      recipes ("a site with accounts", "a support queue") arrive with the consumers they are lifted
+      from.
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>Declare what you keep</h2>
+    <p>
+      A component declares a collection — name, key, codec — and never learns what the database
+      is. The codec is where your types meet flat storage; the same declaration runs over the
+      in-memory store in tests and the Azure Tables adapter in production.
+    </p>
+    <pre><code>{declareExample}</code></pre>
+    <p class="source">
+      Source: <a href="https://github.com/pegma-dev/storage-core#declaring-what-you-keep">storage-core README</a>
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>Change a record safely</h2>
+    <p>
+      <code>update</code> reads, asks your decider what to write, and writes — re-running the
+      decider against freshly read state whenever someone else got there first. A staleness check
+      inside the decider is re-evaluated on every conflict; a check performed before the call is a
+      check against state that may no longer be true.
+    </p>
+    <pre><code>{updateExample}</code></pre>
+    <p class="source">
+      Source: <a href="https://github.com/pegma-dev/storage-core#changing-a-record-safely">storage-core README</a>
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>Notify without pretending durability</h2>
+    <p>
+      Spine's in-process bus is the <em>lossy</em> tier on purpose — cache invalidation and
+      metrics, never anything that must survive a crash. Durable events belong in a
+      storage-backed outbox, and the choice between tiers is visible in the code rather than left
+      to memory.
+    </p>
+    <pre><code>{eventExample}</code></pre>
+    <p class="source">
+      Source: <a href="https://github.com/pegma-dev/spine#example">spine README</a>
+    </p>
+  </section>
+</Base>

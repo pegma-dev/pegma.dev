@@ -1,0 +1,64 @@
+---
+import Base from '../layouts/Base.astro';
+import { components, SNAPSHOT_DATE } from '../data/components';
+---
+
+<Base
+  title="The stack — Pegma"
+  description="Every Pegma component: what it owns, what it refuses, and where it stands."
+>
+  <section class="hero">
+    <h1>The stack</h1>
+    <p class="lede">
+      One repository per component, publishing under the <code>@pegma</code> scope. What a
+      component <em>refuses</em> to do is part of its contract — read both columns.
+    </p>
+    <p class="notice">
+      Snapshot as of {SNAPSHOT_DATE}. Each repository's <code>docs/PROJECT_PLAN.md</code> is the
+      source of truth; this page will be compiled from those plans at build time.
+    </p>
+  </section>
+
+  {
+    components.map((c) => (
+      <section class="component" id={c.repo}>
+        <header>
+          <h3>{c.title}</h3>
+          <span class="status" data-status={c.status}>
+            {c.status}
+          </span>
+          <span class="pkgs">{c.packages.join(' · ')}</span>
+        </header>
+        <p>{c.summary}</p>
+        <div class="two-col">
+          <div class="col">
+            <h4>Owns</h4>
+            <ul>
+              {c.owns.map((item) => (
+                <li>{item}</li>
+              ))}
+            </ul>
+          </div>
+          <div class="col">
+            <h4>Refuses</h4>
+            <ul>
+              {c.refuses.map((item) => (
+                <li>{item}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+        <p class="now-line">
+          <strong>Now:</strong> {c.now} —{' '}
+          <a href={`https://github.com/pegma-dev/${c.repo}`}>repository</a>
+          {c.plan && (
+            <>
+              {' · '}
+              <a href={`https://github.com/pegma-dev/${c.repo}/blob/main/${c.plan}`}>plan</a>
+            </>
+          )}
+        </p>
+      </section>
+    ))
+  }
+</Base>

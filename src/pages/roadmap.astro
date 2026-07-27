@@ -1,0 +1,92 @@
+---
+import Base from '../layouts/Base.astro';
+import { components, SNAPSHOT_DATE } from '../data/components';
+
+const order: Record<string, number> = { published: 0, 'in development': 1, planned: 2 };
+const sorted = [...components].sort((a, b) => order[a.status] - order[b.status]);
+---
+
+<Base
+  title="Roadmap — Pegma"
+  description="Where every Pegma component stands, what gates what, and what 1.0 requires."
+>
+  <section class="hero">
+    <h1>Roadmap</h1>
+    <p class="lede">
+      Pegma ships component by component, each through its own phased plan, each gated by real
+      consumers rather than dates. This page is the aggregate view.
+    </p>
+    <p class="notice">
+      Hand-written snapshot as of {SNAPSHOT_DATE}. A later site phase compiles this page from each
+      repository's <code>docs/PROJECT_PLAN.md</code> at build time, so it cannot drift; until then,
+      the repos win any disagreement.
+    </p>
+  </section>
+
+  <h2>Where things stand</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>Status</th>
+          <th>Now</th>
+        </tr>
+      </thead>
+      <tbody>
+        {
+          sorted.map((c) => (
+            <tr>
+              <td>
+                <a href={`/stack#${c.repo}`}>{c.title}</a>
+              </td>
+              <td>
+                <span class="status" data-status={c.status}>
+                  {c.status}
+                </span>
+              </td>
+              <td>{c.now}</td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <h2>What gates what</h2>
+  <p>
+    The dependencies that actually pace the work — none of them are dates:
+  </p>
+  <ul>
+    <li>
+      <strong>Authorization Core → its consumers.</strong> The reference application's migration
+      onto Authorization Core begins when its first public <code>0.x</code> packages exist
+      (its phase 5). Until then its packages build and test but do not publish.
+    </li>
+    <li>
+      <strong>Extraction before adoption.</strong> Webhooks and Sessions are extractions of code
+      already in production behind the reference application; the packages can be built at any
+      time, but the application swaps onto them only after its current storage migration finishes
+      its production soak — a deliberate rule: never change the code under observation.
+    </li>
+    <li>
+      <strong>Consumers pull components into existence.</strong> Rate Limit stays dormant until
+      the Support Desk's public endpoints need it. Transactional mail is built inside the Support
+      Desk first and extracted into a shared component only if a second consumer appears — the
+      same rule that produced Audit.
+    </li>
+    <li>
+      <strong>This site is a gate of its own.</strong> pegma.dev deploys on Cloudflare and will
+      eventually run a real Pegma consumer there, over a Cloudflare storage adapter that must pass
+      the same conformance suite as the Azure adapter. Two clouds, one suite — that is the
+      portability claim, tested.
+    </li>
+  </ul>
+
+  <h2>What 1.0 means</h2>
+  <p>
+    Nothing reaches <code>1.0</code> on ambition. The ecosystem rule is that breaking changes stay
+    permitted until multiple real consumers complete adoption — a component earns stability by
+    being used, not by being finished. Until then, every package is honestly <code>0.x</code>.
+  </p>
+</Base>

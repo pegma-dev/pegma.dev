@@ -1,0 +1,73 @@
+---
+import Base from '../layouts/Base.astro';
+import { components, SNAPSHOT_DATE } from '../data/components';
+---
+
+<Base
+  title="Pegma — site components built to be assembled by AI agents"
+  description="An MIT-licensed family of composable backend components — storage, authorization, sessions, webhooks, support — designed to be assembled and maintained by AI agents."
+>
+  <section class="hero">
+    <h1>A framework fastened together.</h1>
+    <p class="lede">
+      Pegma is an MIT-licensed family of backend components — storage, authorization, audit,
+      webhooks, sessions, a support desk — that a host application composes. Independent packages,
+      one set of shared contracts, and honest limits stated up front.
+    </p>
+    <p class="notice">
+      Pegma is in early <code>0.x</code> development. Some packages are published, none are stable,
+      and every component says so. What is stable is the approach — and everything below is public,
+      plans included.
+    </p>
+  </section>
+
+  <blockquote class="principle">
+    Optimize for a fresh agent context window. How much must be read to make a correct change, and
+    how does the change prove itself correct? Minimize the first, mechanize the second.
+    <cite>— the governing principle, applied to every component</cite>
+  </blockquote>
+
+  <p>
+    Every architectural decision assumes the assembler is an AI agent: minimal context to make a
+    correct change, machine-verifiable correctness (types, conformance suites) over prose,
+    explicit wiring over magic, and boring idiomatic code over novelty. The name is Greek —
+    <em>πῆγμα</em>, a structure fastened together.
+  </p>
+
+  <h2>The stack today</h2>
+  <ul class="card-grid">
+    {
+      components.map((c) => (
+        <li class="card">
+          <h3>
+            <a href={`/stack#${c.repo}`}>{c.title}</a>{' '}
+            <span class="status" data-status={c.status}>
+              {c.status}
+            </span>
+          </h3>
+          <p>{c.summary}</p>
+        </li>
+      ))
+    }
+  </ul>
+  <p>
+    Snapshot as of {SNAPSHOT_DATE} — the <a href="/roadmap">roadmap</a> has the phase-by-phase
+    picture, and each repository's <code>docs/PROJECT_PLAN.md</code> is the source of truth.
+  </p>
+
+  <h2>How the pieces hold together</h2>
+  <p>
+    <a href="https://github.com/pegma-dev/spine">Spine</a> defines the handful of contracts
+    everything peers on — principal identity, time, logging, events.
+    <a href="https://github.com/pegma-dev/storage-core">Storage Core</a> owns persistence:
+    components declare collections and never learn what the database is, and adapters prove
+    themselves against a conformance suite run on the real backend. Above those,
+    each component owns one job and publishes what it refuses to do as prominently as what it
+    does — because the most expensive failures come from tools that overpromise.
+  </p>
+  <p>
+    The stack runs in production behind <strong>retiregolden.org</strong> (Azure), the reference
+    application every component is extracted from. This site is the second environment: it deploys
+    on Cloudflare, from a <a href="https://github.com/pegma-dev/pegma.dev">public repo</a>.
+  </p>
+</Base>
