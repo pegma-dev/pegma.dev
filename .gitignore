@@ -2,10 +2,12 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+.wrangler/
 
 .env
 .env.*
 !.env.example
+worker/.dev.vars
 
 .DS_Store
 Thumbs.db

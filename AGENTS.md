@@ -34,9 +34,11 @@ tested files or quoted with a source link. Do not invent example code for a
 page — an example that was never executed is documentation that lies.
 
 **Static until the plan says otherwise.** No backend, no state, no accounts
-before the environment-test phase (Phase 4). When it arrives, its storage
-goes through `@pegma/storage-core` over the D1 adapter — the adapter itself
-lives in the storage-core repository, not here.
+before the environment-test phase (Phase 4). A thin Workers API
+(`worker/`, `pegma-dev-api`) may exist for logging and later Pegma
+consumers; its storage goes through `@pegma/storage-core` over the D1
+adapter — the adapter itself lives in the storage-core repository, not
+here.
 
 **Brand assets come from the kit.** Use the vendored assets (marks, lockups,
 favicons, social card) with their license notes; do not redraw, restyle, or

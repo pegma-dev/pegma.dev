@@ -186,6 +186,12 @@ dynamic slice on Workers consuming it. Exit: the conformance suite green on
 a second real backend, and one production Pegma consumer running outside
 Azure.
 
+**Logging precursor (2026-07-27):** Worker `pegma-dev-api` is deployed with
+`@pegma/logger-tee` → `@pegma/logger-cloudflare` + `@pegma/logger-datadog`.
+Workers Logs (Cloudflare’s log store) is enabled via Wrangler
+`observability.logs`. Datadog is optional until `DATADOG_API_KEY` is set.
+Full Phase 4 storage consumer remains gated on the D1 adapter.
+
 ### Phase 5 — dogfood support
 
 If Phase 4's slice was not support-desk: revisit hosting the site's contact
