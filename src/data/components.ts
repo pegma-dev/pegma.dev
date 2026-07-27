@@ -170,6 +170,25 @@ export const components: readonly PegmaComponent[] = [
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
+    repo: 'mail',
+    title: 'Mail',
+    packages: ['@pegma/mail'],
+    status: 'planned',
+    summary: 'Transactional mail: provider ports and an outbox pattern that owns no store.',
+    owns: [
+      'A delivery-job projection committed in the CALLER’s transaction — the lost-send gap closed by construction',
+      'A lease-claiming delivery worker: bounded retries, dead jobs kept as durable human-visible rows',
+      'A narrow send port with mandatory idempotency keys; provider adapters on consumer pull',
+    ],
+    refuses: [
+      'Owning an outbox store — single-partition transactions make an owned outbox incapable of the promised atomicity (the audit precedent)',
+      'Inbound mail, bulk/marketing sending, rich templating',
+      'Deliverability abstraction — SPF/DKIM/DMARC live in the host’s DNS',
+    ],
+    now: 'Plan published; dormant by design — extracted from the support desk when identity becomes the second consumer.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
+  {
     repo: 'identity',
     title: 'Identity',
     packages: ['@pegma/identity'],
