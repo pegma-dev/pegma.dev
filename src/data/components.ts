@@ -170,6 +170,25 @@ export const components: readonly PegmaComponent[] = [
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
+    repo: 'identity',
+    title: 'Identity',
+    packages: ['@pegma/identity'],
+    status: 'planned',
+    summary: 'First-party identity: passkeys-first, email-code fallback, no passwords.',
+    owns: [
+      'Account creation, passkey sign-in, and email one-time codes for enrollment, fallback, and recovery',
+      'User records in the host’s own storage — no external provider',
+      'Enumeration resistance as a test-pinned property, and an honestly stated email-recovery security floor',
+    ],
+    refuses: [
+      'Passwords — not a phase, a refusal: no password table, no reset flow, no breach class',
+      'Being an OIDC/OAuth2 server for third parties',
+      'Social login — external providers exist for that, and issuer-namespaced links let a host run both',
+    ],
+    now: 'Plan published; queued behind sessions, rate-limit, and mail — the components it composes.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
+  {
     repo: 'rate-limit',
     title: 'Rate Limit',
     packages: ['@pegma/rate-limit'],
