@@ -7,7 +7,9 @@
     "dev": "astro dev",
     "build": "astro build",
     "check": "astro check && tsc -p worker/tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.d1.config.ts",
+    "test:node": "vitest run --config vitest.config.ts",
+    "test:d1": "vitest run --config vitest.d1.config.ts",
     "preview": "astro preview",
     "worker:dev": "wrangler dev -c worker/wrangler.jsonc",
     "worker:deploy": "wrangler deploy -c worker/wrangler.jsonc",
@@ -26,10 +28,12 @@
     "@pegma/sessions": "0.1.0",
     "@pegma/spine": "^0.1.1",
     "@pegma/storage-cloudflare-d1": "0.4.0",
-    "@pegma/storage-core": "0.4.0"
+    "@pegma/storage-core": "0.4.0",
+    "@pegma/webhooks": "file:vendor/@pegma/webhooks/pegma-webhooks-0.0.0.tgz"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
+    "@cloudflare/vitest-pool-workers": "^0.18.8",
     "@types/node": "26.1.1",
     "astro": "7.1.4",
     "typescript": "^5.9.2",
