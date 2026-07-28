@@ -8,14 +8,14 @@ const withCompiledStatus = await Promise.all(components.map(compileComponentStat
 
 <Base
   title="Pegma — site components built to be assembled by AI agents"
-  description="An MIT-licensed family of composable backend components — storage, authorization, sessions, webhooks, support — designed to be assembled and maintained by AI agents."
+  description="An MIT-licensed family of composable backend components — storage, sessions, audit, health, logging — designed to be assembled and maintained by AI agents."
 >
   <section class="hero">
     <h1>A framework fastened together.</h1>
     <p class="lede">
-      Pegma is an MIT-licensed family of backend components — storage, authorization, identity,
-      audit, webhooks, sessions, mail, a support desk — that a host application composes.
-      Independent packages, one set of shared contracts, and honest limits stated up front.
+      Pegma is an MIT-licensed family of backend components — storage, sessions, audit, health
+      probes, structured logging — that a host application composes. Independent packages, one set
+      of shared contracts, and honest limits stated up front.
     </p>
     <p class="notice">
       Pegma is in early <code>0.x</code> development. Some packages are published, none are stable,
@@ -33,8 +33,14 @@ const withCompiledStatus = await Promise.all(components.map(compileComponentStat
   <p>
     Every architectural decision assumes the assembler is an AI agent: minimal context to make a
     correct change, machine-verifiable correctness (types, conformance suites) over prose,
-    explicit wiring over magic, and boring idiomatic code over novelty. The name is Greek —
-    <em>πῆγμα</em>, a structure fastened together.
+    explicit wiring over magic, and boring idiomatic code over novelty.
+  </p>
+  <p>
+    The name is Latin, borrowed from Greek <em>πῆγμα</em> (from <em>πήγνυμι</em>, “to fasten
+    together”): a framework of joined parts. In Roman amphitheatres the same word named a
+    machine-operated scaffold — multi-stage wooden machinery raised and lowered by ropes and
+    counterweights — that brought scenery and performers into view. Pegma is that kind of thing:
+    independent pieces fastened together, raised into place by the agent that assembles them.
   </p>
 
   <h2>The stack today</h2>
