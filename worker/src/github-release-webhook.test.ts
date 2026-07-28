@@ -288,6 +288,55 @@ describe('handleGitHubReleaseWebhook', () => {
     ).toBeNull();
   });
 
+  it('clears the projection on unpublished with null published_at', async () => {
+    const store = createMemoryStore();
+    const releases = store.collection(componentReleaseCollection());
+
+    expect(
+      (
+        await handleGitHubReleaseWebhook({
+          request: await signedRequest(releasePayload()),
+          store,
+          logger,
+          config,
+          now: NOW,
+        })
+      ).status,
+    ).toBe(204);
+    expect(await releases.get(componentReleaseKey(REPO_ID))).not.toBeNull();
+
+    const unpublishDelivery = '22222222-2222-4222-8222-222222222222';
+    const payload = releasePayload({
+      action: 'unpublished',
+      release: {
+        id: 100,
+        tag_name: 'v0.1.0',
+        published_at: null,
+        draft: true,
+        prerelease: false,
+      },
+    });
+    const body = new TextEncoder().encode(JSON.stringify(payload));
+    const response = await handleGitHubReleaseWebhook({
+      request: new Request('https://pegma.dev/api/webhooks/github/releases', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-GitHub-Event': 'release',
+          'X-GitHub-Delivery': unpublishDelivery,
+          'X-Hub-Signature-256': await signatureFor(body),
+        },
+        body,
+      }),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(response.status).toBe(204);
+    expect(await releases.get(componentReleaseKey(REPO_ID))).toBeNull();
+  });
+
   it('rejects unsupported event families after authentication', async () => {
     const store = createMemoryStore();
     const body = new TextEncoder().encode('{}');

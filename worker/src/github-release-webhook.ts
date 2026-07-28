@@ -187,24 +187,37 @@ export function extractReleaseEventFacts(
   }
   const repositoryId = asId(repository['id']);
   const releaseId = asId(release['id']);
+  const action = root['action'];
   if (
     repositoryId === null ||
     releaseId === null ||
     typeof repository['name'] !== 'string' ||
     typeof release['tag_name'] !== 'string' ||
-    typeof release['published_at'] !== 'string' ||
     typeof release['draft'] !== 'boolean' ||
     typeof release['prerelease'] !== 'boolean'
   ) {
     return null;
   }
+
+  let publishedAt: string;
+  if (typeof release['published_at'] === 'string') {
+    publishedAt = release['published_at'];
+  } else if (
+    release['published_at'] == null &&
+    (action === 'unpublished' || action === 'deleted')
+  ) {
+    publishedAt = '';
+  } else {
+    return null;
+  }
+
   return {
-    action: root['action'],
+    action,
     repositoryId,
     repositoryName: repository['name'],
     releaseId,
     tagName: release['tag_name'],
-    publishedAt: release['published_at'],
+    publishedAt,
     draft: release['draft'],
     prerelease: release['prerelease'],
   };
