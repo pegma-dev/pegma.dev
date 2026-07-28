@@ -166,7 +166,7 @@ export const components: readonly PegmaComponent[] = [
       'Authentication — no OIDC, cookies, or CSRF; the host logs people in, this store remembers',
       'Tokens at rest, ever',
     ],
-    now: 'Phase 1 record store is merged; Phase 2 first-consumer migration is in RetireGolden review; unpublished.',
+    now: 'Phase 1 record store is merged; Phase 2 first-consumer migration is merged into RetireGolden; unpublished.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
