@@ -8,6 +8,7 @@ const emailAvailability = document.querySelector('#email-availability');
 const accountEmail = document.querySelector('#account-email-display');
 const passkeyList = document.querySelector('#passkey-list');
 const addPasskey = document.querySelector('#add-passkey');
+const testSecureApi = document.querySelector('#test-secure-api');
 const signOut = document.querySelector('#sign-out');
 
 let csrfToken = '';
@@ -300,6 +301,17 @@ addPasskey.addEventListener('submit', async (event) => {
     showStatus('Passkey added.');
   } catch (error) {
     showStatus(`Could not add passkey: ${error.message}`, true);
+  }
+});
+
+testSecureApi.addEventListener('click', async () => {
+  try {
+    const result = await api('/api/secure');
+    showStatus(
+      `Backend session validated for ${result.subject} through ${result.session}.`,
+    );
+  } catch (error) {
+    showStatus(`Backend session validation failed: ${error.message}`, true);
   }
 });
 

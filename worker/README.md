@@ -37,7 +37,7 @@ authenticated operator session with `npm run worker:deploy` until a separate,
 least-privileged credential has both Worker script and `pegma.dev` route
 authority. Do not substitute a broad personal OAuth token into GitHub. The
 production Worker was operator-deployed on 2026-07-28 as version
-`0a9956e6-01c6-4a9a-953f-4e71d94d0055`.
+`f627b1ee-7675-47b2-a72b-6b26210f3bb3`.
 
 ## Identity composition
 
@@ -53,6 +53,12 @@ production origin and same-origin Fetch Metadata. Authenticated mutations also
 require a per-session synchronizer token. Request bodies are bounded before
 JSON parsing, and logs contain route/error classifications rather than contact
 data, credentials, codes, or session identifiers.
+
+`GET /api/secure` is the generic backend-authentication proof. It resolves the
+opaque `__Host-pegma_session` cookie through `@pegma/sessions`, revalidates the
+stored principal against Identity and the Authorization claims adapter, and
+returns only the issuer and subject. Missing, expired, revoked, malformed, or
+account-invalid sessions receive `401`; every response is `no-store`.
 
 The production composition pins `@pegma/identity@0.1.0` and
 `@pegma/authorization-identity@0.1.2`. Account creation and fallback sign-in
@@ -82,6 +88,59 @@ The first value is canonical base64 for 32–128 cryptographically random bytes
 and must remain stable while any email-code or Mail job is live. Verify the
 `pegma.dev` sender domain and smoke-test delivery before changing
 `IDENTITY_EMAIL_ENABLED` to `true`.
+
+### Enabling Resend in production
+
+Production has both `IDENTITY_EMAIL_CODE_SECRET_BASE64` and `RESEND_API_KEY`.
+Resend delivery was activated on 2026-07-28 after the `pegma.dev` domain was
+verified. Live health reports `emailDelivery: true`, Identity advertises
+`emailCode: true`, and an account-code job sent by the scheduled durable
+outbox reached Resend's official delivered test sink.
+
+Use this activation sequence for a new environment or credential rotation:
+
+1. Create the Resend account and a sending API key.
+2. Add `pegma.dev` as a Resend sending domain and install every DNS record
+   Resend supplies. Wait for the domain to show as verified.
+3. Put the key directly into the Worker:
+
+   ```sh
+   npx wrangler secret put RESEND_API_KEY -c worker/wrangler.jsonc
+   ```
+
+4. Send a provider smoke test from `Pegma <identity@pegma.dev>` to a real
+   address controlled by the operator.
+5. Change `IDENTITY_EMAIL_ENABLED` in `worker/wrangler.jsonc` to `true`, run
+   the complete gate, and deploy.
+6. Confirm `/api/health` reports `emailDelivery: true`, then exercise account
+   creation. The scheduled worker drains the durable Mail job each minute.
+
+Do not reverse steps 2 and 5. Identity deliberately fails closed so it never
+commits a verification-code operation that has no usable delivery path.
+
+### Additional provider adapters
+
+The host-owned adapters live beside the composition root:
+
+- `cloudflare-email-mail.ts` uses Cloudflare Email Service's native
+  `SendEmail` binding. Cloudflare does not currently document submission
+  idempotency, so construction requires the literal
+  `acceptDoubleSendRisk: true`. Authoritative delivery must be supplied from
+  Email Sending Queue events through the adapter's `deliveryStatus` port; the
+  included event parser normalizes those untrusted payloads.
+- `azure-acs-mail.ts` signs the Azure Communication Services Email REST API
+  with an access key, derives a stable operation UUID from the Mail
+  idempotency key, and uses ACS repeatability headers. The host must durably
+  supply the original `firstSentAt` timestamp. The adapter refuses to resubmit
+  after ACS's five-minute repeatability window. Recipient delivery comes from
+  Event Grid through its `deliveryStatus` port; a successful send operation
+  alone is not reported as delivery. The included Event Grid parser produces
+  the receipt shape expected by a host-owned status store.
+
+`createIdentityRuntime` accepts either adapter through `mailDelivery`, so
+Identity and the durable outbox remain provider-neutral. Production continues
+to select Resend until the chosen alternative has its domain, credentials,
+event receipt store, and callback correlation configured.
 
 The D1 schema is deployment-managed by
 `migrations/0001_pegma_storage.sql`. The adapter runs with

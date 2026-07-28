@@ -62,7 +62,7 @@ export default {
       return Response.json(body, { status });
     }
 
-    if (path.startsWith('/api/identity/')) {
+    if (path === '/api/secure' || path.startsWith('/api/identity/')) {
       try {
         return createProductionIdentityRuntime(env, logger).api(request);
       } catch (error) {
