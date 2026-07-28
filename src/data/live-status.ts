@@ -6,6 +6,8 @@
  * `now` line, so a GitHub hiccup can never break a deploy.
  */
 
+import type { ComponentStatus, PegmaComponent } from './components';
+
 const cache = new Map<string, Promise<string | null>>();
 
 async function fetchStage(repo: string, plan: string): Promise<string | null> {
@@ -55,4 +57,35 @@ export function planStage(repo: string, plan: string | undefined): Promise<strin
     cache.set(repo, hit);
   }
   return hit;
+}
+
+function statusFromStage(stage: string | null, fallback: ComponentStatus): ComponentStatus {
+  if (!stage) return fallback;
+
+  const normalized = stage.toLowerCase();
+  const saysUnpublished = /\b(?:unpublished|not published)\b/.test(normalized);
+
+  if (
+    !saysUnpublished &&
+    /\b(?:is published|published as|published at|on npm|first public)\b/.test(normalized)
+  ) {
+    return 'published';
+  }
+
+  if (saysUnpublished && fallback !== 'planned') {
+    return 'in development';
+  }
+
+  return fallback;
+}
+
+export async function compileComponentStatus(
+  component: PegmaComponent,
+): Promise<PegmaComponent & { readonly stage: string | null }> {
+  const stage = await planStage(component.repo, component.plan);
+  return {
+    ...component,
+    stage,
+    status: statusFromStage(stage, component.status),
+  };
 }
