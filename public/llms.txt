@@ -43,7 +43,7 @@ reference environment.
 - [Sessions](https://github.com/pegma-dev/sessions): @pegma/sessions —
   server-side session records: hashed ids, absolute + idle expiry,
   principal-wide revocation. In development and unpublished: Phase 1 is
-  merged, and Phase 2 first-consumer migration is in RetireGolden review.
+  merged, and Phase 2 first-consumer migration is merged into RetireGolden.
 - [Rate Limit](https://github.com/pegma-dev/rate-limit): @pegma/rate-limit —
   an honest in-memory tier and a durable fail-closed tier. Planned.
 - [Identity](https://github.com/pegma-dev/identity): @pegma/identity —
