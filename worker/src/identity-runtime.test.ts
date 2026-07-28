@@ -2,6 +2,10 @@ import { createMemoryStore } from '@pegma/storage-core';
 import type { Logger, PrincipalId } from '@pegma/spine';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  classifyCloudflareEmailFailure,
+  createCloudflareEmailMailPorts,
+} from './cloudflare-email-mail';
+import {
   createIdentityRuntime,
   type IdentityCompositionOptions,
 } from './identity-runtime';
@@ -107,6 +111,37 @@ describe('published Identity composition', () => {
     expect(page.results).toHaveLength(1);
     expect(page.results[0]).toMatchObject({ status: 'accepted' });
     expect(provider).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a host-selected provider adapter without changing Identity', async () => {
+    const send = vi.fn(async () => ({ messageId: 'cf-message-runtime' }));
+    const ports = createCloudflareEmailMailPorts({
+      binding: { send } as unknown as SendEmail,
+      from: 'identity@pegma.dev',
+      acceptDoubleSendRisk: true,
+    });
+    const runtime = createIdentityRuntime(
+      options({
+        emailEnabled: true,
+        mailDelivery: {
+          ...ports,
+          classifyFailure: classifyCloudflareEmailFailure,
+        },
+      }),
+      logger,
+    );
+
+    const started = await runtime.api(
+      mutation('/api/identity/email-code/account/options', {
+        email: 'cloudflare@example.test',
+      }),
+    );
+    expect(started.status).toBe(200);
+    expect(send).not.toHaveBeenCalled();
+
+    const page = await runtime.mailWorker!.runSendPage({ limit: 100 });
+    expect(page.results[0]).toMatchObject({ status: 'accepted' });
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it('rejects noncanonical or undersized HMAC secrets', () => {

@@ -3,6 +3,8 @@ import {
   createHmacEmailCodeProtector,
   createIdentity,
   type Identity,
+  type MailProvider,
+  type MailReconciliationPort,
   type MailWorker,
 } from '@pegma/identity';
 import {
@@ -46,6 +48,11 @@ export interface IdentityCompositionOptions {
   readonly emailEnabled: boolean;
   readonly resendApiKey?: string;
   readonly fetch?: typeof fetch;
+  readonly mailDelivery?: {
+    readonly provider: MailProvider;
+    readonly reconciliation: MailReconciliationPort;
+    readonly classifyFailure: (error: unknown) => string;
+  };
 }
 
 function emailCodeSecret(value: unknown): Uint8Array {
@@ -160,30 +167,41 @@ export function createIdentityRuntime(
   });
 
   const resendKey =
-    options.emailEnabled &&
     typeof options.resendApiKey === 'string' &&
     options.resendApiKey.length > 0
       ? options.resendApiKey
       : null;
-  const mailWorker =
-    resendKey === null
+  const delivery =
+    !options.emailEnabled
       ? null
-      : (() => {
-          const ports = createResendMailPorts({
-            apiKey: resendKey,
-            from: options.emailFrom,
-            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-          });
-          return identity.createMailWorker({
-            workerId: 'pegma-dev-identity-mail',
-            provider: ports.provider,
-            reconciliation: ports.reconciliation,
-            renderer: createIdentityMailRenderer(),
-            leaseMilliseconds: 30_000,
-            acceptedCallbackMilliseconds: 5 * 60_000,
-            classifyFailure: classifyResendFailure,
-          });
-        })();
+      : options.mailDelivery ??
+        (resendKey === null
+          ? null
+          : (() => {
+              const ports = createResendMailPorts({
+                apiKey: resendKey,
+                from: options.emailFrom,
+                ...(options.fetch === undefined
+                  ? {}
+                  : { fetch: options.fetch }),
+              });
+              return {
+                ...ports,
+                classifyFailure: classifyResendFailure,
+              };
+            })());
+  const mailWorker =
+    delivery === null
+      ? null
+      : identity.createMailWorker({
+          workerId: 'pegma-dev-identity-mail',
+          provider: delivery.provider,
+          reconciliation: delivery.reconciliation,
+          renderer: createIdentityMailRenderer(),
+          leaseMilliseconds: 30_000,
+          acceptedCallbackMilliseconds: 5 * 60_000,
+          classifyFailure: delivery.classifyFailure,
+        });
   const emailCodeReady = mailWorker !== null;
   const sessions = createSessionStore(store, { logger });
   const api = createIdentityApi({
