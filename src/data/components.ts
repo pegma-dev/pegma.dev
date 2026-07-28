@@ -1,8 +1,8 @@
 /**
- * The component registry every page renders from — a hand-maintained
- * SNAPSHOT (2026-07-27). Phase 3 of the site plan replaces this file with
- * build-time aggregation from each repository's docs/PROJECT_PLAN.md, so
- * facts here are deliberately terse: anything richer belongs in the repos.
+ * The component registry every page renders from — a hand-maintained fallback
+ * snapshot. Build-time aggregation replaces each component's `now` line with
+ * the Stage paragraph from its repository's docs/PROJECT_PLAN.md when
+ * available, so facts here stay terse and useful during a fetch failure.
  */
 
 export type ComponentStatus = 'published' | 'in development' | 'planned';
@@ -45,7 +45,7 @@ export const components: readonly PegmaComponent[] = [
       'Durable events — anything that must survive a crash goes to a storage-backed outbox, never the in-process bus',
       'Growth — the more spine changes, the more the ecosystem churns',
     ],
-    now: '0.1.0 on npm; deliberately close to frozen.',
+    now: '0.1.1 on npm; deliberately close to frozen.',
   },
   {
     repo: 'storage-core',
@@ -123,7 +123,12 @@ export const components: readonly PegmaComponent[] = [
   {
     repo: 'support-desk',
     title: 'Support Desk',
-    packages: ['@pegma/support-desk-contracts', '@pegma/support-desk-core'],
+    packages: [
+      '@pegma/support-desk-contracts',
+      '@pegma/support-desk-core',
+      '@pegma/support-desk-application',
+      '@pegma/support-desk-templates',
+    ],
     status: 'in development',
     summary:
       'A composable support queue for web and email, authorized by permissions from day one.',
@@ -136,7 +141,7 @@ export const components: readonly PegmaComponent[] = [
       'Being a hosted SaaS — hosts run it, own its data, and choose its providers',
       'AI processing before the host documents what may leave its boundary',
     ],
-    now: 'Domain core and plan in place; application services and deployment phases ahead.',
+    now: 'Phases 1 and 2 plus provider-neutral Phase 6 mail source are implemented; all packages remain unpublished and deployment phases are ahead.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -175,7 +180,7 @@ export const components: readonly PegmaComponent[] = [
       'Authentication — no OIDC, cookies, or CSRF; the host logs people in, this store remembers',
       'Tokens at rest, ever',
     ],
-    now: '0.1.0 on npm; Phase 2 first-consumer migration is merged into RetireGolden; early 0.x API remains unstable.',
+    now: '0.1.0 on npm; RetireGolden is the first integrated consumer and this site is the second, live consumer; early 0.x API remains unstable.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -234,7 +239,7 @@ export const components: readonly PegmaComponent[] = [
       'DDoS protection — volumetric defense belongs at the edge',
       'Middleware and usage metering',
     ],
-    now: '0.1.0 on npm; both in-memory dampening and durable fixed-window limits are composed here.',
+    now: '0.1.0 on npm; durable fixed-window policies are composed by the production Identity worker.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
