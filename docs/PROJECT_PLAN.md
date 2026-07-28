@@ -263,3 +263,8 @@ with a source link where not. Decide in Phase 3.
 3. Route same-origin `/api/*` traffic to `pegma-dev-api`, deploy, and verify the
    D1-backed account flow without changing the Pages-hosted static architecture.
    **Done 2026-07-28, including email activation.**
+4. Keep public component release versions current on pegma.dev without a
+   content commit or Pages deploy per release — see
+   `docs/GITHUB_RELEASE_WEBHOOK_PLAN.md`. **Phase A (2026-07-28):** vendored
+   `@pegma/webhooks` artifact aligned to Storage Core `0.4.0` and proven over
+   memory + D1; handler, read API, UI, reconciliation, and activation remain.

@@ -27,7 +27,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm test
+      # Keep production Pages deploys on the Node suite. The Workers/D1 pool
+      # suite stays in CI via `npm test` so workerd/pool flakes cannot block
+      # an otherwise unrelated site deploy.
+      - run: npm run test:node
       - run: npm run build
       # Migration 0001 is already applied remotely. Keep deployment fail-closed
       # until a separately least-privileged D1 token exists for future changes.
