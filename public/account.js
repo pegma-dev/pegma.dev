@@ -11,7 +11,8 @@ const addPasskey = document.querySelector('#add-passkey');
 const signOut = document.querySelector('#sign-out');
 
 let csrfToken = '';
-let emailChallengeHandle = '';
+let emailCodeHandle = '';
+let emailChallengeFlow = 'sign-in';
 let passkeyRemovalAvailable = false;
 
 function showStatus(message, isError = false) {
@@ -232,11 +233,17 @@ emailStart.addEventListener('submit', async (event) => {
   try {
     showStatus('Requesting a verification code…');
     const form = new FormData(emailStart);
-    const started = await api('/api/identity/email-code/options', {
+    const flow =
+      event.submitter instanceof HTMLButtonElement &&
+      event.submitter.value === 'account'
+        ? 'account'
+        : 'sign-in';
+    const started = await api(`/api/identity/email-code/${flow}/options`, {
       method: 'POST',
       body: JSON.stringify({ email: form.get('email') }),
     });
-    emailChallengeHandle = started.challengeHandle;
+    emailCodeHandle = started.codeHandle;
+    emailChallengeFlow = flow;
     emailFinish.hidden = false;
     showStatus('If that address can receive a code, it is on the way.');
   } catch (error) {
@@ -248,13 +255,16 @@ emailFinish.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const form = new FormData(emailFinish);
-    const completed = await api('/api/identity/email-code/verify', {
-      method: 'POST',
-      body: JSON.stringify({
-        challengeHandle: emailChallengeHandle,
-        code: form.get('code'),
-      }),
-    });
+    const completed = await api(
+      `/api/identity/email-code/${emailChallengeFlow}/verify`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          codeHandle: emailCodeHandle,
+          code: form.get('code'),
+        }),
+      },
+    );
     csrfToken = completed.csrfToken;
     await refreshAccount();
   } catch (error) {
@@ -310,7 +320,9 @@ async function start() {
     const capabilities = await api('/api/identity/capabilities');
     passkeyRemovalAvailable = capabilities.emailCode;
     passkeySignIn.disabled = !capabilities.passkeys;
-    emailStart.querySelector('button').disabled = !capabilities.emailCode;
+    for (const button of emailStart.querySelectorAll('button')) {
+      button.disabled = !capabilities.emailCode;
+    }
     emailAvailability.textContent = capabilities.emailCode
       ? 'Codes are delivered by the configured provider.'
       : 'Email-code delivery is not enabled yet.';
@@ -319,7 +331,7 @@ async function start() {
       showStatus(
         capabilities.passkeys
           ? 'Choose a passwordless sign-in method.'
-          : 'Identity is being prepared for its first public release.',
+          : 'No sign-in method is currently available.',
       );
     }
   } catch {

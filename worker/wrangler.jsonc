@@ -12,6 +12,13 @@
       "zone_name": "pegma.dev",
     },
   ],
+  "vars": {
+    "IDENTITY_EMAIL_FROM": "Pegma <identity@pegma.dev>",
+    "IDENTITY_EMAIL_ENABLED": "false",
+  },
+  "triggers": {
+    "crons": ["* * * * *"],
+  },
   "d1_databases": [
     {
       "binding": "IDENTITY_DB",

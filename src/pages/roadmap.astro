@@ -65,9 +65,10 @@ const builtOn = new Date().toISOString().slice(0, 10);
   </p>
   <ul>
     <li>
-      <strong>Authorization Core → its consumers.</strong> The reference application's migration
-      onto Authorization Core begins when its first public <code>0.x</code> packages exist
-      (its phase 5). Until then its packages build and test but do not publish.
+      <strong>Authorization Core → its consumers.</strong> Its public <code>0.x</code> packages
+      now exist, and this reference application composes the Identity claims adapter with
+      first-party Identity and Sessions. Broader consumer migrations still determine when those
+      contracts are stable enough for <code>1.0</code>.
     </li>
     <li>
       <strong>Webhooks is evidence-gated.</strong> The ledger and RetireGolden consumer migration
@@ -76,16 +77,15 @@ const builtOn = new Date().toISOString().slice(0, 10);
       rather than inventing a synthetic consumer.
     </li>
     <li>
-      <strong>Consumers pull components into existence.</strong> Rate Limit stays dormant until
-      the Support Desk's public endpoints need it. Transactional mail is built inside the Support
-      Desk first and extracted into a shared component only if a second consumer appears — the
-      same rule that produced Audit.
+      <strong>Consumers pull components into existence.</strong> Support Desk supplied the first
+      durable mail consumer; Identity supplied the second, triggering Mail's extraction and public
+      release. Identity also pulled Rate Limit into production composition instead of leaving it
+      as a speculative utility.
     </li>
     <li>
-      <strong>This site is a gate of its own.</strong> pegma.dev deploys on Cloudflare and will
-      eventually run a real Pegma consumer there, over a Cloudflare storage adapter that must pass
-      the same conformance suite as the Azure adapter. Two clouds, one suite — that is the
-      portability claim, tested.
+      <strong>This site is a gate of its own.</strong> pegma.dev deploys on Cloudflare and now runs
+      a real Identity consumer over the Cloudflare D1 adapter, which passes the same conformance
+      suite as the Azure adapter. Two clouds, one suite — that is the portability claim, tested.
     </li>
   </ul>
 

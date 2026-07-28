@@ -5,10 +5,14 @@
 **Stage:** LIVE — Phases 1 and 2 complete 2026-07-27. https://pegma.dev
 serves the static site from Cloudflare Pages (project `pegma-dev`;
 `www` 301s to the apex); push-to-main deploys production via the SHA-pinned
-workflow, and same-repo PRs get branch previews. **Phase 3 complete
-2026-07-27. Phase 4 is in progress:** its D1-backed Identity consumer is
-prepared but not deployed while the Identity packages await their first public
-releases.
+workflow, while PRs validate without receiving production credentials.
+**Phase 3 complete
+2026-07-27. Phase 4 is in progress:** its D1-backed Identity consumer now
+composes the exact public Identity, Authorization adapter, Sessions, Mail,
+rate-limit, and storage packages. Production deployment remains gated on
+review and end-to-end account smoke tests. Email-code activation is a separate
+gate: provider-domain setup, its managed secret, an audited operator workflow,
+and an end-to-end delivery smoke test.
 
 **Hosting decision:** Cloudflare (Pages for the static site; Workers when a
 dynamic slice exists). Deliberate: the reference application
@@ -159,13 +163,16 @@ replaces); examples lifted from the storage-core and spine READMEs.
 ### Phase 2 — Cloudflare deployment ✓ (2026-07-27)
 
 Cloudflare Pages project, `pegma.dev` custom domain, GitHub integration or
-Actions deploy (SHA-pinned, per ecosystem standard), preview deploys on PRs.
+Actions deploy (SHA-pinned, per ecosystem standard).
 Exit: push-to-main publishes; the domain serves the site with an A grade on
 the obvious security headers. **Done:** project `pegma-dev`, deploys via
 plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
 Pages:Edit, Workers:Edit, and D1:Edit — deliberately no DNS scope; the custom
 domain was attached in the dashboard); security headers served from
-`public/_headers`, CSP with `script-src 'none'`; `www` 301s to the apex.
+`public/_headers`, CSP with same-origin scripts only; `www` 301s to the apex.
+Pull requests run the build gate but never receive that production token;
+branch previews remain disabled until a separately scoped preview credential
+exists.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 
@@ -188,19 +195,25 @@ dynamic slice on Workers consuming it. Exit: the conformance suite green on
 a second real backend, and one production Pegma consumer running outside
 Azure.
 
-**Identity consumer prepared (2026-07-28):** the Worker now composes the
-published D1 adapter and exact `@pegma/sessions@0.1.0`, with migration-managed
-storage and a secure account API/browser boundary for issuer
-`https://pegma.dev` and RP ID `pegma.dev`. Identity, its Authorization adapter,
-and email-code delivery are fail-closed injected ports until their exact public
-releases are available. No paid email service is assumed or activated.
+**Identity consumer composed (2026-07-28):** the Worker now pins
+`@pegma/identity@0.1.0`, `@pegma/authorization-identity@0.1.2`,
+`@pegma/sessions@0.1.0`, `@pegma/mail@0.1.0`,
+`@pegma/rate-limit@0.1.0`, and the D1/storage `0.4.0` packages. It exposes a
+secure account API/browser boundary for issuer `https://pegma.dev` and RP ID
+`pegma.dev`, uses four durable abuse limits, and schedules cursor-persisted
+maintenance. Email jobs commit atomically in Identity storage; a fail-closed
+Resend adapter provides idempotent send and reconciliation but remains
+disabled until the free-tier provider account, sender domain, managed secrets,
+delivery smoke test, and audited operator acknowledgement workflow are
+complete. No paid email service is assumed.
 
 **Logging precursor (2026-07-27):** Worker `pegma-dev-api` is deployed with
 `@pegma/logger-tee` → `@pegma/logger-cloudflare` + `@pegma/logger-datadog`.
 Workers Logs (Cloudflare’s log store) is enabled via Wrangler
 `observability.logs`. Datadog is optional until `DATADOG_API_KEY` is set.
-The Phase 4 account consumer now uses the published D1 adapter and Sessions;
-its Identity runtime remains fail closed until the Identity packages publish.
+The Phase 4 account consumer now uses the published D1 adapter, Sessions,
+Identity, and Authorization adapter; its email entry points remain fail closed
+until the provider activation gate is complete.
 
 ### Phase 5 — dogfood support
 
@@ -227,11 +240,12 @@ with a source link where not. Decide in Phase 3.
 
 ## Near-term backlog
 
-1. Install the first exact public `@pegma/identity` and
-   `@pegma/authorization-identity` releases at the isolated Worker composition
-   root.
-2. Add an email-code provider through the checked-in delivery seam when a
-   suitable service is available; do not make account correctness depend on
-   provider-specific APIs.
+1. Complete independent review and local/remote D1 tests for the exact
+   Identity composition.
+2. Configure the Resend free-tier account, verify the `pegma.dev` sender,
+   install its managed provider secret, and smoke-test idempotent delivery
+   behind an authenticated, audited terminal-mail acknowledgement workflow
+   before enabling email-code entry points. The stable HMAC secret is already
+   installed in Cloudflare's managed secret store.
 3. Route same-origin `/api/*` traffic to `pegma-dev-api`, deploy, and verify the
    D1-backed account flow without changing the Pages-hosted static architecture.

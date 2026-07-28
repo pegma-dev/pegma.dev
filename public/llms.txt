@@ -22,13 +22,15 @@ reference environment.
   contracts (PrincipalId, IsoTimestamp, Clock, Logger, typed events with a
   best-effort in-process bus). Published.
 - [Storage Core](https://github.com/pegma-dev/storage-core):
-  @pegma/storage-core, @pegma/storage-azure-tables — declared collections,
-  update deciders, conditional deletes, single-partition transactions, and a
-  conformance suite adapters must pass against a real backend. Published.
+  @pegma/storage-core, @pegma/storage-azure-tables,
+  @pegma/storage-cloudflare-d1 — declared collections, update deciders,
+  conditional deletes, bounded authoritative scans, single-partition
+  transactions, and a conformance suite adapters must pass against a real
+  backend. Published as 0.4.0.
 - [Authorization Core](https://github.com/pegma-dev/authorization-core):
   @pegma/authorization-* (contracts, core, policy, auth0, stripe, storage,
-  tokens) — provider-neutral roles, entitlements, permissions, versioned
-  policy. In development; unpublished.
+  tokens, identity) — provider-neutral roles, entitlements, permissions,
+  versioned policy, and the Identity claims adapter. Published as 0.1.2.
 - [Audit](https://github.com/pegma-dev/audit): @pegma/audit — append-only
   audit records that commit atomically inside the CALLER's transaction; owns
   no store of its own. Published.
@@ -49,15 +51,15 @@ reference environment.
   first-consumer migration is merged into RetireGolden, and the early 0.x API
   remains unstable.
 - [Rate Limit](https://github.com/pegma-dev/rate-limit): @pegma/rate-limit —
-  an honest in-memory tier and a durable fail-closed tier. Planned.
+  an honest in-memory tier and a durable fail-closed tier. Published as 0.1.0.
 - [Identity](https://github.com/pegma-dev/identity): @pegma/identity —
   first-party identity: passkeys-first, email-code fallback, NO passwords
-  (a refusal, not a phase); user records in the host's own storage.
-  Planned; queued behind sessions, rate-limit, and mail.
+  (a refusal, not a phase); user records in the host's own storage. Published
+  as 0.1.0 and composed by this site's Cloudflare Worker.
 - [Mail](https://github.com/pegma-dev/mail): @pegma/mail — transactional
   mail: provider ports and an outbox pattern that owns NO store (jobs
-  commit in the caller's transaction, the audit precedent). Planned;
-  dormant until extracted from the support desk on its second consumer.
+  commit in the caller's transaction, the audit precedent). Published as
+  0.1.0 after Identity became its second consumer.
 
 Each repository's docs/PROJECT_PLAN.md is the source of truth for its
 status, design decisions, and non-goals.
@@ -71,6 +73,7 @@ status, design decisions, and non-goals.
 - [Examples](https://pegma.dev/examples): snippets lifted from real code
   only, each citing its source.
 - [Account](https://pegma.dev/account): the static shell for pegma.dev's
-  D1-backed first-party Identity reference consumer. Its Worker runtime stays
-  fail closed until the exact Identity and Authorization adapter releases are
-  installed; email delivery is an injected provider seam.
+  D1-backed first-party Identity reference consumer. The Worker pins the exact
+  Identity, Authorization adapter, Sessions, Mail, rate-limit, and storage
+  releases. Email entry points remain fail closed until the idempotent Resend
+  provider, sender domain, managed secrets, and delivery smoke test are ready.

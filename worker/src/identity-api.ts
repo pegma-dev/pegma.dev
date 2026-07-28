@@ -6,7 +6,6 @@ import type {
   IdentityLinkProjector,
   IdentityPort,
   IdentityUser,
-  VerificationEmailSender,
   VerifiedIdentityClaims,
 } from './identity-contracts';
 
@@ -29,7 +28,8 @@ interface IdentityApiOptions {
   readonly identity?: IdentityPort;
   readonly identityLinkFromClaims?: IdentityLinkProjector;
   readonly emailCodes?: EmailCodeIdentityPort;
-  readonly verificationEmailSender?: VerificationEmailSender;
+  /** True only while a durable idempotent Mail worker is configured. */
+  readonly emailCodeReady?: boolean;
   readonly logger: Logger;
   readonly randomBytes?: (target: Uint8Array) => Uint8Array;
 }
@@ -302,24 +302,11 @@ function requireIdentityCapability(options: IdentityApiOptions): void {
   expectedProjector(options);
 }
 
-async function readyEmailRecovery(options: IdentityApiOptions): Promise<{
-  readonly codes: EmailCodeIdentityPort;
-  readonly sender: VerificationEmailSender;
-} | null> {
+function readyEmailRecovery(
+  options: IdentityApiOptions,
+): EmailCodeIdentityPort | null {
   const codes = composedEmailRecovery(options);
-  if (codes === null || options.verificationEmailSender === undefined) {
-    return null;
-  }
-  try {
-    return (await options.verificationEmailSender.ready()) === true
-      ? {
-          codes,
-          sender: options.verificationEmailSender,
-        }
-      : null;
-  } catch {
-    return null;
-  }
+  return codes !== null && options.emailCodeReady === true ? codes : null;
 }
 
 function composedEmailRecovery(
@@ -483,17 +470,16 @@ function publicError(error: unknown): ApiError {
       case 'invalid_input':
       case 'verification_failed':
         return new ApiError(400, 'verification_failed');
-      case 'rate_limited':
-        {
-          const retryAfter =
-            'retryAfter' in error &&
-            typeof error.retryAfter === 'number' &&
-            Number.isFinite(error.retryAfter) &&
-            error.retryAfter > 0
-              ? Math.ceil(error.retryAfter / 1_000)
-              : undefined;
-          return new ApiError(429, 'rate_limited', retryAfter);
-        }
+      case 'rate_limited': {
+        const retryAfter =
+          'retryAfter' in error &&
+          typeof error.retryAfter === 'number' &&
+          Number.isFinite(error.retryAfter) &&
+          error.retryAfter > 0
+            ? Math.ceil(error.retryAfter / 1_000)
+            : undefined;
+        return new ApiError(429, 'rate_limited', retryAfter);
+      }
       case 'not_found':
         return new ApiError(404, 'not_found');
       case 'conflict':
@@ -518,7 +504,7 @@ export function createIdentityApi(
     const path = new URL(request.url).pathname;
     try {
       if (request.method === 'GET' && path === '/api/identity/capabilities') {
-        const emailCode = (await readyEmailRecovery(options)) !== null;
+        const emailCode = readyEmailRecovery(options) !== null;
         return json({
           issuer: IDENTITY_ISSUER,
           rpID: IDENTITY_RP_ID,
@@ -574,48 +560,90 @@ export function createIdentityApi(
           options,
         ).finishPasskeyAuthentication({
           challengeHandle: boundedString(body.challengeHandle, 1, 512),
-          response: body.response,
+          response: body.response as Parameters<
+            IdentityPort['finishPasskeyAuthentication']
+          >[0]['response'],
         });
         return await establishSession(request, claims, options);
       }
 
       if (
         request.method === 'POST' &&
-        path === '/api/identity/email-code/options'
+        path === '/api/identity/email-code/account/options'
       ) {
         const body = exactObject(await readJson(request), ['email']);
-        const recovery = await readyEmailRecovery(options);
-        if (recovery === null) {
+        const codes = readyEmailRecovery(options);
+        if (codes === null) {
           throw new ApiError(503, 'email_code_unavailable');
         }
-        const started = await recovery.codes.begin(
-          boundedString(body.email, 3, 320),
+        const started = await codes.beginAccountCreation(
+          boundedString(body.email, 3, 254),
           await rateLimitKey(request),
         );
-        await recovery.sender.sendVerificationCode(started.delivery);
         return json({
-          challengeHandle: started.challengeHandle,
+          codeHandle: started.codeHandle,
+          expiresAt: started.expiresAt,
           delivery: 'email',
         });
       }
 
       if (
         request.method === 'POST' &&
-        path === '/api/identity/email-code/verify'
+        path === '/api/identity/email-code/account/verify'
       ) {
         const body = exactObject(await readJson(request), [
-          'challengeHandle',
+          'codeHandle',
           'code',
         ]);
         const codes = composedEmailRecovery(options);
         if (codes === null) {
           throw new ApiError(503, 'email_code_unavailable');
         }
-        const claims = await codes.finish(
-          boundedString(body.challengeHandle, 1, 512),
-          boundedString(body.code, 4, 32),
+        const claims = await codes.finishAccountCreation({
+          codeHandle: boundedString(body.codeHandle, 1, 256),
+          code: boundedString(body.code, 8, 8),
+          rateLimitKey: await rateLimitKey(request),
+        });
+        return await establishSession(request, claims, options);
+      }
+
+      if (
+        request.method === 'POST' &&
+        path === '/api/identity/email-code/sign-in/options'
+      ) {
+        const body = exactObject(await readJson(request), ['email']);
+        const codes = readyEmailRecovery(options);
+        if (codes === null) {
+          throw new ApiError(503, 'email_code_unavailable');
+        }
+        const started = await codes.beginEmailSignIn(
+          boundedString(body.email, 3, 254),
           await rateLimitKey(request),
         );
+        return json({
+          codeHandle: started.codeHandle,
+          expiresAt: started.expiresAt,
+          delivery: 'email',
+        });
+      }
+
+      if (
+        request.method === 'POST' &&
+        path === '/api/identity/email-code/sign-in/verify'
+      ) {
+        const body = exactObject(await readJson(request), [
+          'codeHandle',
+          'code',
+        ]);
+        const codes = composedEmailRecovery(options);
+        if (codes === null) {
+          throw new ApiError(503, 'email_code_unavailable');
+        }
+        const claims = await codes.finishEmailSignIn({
+          codeHandle: boundedString(body.codeHandle, 1, 256),
+          code: boundedString(body.code, 8, 8),
+          rateLimitKey: await rateLimitKey(request),
+        });
         return await establishSession(request, claims, options);
       }
 
@@ -661,14 +689,16 @@ export function createIdentityApi(
           principalId: authenticated.link.subject,
           challengeHandle: boundedString(body.challengeHandle, 1, 512),
           label: boundedString(body.label, 1, 100),
-          response: body.response,
+          response: body.response as Parameters<
+            IdentityPort['finishPasskeyRegistration']
+          >[0]['response'],
         });
         return json({ passkey });
       }
 
       if (request.method === 'DELETE' && path === '/api/identity/passkeys') {
         const body = exactObject(await readJson(request), ['credentialId']);
-        if ((await readyEmailRecovery(options)) === null) {
+        if (readyEmailRecovery(options) === null) {
           throw new ApiError(409, 'recovery_required');
         }
         const removed = await expectedIdentity(options).removePasskey(

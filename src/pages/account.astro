@@ -21,7 +21,7 @@ import Base from '../layouts/Base.astro';
 
   <section id="signed-out" class="account-panel" hidden>
     <h2>Sign in</h2>
-    <p>Use a passkey, or request a one-time code when email delivery is available.</p>
+    <p>Use a passkey, sign in by email, or create a passwordless account.</p>
     <div class="account-actions">
       <button id="passkey-sign-in" type="button">Sign in with a passkey</button>
     </div>
@@ -30,7 +30,8 @@ import Base from '../layouts/Base.astro';
       <label for="account-email">Email address</label>
       <div class="account-inline">
         <input id="account-email" name="email" type="email" autocomplete="email" required />
-        <button type="submit">Send a code</button>
+        <button type="submit" name="flow" value="sign-in">Email a sign-in code</button>
+        <button type="submit" name="flow" value="account">Create account</button>
       </div>
       <p id="email-availability" class="form-note"></p>
     </form>
@@ -44,8 +45,8 @@ import Base from '../layouts/Base.astro';
           type="text"
           inputmode="numeric"
           autocomplete="one-time-code"
-          minlength="4"
-          maxlength="32"
+          minlength="8"
+          maxlength="8"
           required
         />
         <button type="submit">Verify</button>

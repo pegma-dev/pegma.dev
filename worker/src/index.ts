@@ -4,10 +4,14 @@ import {
   runHealthChecks,
   toHealthResponse,
 } from '@pegma/health';
+import { runIdentityMaintenance } from './identity-maintenance';
 import { createAppLogger, type LoggerEnv } from './logger';
-import { createProductionIdentityApi } from './identity-runtime';
+import {
+  createProductionIdentityRuntime,
+  type IdentityRuntimeEnv,
+} from './identity-runtime';
 
-type AppEnv = Env & LoggerEnv;
+type AppEnv = Env & LoggerEnv & IdentityRuntimeEnv;
 
 /**
  * Thin Workers slice that proves pegma.dev's Pegma Logger wiring:
@@ -46,7 +50,11 @@ export default {
           createDetailCheck('identity', {
             storage: 'cloudflare-d1',
             sessions: '@pegma/sessions@0.1.0',
-            runtime: 'awaiting-published-identity-packages',
+            runtime: '@pegma/identity@0.1.0',
+            authorizationAdapter: '@pegma/authorization-identity@0.1.2',
+            emailDelivery:
+              String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
+              Boolean(env.RESEND_API_KEY),
           }),
         ],
       });
@@ -55,10 +63,48 @@ export default {
     }
 
     if (path.startsWith('/api/identity/')) {
-      return createProductionIdentityApi(env, logger)(request);
+      try {
+        return createProductionIdentityRuntime(env, logger).api(request);
+      } catch (error) {
+        logger.log('error', 'identity.runtime_unavailable', {
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+        return Response.json(
+          { error: 'identity_unavailable' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
     }
 
     logger.log('warn', 'request.not_found', { method: request.method, path });
     return new Response('Not Found', { status: 404 });
+  },
+  scheduled(
+    _controller: ScheduledController,
+    env: AppEnv,
+    ctx: ExecutionContext,
+  ): void {
+    const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
+    ctx.waitUntil(
+      (async () => {
+        try {
+          await runIdentityMaintenance(
+            createProductionIdentityRuntime(env, logger),
+            logger,
+          );
+        } catch (error) {
+          logger.log('error', 'identity.maintenance_unavailable', {
+            error: error instanceof Error ? error.name : 'unknown',
+          });
+        }
+      })(),
+    );
   },
 } satisfies ExportedHandler<AppEnv>;
