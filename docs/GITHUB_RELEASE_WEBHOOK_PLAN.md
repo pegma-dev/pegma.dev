@@ -139,10 +139,10 @@ Processing order is load-bearing:
    Cloudflare-managed secret and Web Crypto HMAC-SHA256.
 5. Require `X-GitHub-Event: release` and a valid
    `X-GitHub-Delivery` GUID.
-6. Require the expected GitHub organization ID and an explicit allowlist of
-   repository IDs. Stable numeric IDs are the authority; names are display
-   data and may change.
-7. Parse only after authenticity and size checks pass.
+6. Parse JSON only after authenticity, headers, and size checks pass.
+7. Require the expected GitHub organization ID and an explicit allowlist of
+   repository IDs from the parsed payload. Stable numeric IDs are the
+   authority; names are display data and may change.
 8. Pass the delivery GUID to the Webhooks ledger as the event ID and a static
    event type such as `github.release.published`.
 
@@ -188,9 +188,15 @@ Rules:
   body, actor, assets, commit message, or other provider data.
 - Accept only public, non-draft, non-prerelease releases for the initial UI.
 - Handle the relevant `published`, `released`, and `edited` actions as
-  idempotent upserts.
+  idempotent upserts of the **current** stable release only when the
+  incoming release is newer than the stored record (compare `publishedAt`,
+  then `releaseId` as a tie-breaker). An `edited` delivery for an older
+  release must not displace a newer current record; if it matches the
+  stored `releaseId`, update the stored fields in place.
 - Handle `unpublished` and `deleted` by removing or invalidating the matching
-  current record, then let reconciliation select the preceding stable release.
+  current record **only when** the event's `releaseId` matches the stored
+  current release, then let reconciliation select the preceding stable
+  release.
 - Ignore draft and prerelease actions after recording an authenticated
   delivery outcome.
 - Construct or validate GitHub links against `https://github.com/pegma-dev/`;
@@ -311,8 +317,9 @@ replay or acknowledgement endpoint.
 
 ## Security review requirements
 
-This work adds an unauthenticated Internet-facing account API route and
-therefore requires the repository's security diff workflow before deployment.
+This work adds an unauthenticated Internet-facing Worker route (webhook
+ingestion and a public release read endpoint) and therefore requires the
+repository's security diff workflow before deployment.
 Review at least:
 
 - raw-body HMAC verification and constant-time comparison;

@@ -14,7 +14,7 @@ declare global {
 
 const logger: Logger = { log: vi.fn() };
 
-/** Same statements as worker/migrations/0001_pegma_storage.sql. */
+/** Semantically matches worker/migrations/0001_pegma_storage.sql (inlined for the Workers test pool). */
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS RECORDS (
   partition_key TEXT NOT NULL,
