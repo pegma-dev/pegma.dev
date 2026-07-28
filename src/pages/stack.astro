@@ -1,11 +1,9 @@
 ---
 import Base from '../layouts/Base.astro';
 import { components, SNAPSHOT_DATE } from '../data/components';
-import { planStage } from '../data/live-status';
+import { compileComponentStatus } from '../data/live-status';
 
-const withStage = await Promise.all(
-  components.map(async (c) => ({ ...c, stage: await planStage(c.repo, c.plan) })),
-);
+const withStage = await Promise.all(components.map(compileComponentStatus));
 ---
 
 <Base

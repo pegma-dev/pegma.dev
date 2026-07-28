@@ -26,7 +26,7 @@ export interface PegmaComponent {
   readonly plan?: string;
 }
 
-export const SNAPSHOT_DATE = '2026-07-27';
+export const SNAPSHOT_DATE = '2026-07-28';
 
 export const components: readonly PegmaComponent[] = [
   {

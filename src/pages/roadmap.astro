@@ -1,13 +1,11 @@
 ---
 import Base from '../layouts/Base.astro';
 import { components, SNAPSHOT_DATE } from '../data/components';
-import { planStage } from '../data/live-status';
+import { compileComponentStatus } from '../data/live-status';
 
 const order: Record<string, number> = { published: 0, 'in development': 1, planned: 2 };
-const sorted = await Promise.all(
-  [...components]
-    .sort((a, b) => order[a.status] - order[b.status])
-    .map(async (c) => ({ ...c, stage: await planStage(c.repo, c.plan) })),
+const sorted = (await Promise.all(components.map(compileComponentStatus))).sort(
+  (a, b) => order[a.status] - order[b.status],
 );
 const compiledCount = sorted.filter((c) => c.stage).length;
 const builtOn = new Date().toISOString().slice(0, 10);

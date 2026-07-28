@@ -1,6 +1,9 @@
 ---
 import Base from '../layouts/Base.astro';
 import { components, SNAPSHOT_DATE } from '../data/components';
+import { compileComponentStatus } from '../data/live-status';
+
+const withCompiledStatus = await Promise.all(components.map(compileComponentStatus));
 ---
 
 <Base
@@ -37,7 +40,7 @@ import { components, SNAPSHOT_DATE } from '../data/components';
   <h2>The stack today</h2>
   <ul class="card-grid">
     {
-      components.map((c) => (
+      withCompiledStatus.map((c) => (
         <li class="card">
           <h3>
             <a href={`/stack#${c.repo}`}>{c.title}</a>{' '}
