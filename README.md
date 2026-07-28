@@ -40,8 +40,8 @@ npm run worker:tail
 ```
 
 `GET /health` on the Worker uses `@pegma/health` (process + logging sink
-booleans), returns the shared JSON shape, and emits `health.ok` /
-`health.degraded` / `health.failed` through the Pegma adapters.
+booleans), returns the shared JSON shape, and emits `health.ok` through the
+Pegma adapters with the checks registered today.
 
 ## The content rule
 

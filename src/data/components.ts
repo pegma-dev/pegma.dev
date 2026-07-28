@@ -266,7 +266,7 @@ export const components: readonly PegmaComponent[] = [
       'Autodiscovery of checks — hosts register them at the composition root',
       'Metrics, APM, or alert fan-out',
     ],
-    now: '0.1.0 packaged; wired on pegma.dev Worker and RetireGolden /api/health pending npm publish.',
+    now: 'Phase 1 implemented (0.1.0, public API unstable).',
     plan: 'docs/PROJECT_PLAN.md',
   },
 ];

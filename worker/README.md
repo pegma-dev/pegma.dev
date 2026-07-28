@@ -42,8 +42,10 @@ token needs **Workers:Edit** in addition to **Pages:Edit**.
 
 - `GET /` or `GET /health` — JSON from `@pegma/health`
   (`createProcessCheck` + logging sink booleans). Emits `request.received`
-  and `health.ok` / `health.degraded` / `health.failed` through the teed Spine
-  logger. HTTP `200` when status is `ok` or `degraded`; `503` on `fail`.
+  and, with the checks registered today, `health.ok` through the teed Spine
+  logger (both checks are always `ok`; an absent Datadog key is detail only).
+  Package mapping for when a check reports otherwise: HTTP `200` for status
+  `ok`/`degraded`, `503` for status `fail` (log event `health.failed`).
   No storage probe yet (D1 consumer still gated).
 
 Example body:
