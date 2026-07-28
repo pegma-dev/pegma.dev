@@ -9,9 +9,9 @@ is removed.
 | Package | `@pegma/webhooks@0.0.0` |
 | Artifact | `pegma-webhooks-0.0.0.tgz` |
 | Source repository | `https://github.com/pegma-dev/webhooks` |
-| Exact commit | `416db2fbafc48060fddedf4153924a1de987cc7b` |
-| SHA-256 | `4c731b0b2419784bb38bdef9c46454b7644865d0e4a40061872c9cc90361e88f` |
-| npm integrity | `sha512-ICl2G6Ty6JdYIIMMT70mNDrialTzN66pqK4l7xHZGO3KpKPJ745xtsNOBpiJEEJe7Yusf+IajR1f+g4APSCkJQ==` |
+| Exact commit | `1e5ef0732c3595ea82cb80394cf55cd9a0442318` |
+| SHA-256 | `2c27d51169c42598b17f95b099cb01b35a8c6cf5bfa42ce1f2c09480746e9521` |
+| npm integrity | `sha512-d/SvLJqd7CInzsDKLM6goI8yXh08jMBBzpHlvy3TMYyRmmbthJpkurJda3jZ2aGvrqbW/Rx3nAyxf1ZZhB20Zw==` |
 | Storage Core pin inside artifact | `@pegma/storage-core@0.4.0` |
 
 ## Reproduction
@@ -19,7 +19,7 @@ is removed.
 ```text
 git clone https://github.com/pegma-dev/webhooks.git
 cd webhooks
-git checkout 416db2fbafc48060fddedf4153924a1de987cc7b
+git checkout 1e5ef0732c3595ea82cb80394cf55cd9a0442318
 npm ci
 npm pack -w @pegma/webhooks --pack-destination .
 Get-FileHash -Algorithm SHA256 .\pegma-webhooks-0.0.0.tgz

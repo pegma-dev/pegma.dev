@@ -7,7 +7,7 @@ Cloudflare secret, or production release configuration has been activated
 yet. Phases B–E remain open.
 
 **Phase A reconciliation (2026-07-28):** `@pegma/webhooks` is pinned to
-`@pegma/storage-core@0.4.0` (commit `416db2fbafc48060fddedf4153924a1de987cc7b`).
+`@pegma/storage-core@0.4.0` (commit `1e5ef0732c3595ea82cb80394cf55cd9a0442318`).
 pegma.dev vendors that exact `npm pack` artifact under
 `vendor/@pegma/webhooks/` with SHA-256 and integrity recorded in
 `PROVENANCE.md`. Ledger smoke tests exercise `createMemoryStore()` and the
@@ -17,7 +17,9 @@ Core collections. The host still nests `@pegma/storage-core@0.3.0` under
 published `@pegma/health`, `@pegma/rate-limit`, and `@pegma/sessions` pins —
 pre-existing on `main`, with no newer published releases that declare 0.4.0.
 Phase A closes the Webhooks/host Store contract gap; republishing those three
-packages is separate host debt, not a webhook-handler prerequisite.
+packages is separate host debt, not a webhook-handler prerequisite. The
+vendored package README carries only the MIT copyright line for
+RetireGolden, LLC — no consumer-migration or commercial planning text.
 
 **Goal:** Keep the public release version and release date for Pegma
 components current on pegma.dev without a content commit, Pages build, or site
