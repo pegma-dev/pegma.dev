@@ -303,6 +303,28 @@ describe('identity API security boundary', () => {
     expect(fixture.sessions.destroyed).not.toContain(token);
   });
 
+  it('keeps a valid session when the authorization adapter is temporarily absent', async () => {
+    const fixture = createFixture();
+    const { cookie } = await signIn(fixture);
+    const token = cookieToken(cookie);
+    const partialApi = createIdentityApi({
+      sessions: fixture.sessions,
+      identity: fixture.identityPort,
+      logger,
+    });
+
+    const response = await partialApi(
+      new Request(`${IDENTITY_ISSUER}/api/identity/account`, {
+        headers: { Cookie: cookie },
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Set-Cookie')).toBeNull();
+    expect(fixture.sessions.records.has(token)).toBe(true);
+    expect(fixture.sessions.destroyed).not.toContain(token);
+  });
+
   it('keeps the old session and cookie when replacement creation fails', async () => {
     const fixture = createFixture();
     const first = await signIn(fixture);

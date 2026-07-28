@@ -376,8 +376,9 @@ async function authenticate(
   }
 
   let link: IdentityLinkKey;
+  const projectClaims = expectedProjector(options);
   try {
-    link = expectedProjector(options)(claims);
+    link = projectClaims(claims);
   } catch {
     return invalidateSession(rawSessionId, options);
   }
