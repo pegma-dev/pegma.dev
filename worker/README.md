@@ -37,7 +37,7 @@ authenticated operator session with `npm run worker:deploy` until a separate,
 least-privileged credential has both Worker script and `pegma.dev` route
 authority. Do not substitute a broad personal OAuth token into GitHub. The
 production Worker was operator-deployed on 2026-07-28 as version
-`0a9956e6-01c6-4a9a-953f-4e71d94d0055`.
+`25e8ef12-040e-4568-a973-e88ccec11b7d`.
 
 ## Identity composition
 
@@ -85,9 +85,13 @@ and must remain stable while any email-code or Mail job is live. Verify the
 
 ### Enabling Resend in production
 
-Production already has `IDENTITY_EMAIL_CODE_SECRET_BASE64`. Account creation
-remains unavailable because `RESEND_API_KEY` is absent and
-`IDENTITY_EMAIL_ENABLED` is `false`. Enable it in this order:
+Production has both `IDENTITY_EMAIL_CODE_SECRET_BASE64` and `RESEND_API_KEY`.
+Resend delivery was activated on 2026-07-28 after the `pegma.dev` domain was
+verified. Live health reports `emailDelivery: true`, Identity advertises
+`emailCode: true`, and an account-code job sent by the scheduled durable
+outbox reached Resend's official delivered test sink.
+
+Use this activation sequence for a new environment or credential rotation:
 
 1. Create the Resend account and a sending API key.
 2. Add `pegma.dev` as a Resend sending domain and install every DNS record

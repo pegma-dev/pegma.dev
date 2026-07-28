@@ -10,11 +10,11 @@ workflow, while PRs validate without receiving production credentials.
 Identity consumer now
 composes the exact public Identity, Authorization adapter, Sessions, Mail,
 rate-limit, and storage packages. Worker version
-`0a9956e6-01c6-4a9a-953f-4e71d94d0055` is live on `pegma.dev/api/*`; production
+`25e8ef12-040e-4568-a973-e88ccec11b7d` is live on `pegma.dev/api/*`; production
 health, capabilities, unauthenticated account, and cross-origin rejection
-smoke tests pass. Email-code activation is a separate gate: provider-domain
-setup, its managed secret, an audited operator workflow, and an end-to-end
-delivery smoke test.
+smoke tests pass. Resend email-code delivery was activated on 2026-07-28 after
+the sender domain and managed secret were installed; the scheduled durable
+outbox delivered its provider smoke test successfully.
 
 **Hosting decision:** Cloudflare (Pages for the static site; Workers when a
 dynamic slice exists). Deliberate: the reference application
@@ -210,18 +210,18 @@ Azure.
 secure account API/browser boundary for issuer `https://pegma.dev` and RP ID
 `pegma.dev`, uses four durable abuse limits, and schedules cursor-persisted
 maintenance. Email jobs commit atomically in Identity storage; a fail-closed
-Resend adapter provides idempotent send and reconciliation but remains
-disabled until the free-tier provider account, sender domain, managed secrets,
-delivery smoke test, and audited operator acknowledgement workflow are
-complete. No paid email service is assumed.
+Resend adapter provides idempotent send and reconciliation. The free-tier
+provider account, verified sender domain, managed secrets, activation gate,
+and provider delivery smoke test were completed on 2026-07-28. No paid email
+service is assumed.
 
 **Logging precursor (2026-07-27):** Worker `pegma-dev-api` is deployed with
 `@pegma/logger-tee` → `@pegma/logger-cloudflare` + `@pegma/logger-datadog`.
 Workers Logs (Cloudflare’s log store) is enabled via Wrangler
 `observability.logs`. Datadog is optional until `DATADOG_API_KEY` is set.
 The Phase 4 account consumer now uses the published D1 adapter, Sessions,
-Identity, and Authorization adapter; its email entry points remain fail closed
-until the provider activation gate is complete.
+Identity, and Authorization adapter; its Resend email-code entry points are
+live behind their fail-closed capability checks.
 
 ### Phase 5 — dogfood support
 
@@ -253,8 +253,10 @@ with a source link where not. Decide in Phase 3.
 2. Configure the Resend free-tier account, verify the `pegma.dev` sender,
    install its managed provider secret, and smoke-test idempotent delivery
    behind an authenticated, audited terminal-mail acknowledgement workflow
-   before enabling email-code entry points. The stable HMAC secret is already
-   installed in Cloudflare's managed secret store.
+   before enabling email-code entry points. **Done 2026-07-28:** the stable
+   HMAC and provider secrets are in Cloudflare's managed secret store, live
+   health and capabilities expose delivery, and Resend reported the scheduled
+   durable-outbox test message as delivered.
 3. Route same-origin `/api/*` traffic to `pegma-dev-api`, deploy, and verify the
    D1-backed account flow without changing the Pages-hosted static architecture.
-   **Done 2026-07-28; email activation remains separately gated.**
+   **Done 2026-07-28, including email activation.**
