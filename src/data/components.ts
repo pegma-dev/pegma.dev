@@ -141,7 +141,7 @@ export const components: readonly PegmaComponent[] = [
       'Being a hosted SaaS — hosts run it, own its data, and choose its providers',
       'AI processing before the host documents what may leave its boundary',
     ],
-    now: 'Phases 1 and 2 plus provider-neutral Phase 6 mail source are implemented; all packages remain unpublished and deployment phases are ahead.',
+    now: 'The customer Phase 1/2 application slice and provider-neutral Phase 6 mail source are implemented; abuse limits and deployment phases remain open, and all packages are unpublished.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
