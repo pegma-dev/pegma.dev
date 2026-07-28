@@ -183,6 +183,12 @@ public acknowledgement endpoint.
 - `POST /api/identity/email-code/sign-in/options|verify` — enumeration-safe
   fallback sign-in.
 - `POST /api/identity/logout` — server-side revocation and cookie expiry.
+- `POST /api/webhooks/github/releases` — authenticated GitHub organization
+  release webhook. Requires managed secret `GITHUB_WEBHOOK_SECRET` plus vars
+  `GITHUB_ORGANIZATION_ID` and `GITHUB_ALLOWED_REPOSITORY_IDS`. Invalid traffic
+  has no storage effect; stable releases project into the D1-backed
+  `componentReleases` collection through `@pegma/webhooks`. Do not configure
+  the GitHub organization webhook until Phase E activation.
 
 Example body:
 
