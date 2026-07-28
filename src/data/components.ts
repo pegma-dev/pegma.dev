@@ -253,7 +253,7 @@ export const components: readonly PegmaComponent[] = [
     repo: 'health',
     title: 'Health',
     packages: ['@pegma/health'],
-    status: 'published',
+    status: 'in development',
     summary:
       'Composable health probes and HTTP responses for public liveness checks.',
     owns: [
@@ -266,7 +266,7 @@ export const components: readonly PegmaComponent[] = [
       'Autodiscovery of checks — hosts register them at the composition root',
       'Metrics, APM, or alert fan-out',
     ],
-    now: '0.1.1 on npm; trusted publishing configured. Consumed by pegma.dev Worker and RetireGolden /api/health.',
+    now: 'Phase 1 implemented (0.1.0, public API unstable).',
     plan: 'docs/PROJECT_PLAN.md',
   },
 ];
