@@ -5,6 +5,8 @@ import type {
   IdentityLinkKey,
   IdentityLinkProjector,
   IdentityPort,
+  IdentityUser,
+  VerificationEmailSender,
   VerifiedIdentityClaims,
 } from './identity-contracts';
 
@@ -27,6 +29,7 @@ interface IdentityApiOptions {
   readonly identity?: IdentityPort;
   readonly identityLinkFromClaims?: IdentityLinkProjector;
   readonly emailCodes?: EmailCodeIdentityPort;
+  readonly verificationEmailSender?: VerificationEmailSender;
   readonly logger: Logger;
   readonly randomBytes?: (target: Uint8Array) => Uint8Array;
 }
@@ -41,8 +44,8 @@ interface SessionData {
 interface Authenticated {
   readonly rawSessionId: string;
   readonly csrfToken: string;
-  readonly claims: VerifiedIdentityClaims;
   readonly link: IdentityLinkKey;
+  readonly user: IdentityUser;
 }
 
 class ApiError extends Error {
@@ -51,6 +54,12 @@ class ApiError extends Error {
     readonly code: string,
   ) {
     super(code);
+  }
+}
+
+class InvalidatedSessionError extends ApiError {
+  constructor() {
+    super(401, 'authentication_required');
   }
 }
 
@@ -292,6 +301,42 @@ function requireIdentityCapability(options: IdentityApiOptions): void {
   expectedProjector(options);
 }
 
+async function readyEmailRecovery(options: IdentityApiOptions): Promise<{
+  readonly codes: EmailCodeIdentityPort;
+  readonly sender: VerificationEmailSender;
+} | null> {
+  if (
+    options.identity === undefined ||
+    options.identityLinkFromClaims === undefined ||
+    options.emailCodes === undefined ||
+    options.verificationEmailSender === undefined
+  ) {
+    return null;
+  }
+  try {
+    return (await options.verificationEmailSender.ready()) === true
+      ? {
+          codes: options.emailCodes,
+          sender: options.verificationEmailSender,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function invalidateSession(
+  rawSessionId: string,
+  options: IdentityApiOptions,
+): Promise<never> {
+  try {
+    await options.sessions.destroy(rawSessionId);
+  } catch {
+    options.logger.log('error', 'identity.session_invalidation_cleanup_failed');
+  }
+  throw new InvalidatedSessionError();
+}
+
 async function authenticate(
   request: Request,
   options: IdentityApiOptions,
@@ -302,12 +347,11 @@ async function authenticate(
   }
   const record = await options.sessions.get(rawSessionId);
   if (record === null) {
-    return null;
+    throw new InvalidatedSessionError();
   }
   const data = parseSessionData(record.data);
   if (data === null || data.subject !== record.principalId) {
-    await options.sessions.destroy(rawSessionId);
-    return null;
+    return invalidateSession(rawSessionId, options);
   }
 
   let claims: VerifiedIdentityClaims;
@@ -319,8 +363,7 @@ async function authenticate(
         ? (error as { readonly code?: unknown }).code
         : undefined;
     if (code === 'invalid_state' || code === 'not_found') {
-      await options.sessions.destroy(rawSessionId);
-      return null;
+      return invalidateSession(rawSessionId, options);
     }
     throw error;
   }
@@ -329,18 +372,31 @@ async function authenticate(
   try {
     link = expectedProjector(options)(claims);
   } catch {
-    await options.sessions.destroy(rawSessionId);
-    return null;
+    return invalidateSession(rawSessionId, options);
   }
   if (
     claims.emailVerified !== true ||
     link.issuer !== data.issuer ||
     link.subject !== data.subject
   ) {
-    await options.sessions.destroy(rawSessionId);
-    return null;
+    return invalidateSession(rawSessionId, options);
   }
-  return { rawSessionId, csrfToken: data.csrfToken, claims, link };
+
+  const user = await expectedIdentity(options).getUser(link.subject);
+  if (
+    user === null ||
+    user.principalId !== link.subject ||
+    user.status !== 'active' ||
+    user.emailVerified !== true
+  ) {
+    return invalidateSession(rawSessionId, options);
+  }
+  return {
+    rawSessionId,
+    csrfToken: data.csrfToken,
+    link,
+    user,
+  };
 }
 
 async function requireAuthentication(
@@ -383,10 +439,6 @@ async function establishSession(
   const fill = options.randomBytes;
   const sessionId = randomToken(fill);
   const csrfToken = randomToken(fill);
-  const prior = cookieValue(request, SESSION_COOKIE);
-  if (prior !== null) {
-    await options.sessions.destroy(prior);
-  }
   const data: SessionData = {
     version: 1,
     csrfToken,
@@ -397,6 +449,14 @@ async function establishSession(
     principalId: link.subject,
     data: JSON.stringify(data),
   });
+  const prior = cookieValue(request, SESSION_COOKIE);
+  if (prior !== null && prior !== sessionId) {
+    try {
+      await options.sessions.destroy(prior);
+    } catch {
+      options.logger.log('warn', 'identity.session_rotation_cleanup_failed');
+    }
+  }
 
   return json(
     { authenticated: true, csrfToken },
@@ -440,38 +500,26 @@ export function createIdentityApi(
     const path = new URL(request.url).pathname;
     try {
       if (request.method === 'GET' && path === '/api/identity/capabilities') {
+        const emailCode = (await readyEmailRecovery(options)) !== null;
         return json({
           issuer: IDENTITY_ISSUER,
           rpID: IDENTITY_RP_ID,
           passkeys:
             options.identity !== undefined &&
             options.identityLinkFromClaims !== undefined,
-          emailCode:
-            options.identity !== undefined &&
-            options.identityLinkFromClaims !== undefined &&
-            options.emailCodes !== undefined,
+          emailCode,
         });
       }
 
       if (request.method === 'GET' && path === '/api/identity/account') {
         const authenticated = await requireAuthentication(request, options);
-        const user = await expectedIdentity(options).getUser(
-          authenticated.link.subject,
-        );
-        if (
-          user === null ||
-          user.status !== 'active' ||
-          user.emailVerified !== true
-        ) {
-          throw new ApiError(401, 'authentication_required');
-        }
         const passkeys = await expectedIdentity(options).listPasskeys(
           authenticated.link.subject,
         );
         return json({
           account: {
             subject: authenticated.link.subject,
-            email: user.email,
+            email: authenticated.user.email,
           },
           passkeys,
           csrfToken: authenticated.csrfToken,
@@ -510,7 +558,7 @@ export function createIdentityApi(
           challengeHandle: boundedString(body.challengeHandle, 1, 512),
           response: body.response,
         });
-        return establishSession(request, claims, options);
+        return await establishSession(request, claims, options);
       }
 
       if (
@@ -518,17 +566,15 @@ export function createIdentityApi(
         path === '/api/identity/email-code/options'
       ) {
         const body = exactObject(await readJson(request), ['email']);
-        if (
-          options.emailCodes === undefined ||
-          options.identity === undefined ||
-          options.identityLinkFromClaims === undefined
-        ) {
+        const recovery = await readyEmailRecovery(options);
+        if (recovery === null) {
           throw new ApiError(503, 'email_code_unavailable');
         }
-        const started = await options.emailCodes.begin(
+        const started = await recovery.codes.begin(
           boundedString(body.email, 3, 320),
           await rateLimitKey(request),
         );
+        await recovery.sender.sendVerificationCode(started.delivery);
         return json({
           challengeHandle: started.challengeHandle,
           delivery: 'email',
@@ -543,19 +589,16 @@ export function createIdentityApi(
           'challengeHandle',
           'code',
         ]);
-        if (
-          options.emailCodes === undefined ||
-          options.identity === undefined ||
-          options.identityLinkFromClaims === undefined
-        ) {
+        const recovery = await readyEmailRecovery(options);
+        if (recovery === null) {
           throw new ApiError(503, 'email_code_unavailable');
         }
-        const claims = await options.emailCodes.finish(
+        const claims = await recovery.codes.finish(
           boundedString(body.challengeHandle, 1, 512),
           boundedString(body.code, 4, 32),
           await rateLimitKey(request),
         );
-        return establishSession(request, claims, options);
+        return await establishSession(request, claims, options);
       }
 
       const authenticated = await requireAuthentication(request, options);
@@ -607,7 +650,7 @@ export function createIdentityApi(
 
       if (request.method === 'DELETE' && path === '/api/identity/passkeys') {
         const body = exactObject(await readJson(request), ['credentialId']);
-        if (options.emailCodes === undefined) {
+        if ((await readyEmailRecovery(options)) === null) {
           throw new ApiError(409, 'recovery_required');
         }
         const removed = await expectedIdentity(options).removePasskey(
@@ -625,7 +668,13 @@ export function createIdentityApi(
         'identity.request_rejected',
         { path, status: safe.status, code: safe.code },
       );
-      return json({ error: safe.code }, { status: safe.status });
+      return json(
+        { error: safe.code },
+        { status: safe.status },
+        error instanceof InvalidatedSessionError
+          ? clearSessionCookie()
+          : undefined,
+      );
     }
   };
 }

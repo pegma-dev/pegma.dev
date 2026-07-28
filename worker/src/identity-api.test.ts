@@ -8,7 +8,9 @@ import {
 } from './identity-api';
 import type {
   EmailCodeIdentityPort,
+  IdentityUser,
   IdentityPort,
+  VerificationEmailSender,
   VerifiedIdentityClaims,
 } from './identity-contracts';
 
@@ -18,12 +20,21 @@ const claims: VerifiedIdentityClaims = {
   subject: principalId,
   emailVerified: true,
 };
+const delivery = {
+  to: 'person@example.test',
+  code: '123456',
+  expiresAt: '2026-07-28T00:05:00.000Z',
+};
 
 class TestSessions implements SessionStore {
   readonly records = new Map<string, SessionRecord>();
   readonly destroyed: string[] = [];
+  createFailure: Error | null = null;
 
   async create(sessionId: string, session: NewSession): Promise<SessionRecord> {
+    if (this.createFailure !== null) {
+      throw this.createFailure;
+    }
     const record: SessionRecord = {
       ...session,
       createdAt: '2026-07-28T00:00:00.000Z',
@@ -94,6 +105,13 @@ function identity(overrides: Partial<IdentityPort> = {}): IdentityPort {
 
 const logger: Logger = { log: vi.fn() };
 
+function emailSender(isReady = true): VerificationEmailSender {
+  return {
+    ready: vi.fn(async () => isReady),
+    sendVerificationCode: vi.fn(async () => undefined),
+  };
+}
+
 function deterministicRandom(): (target: Uint8Array) => Uint8Array {
   let next = 1;
   return (target) => {
@@ -131,7 +149,10 @@ function cookieToken(cookie: string): string {
   return cookie.slice(cookie.indexOf('=') + 1);
 }
 
-function createFixture(emailCodes?: EmailCodeIdentityPort) {
+function createFixture(
+  emailCodes?: EmailCodeIdentityPort,
+  verificationEmailSender?: VerificationEmailSender,
+) {
   const sessions = new TestSessions();
   const identityPort = identity();
   const projector = vi.fn((verified: VerifiedIdentityClaims) =>
@@ -149,6 +170,7 @@ function createFixture(emailCodes?: EmailCodeIdentityPort) {
       identity: identityPort,
       identityLinkFromClaims: projector,
       emailCodes,
+      verificationEmailSender,
       logger,
       randomBytes: deterministicRandom(),
     }),
@@ -277,6 +299,97 @@ describe('identity API security boundary', () => {
     expect(fixture.sessions.destroyed).not.toContain(token);
   });
 
+  it('keeps the old session and cookie when replacement creation fails', async () => {
+    const fixture = createFixture();
+    const first = await signIn(fixture);
+    const oldToken = cookieToken(first.cookie);
+    fixture.sessions.createFailure = new Error('temporary create failure');
+
+    const response = await fixture.api(
+      mutation(
+        '/api/identity/passkeys/authentication/verify',
+        {
+          challengeHandle: 'second-handle',
+          response: { id: 'second-credential' },
+        },
+        { Cookie: first.cookie },
+      ),
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Set-Cookie')).toBeNull();
+    expect(fixture.sessions.records.has(oldToken)).toBe(true);
+    expect(fixture.sessions.destroyed).not.toContain(oldToken);
+  });
+
+  it.each([
+    ['missing', null],
+    [
+      'pending',
+      {
+        principalId,
+        email: 'person@example.test',
+        emailVerified: false,
+        status: 'pending',
+        createdAt: '2026-07-28T00:00:00.000Z',
+        updatedAt: '2026-07-28T00:00:00.000Z',
+      } satisfies IdentityUser,
+    ],
+    [
+      'unverified',
+      {
+        principalId,
+        email: 'person@example.test',
+        emailVerified: false,
+        status: 'active',
+        createdAt: '2026-07-28T00:00:00.000Z',
+        updatedAt: '2026-07-28T00:00:00.000Z',
+      } satisfies IdentityUser,
+    ],
+  ])(
+    'revokes and clears a session for a definitively %s account',
+    async (_label, user) => {
+      const fixture = createFixture();
+      const { cookie } = await signIn(fixture);
+      const token = cookieToken(cookie);
+      vi.mocked(fixture.identityPort.getUser).mockResolvedValueOnce(user);
+
+      const response = await fixture.api(
+        new Request(`${IDENTITY_ISSUER}/api/identity/account`, {
+          headers: { Cookie: cookie },
+        }),
+      );
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get('Set-Cookie')).toContain('Max-Age=0');
+      expect(fixture.sessions.destroyed).toContain(token);
+      expect(fixture.sessions.records.has(token)).toBe(false);
+    },
+  );
+
+  it('rejects authenticated mutation when the backing account disappeared', async () => {
+    const fixture = createFixture();
+    const { cookie, body } = await signIn(fixture);
+    vi.mocked(fixture.identityPort.getUser).mockResolvedValueOnce(null);
+
+    const response = await fixture.api(
+      mutation(
+        '/api/identity/passkeys/registration/options',
+        {},
+        {
+          Cookie: cookie,
+          'X-Pegma-CSRF': body.csrfToken,
+        },
+      ),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('Set-Cookie')).toContain('Max-Age=0');
+    expect(
+      fixture.identityPort.beginPasskeyRegistration,
+    ).not.toHaveBeenCalled();
+  });
+
   it('destroys the server-side session and expires the cookie on logout', async () => {
     const fixture = createFixture();
     const { cookie, body } = await signIn(fixture);
@@ -326,7 +439,10 @@ describe('identity API security boundary', () => {
     const sessions = new TestSessions();
     const identityPort = identity();
     const emailCodes: EmailCodeIdentityPort = {
-      begin: vi.fn(async () => ({ challengeHandle: 'email-handle' })),
+      begin: vi.fn(async () => ({
+        challengeHandle: 'email-handle',
+        delivery,
+      })),
       finish: vi.fn(async () => claims),
     };
     const api = createIdentityApi({
@@ -351,9 +467,19 @@ describe('identity API security boundary', () => {
     expect(emailCodes.begin).not.toHaveBeenCalled();
   });
 
-  it('blocks passkey removal until an alternate email recovery flow is live', async () => {
-    const fixture = createFixture();
+  it('does not advertise recovery or allow removal without durable delivery', async () => {
+    const emailCodes: EmailCodeIdentityPort = {
+      begin: vi.fn(async () => ({
+        challengeHandle: 'email-handle',
+        delivery,
+      })),
+      finish: vi.fn(async () => claims),
+    };
+    const fixture = createFixture(emailCodes, emailSender(false));
     const { cookie, body } = await signIn(fixture);
+    const capabilities = await fixture.api(
+      new Request(`${IDENTITY_ISSUER}/api/identity/capabilities`),
+    );
     const response = await fixture.api(
       mutation(
         '/api/identity/passkeys',
@@ -366,6 +492,9 @@ describe('identity API security boundary', () => {
       ),
     );
 
+    expect((await capabilities.json<{ emailCode: boolean }>()).emailCode).toBe(
+      false,
+    );
     expect(response.status).toBe(409);
     expect(fixture.identityPort.removePasskey).not.toHaveBeenCalled();
     expect(await response.json()).toEqual({ error: 'recovery_required' });
@@ -373,10 +502,13 @@ describe('identity API security boundary', () => {
 
   it('establishes the same session boundary from an injected email-code flow', async () => {
     const emailCodes: EmailCodeIdentityPort = {
-      begin: vi.fn(async () => ({ challengeHandle: 'email-handle' })),
+      begin: vi.fn(async () => ({
+        challengeHandle: 'email-handle',
+        delivery,
+      })),
       finish: vi.fn(async () => claims),
     };
-    const fixture = createFixture(emailCodes);
+    const fixture = createFixture(emailCodes, emailSender());
     const response = await fixture.api(
       mutation('/api/identity/email-code/verify', {
         challengeHandle: 'email-handle',
@@ -387,6 +519,61 @@ describe('identity API security boundary', () => {
     expect(response.status).toBe(200);
     expect(cookieToken(cookieFrom(response))).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(emailCodes.finish).toHaveBeenCalledTimes(1);
+  });
+
+  it('advertises email recovery only when durable delivery is ready and accepted', async () => {
+    const emailCodes: EmailCodeIdentityPort = {
+      begin: vi.fn(async () => ({
+        challengeHandle: 'email-handle',
+        delivery,
+      })),
+      finish: vi.fn(async () => claims),
+    };
+    const sender = emailSender();
+    const fixture = createFixture(emailCodes, sender);
+
+    const capabilities = await fixture.api(
+      new Request(`${IDENTITY_ISSUER}/api/identity/capabilities`),
+    );
+    const started = await fixture.api(
+      mutation('/api/identity/email-code/options', {
+        email: 'person@example.test',
+      }),
+    );
+
+    expect((await capabilities.json<{ emailCode: boolean }>()).emailCode).toBe(
+      true,
+    );
+    expect(started.status).toBe(200);
+    expect(await started.json()).toEqual({
+      challengeHandle: 'email-handle',
+      delivery: 'email',
+    });
+    expect(sender.sendVerificationCode).toHaveBeenCalledWith(delivery);
+  });
+
+  it('does not claim email-code start succeeded when durable delivery rejects', async () => {
+    const emailCodes: EmailCodeIdentityPort = {
+      begin: vi.fn(async () => ({
+        challengeHandle: 'email-handle',
+        delivery,
+      })),
+      finish: vi.fn(async () => claims),
+    };
+    const sender = emailSender();
+    vi.mocked(sender.sendVerificationCode).mockRejectedValueOnce(
+      new Error('outbox unavailable'),
+    );
+    const fixture = createFixture(emailCodes, sender);
+
+    const response = await fixture.api(
+      mutation('/api/identity/email-code/options', {
+        email: 'person@example.test',
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'internal_error' });
   });
 
   it('bounds JSON request bodies before parsing', async () => {

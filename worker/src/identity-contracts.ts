@@ -78,7 +78,11 @@ export interface EmailCodeIdentityPort {
   begin(
     email: string,
     rateLimitKey: string,
-  ): Promise<{ readonly challengeHandle: string }>;
+  ): Promise<{
+    readonly challengeHandle: string;
+    /** Secret delivery material. The API passes this only to the sender. */
+    readonly delivery: VerificationEmail;
+  }>;
   finish(
     challengeHandle: string,
     code: string,
@@ -91,9 +95,21 @@ export interface EmailCodeIdentityPort {
  * can implement this port later without coupling routes to a paid service.
  */
 export interface VerificationEmailSender {
-  sendVerificationCode(input: {
-    readonly to: string;
-    readonly code: string;
-    readonly expiresAt: string;
-  }): Promise<void>;
+  /**
+   * True only while durable delivery is configured and ready to accept work.
+   * Errors are treated as not ready.
+   */
+  ready(): Promise<boolean>;
+
+  /**
+   * Resolves only after a durable provider/outbox has accepted the message.
+   * A direct best-effort network send does not satisfy this contract.
+   */
+  sendVerificationCode(input: VerificationEmail): Promise<void>;
+}
+
+export interface VerificationEmail {
+  readonly to: string;
+  readonly code: string;
+  readonly expiresAt: string;
 }

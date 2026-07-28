@@ -59,8 +59,10 @@ route boundary with injected ports, so installing the released packages is an
 isolated composition-root change rather than a route rewrite.
 
 Email-code identity is likewise an injected port. Its public delivery seam is
-`VerificationEmailSender`; no Cloudflare Email Sending account, secret, or paid
-plan is assumed by this repository.
+`VerificationEmailSender`; recovery is advertised and passkey removal is
+enabled only while that sender reports a ready durable handoff. A code-start
+response is not returned until the sender accepts the message. No Cloudflare
+Email Sending account, secret, or paid plan is assumed by this repository.
 
 The D1 schema is deployment-managed by
 `migrations/0001_pegma_storage.sql`. The adapter runs with
