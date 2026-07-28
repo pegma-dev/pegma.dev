@@ -10,7 +10,7 @@ workflow, while PRs validate without receiving production credentials.
 Identity consumer now
 composes the exact public Identity, Authorization adapter, Sessions, Mail,
 rate-limit, and storage packages. Worker version
-`25e8ef12-040e-4568-a973-e88ccec11b7d` is live on `pegma.dev/api/*`; production
+`f627b1ee-7675-47b2-a72b-6b26210f3bb3` is live on `pegma.dev/api/*`; production
 health, capabilities, unauthenticated account, and cross-origin rejection
 smoke tests pass. Resend email-code delivery was activated on 2026-07-28 after
 the sender domain and managed secret were installed; the scheduled durable
@@ -209,7 +209,10 @@ Azure.
 `@pegma/rate-limit@0.1.0`, and the D1/storage `0.4.0` packages. It exposes a
 secure account API/browser boundary for issuer `https://pegma.dev` and RP ID
 `pegma.dev`, uses four durable abuse limits, and schedules cursor-persisted
-maintenance. Email jobs commit atomically in Identity storage; a fail-closed
+maintenance. Its generic `GET /api/secure` proof resolves the opaque cookie
+through Sessions and revalidates the Identity/Authorization claims before
+returning the issuer and subject. Email jobs commit atomically in Identity
+storage; a fail-closed
 Resend adapter provides idempotent send and reconciliation. The free-tier
 provider account, verified sender domain, managed secrets, activation gate,
 and provider delivery smoke test were completed on 2026-07-28. No paid email

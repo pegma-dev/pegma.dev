@@ -37,7 +37,7 @@ authenticated operator session with `npm run worker:deploy` until a separate,
 least-privileged credential has both Worker script and `pegma.dev` route
 authority. Do not substitute a broad personal OAuth token into GitHub. The
 production Worker was operator-deployed on 2026-07-28 as version
-`25e8ef12-040e-4568-a973-e88ccec11b7d`.
+`f627b1ee-7675-47b2-a72b-6b26210f3bb3`.
 
 ## Identity composition
 
