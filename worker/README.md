@@ -65,8 +65,3 @@ Example body:
   }
 }
 ```
-
-## Vendored `@pegma/health`
-
-Until `@pegma/health` is on npm, the Worker depends on
-`worker-vendor/pegma-health-0.1.0.tgz` packed from `pegma-dev/health`.
