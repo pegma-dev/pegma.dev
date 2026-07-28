@@ -6,22 +6,34 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "check": "astro check && tsc -p worker/tsconfig.json --noEmit",
+    "test": "vitest run",
     "preview": "astro preview",
     "worker:dev": "wrangler dev -c worker/wrangler.jsonc",
     "worker:deploy": "wrangler deploy -c worker/wrangler.jsonc",
-    "worker:tail": "wrangler tail pegma-dev-api"
+    "worker:tail": "wrangler tail pegma-dev-api",
+    "worker:types": "wrangler types worker/worker-configuration.d.ts -c worker/wrangler.jsonc"
   },
   "dependencies": {
+    "@pegma/authorization-identity": "0.1.2",
     "@pegma/health": "^0.1.1",
+    "@pegma/identity": "0.1.0",
     "@pegma/logger-cloudflare": "^0.1.1",
     "@pegma/logger-datadog": "^0.1.1",
     "@pegma/logger-tee": "^0.1.1",
-    "@pegma/spine": "^0.1.1"
+    "@pegma/mail": "0.1.0",
+    "@pegma/rate-limit": "0.1.0",
+    "@pegma/sessions": "0.1.0",
+    "@pegma/spine": "^0.1.1",
+    "@pegma/storage-cloudflare-d1": "0.4.0",
+    "@pegma/storage-core": "0.4.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260722.1",
-    "astro": "^5.12.3",
+    "@astrojs/check": "0.9.10",
+    "@types/node": "26.1.1",
+    "astro": "7.1.4",
     "typescript": "^5.9.2",
+    "vitest": "4.1.10",
     "wrangler": "^4.114.0"
   }
 }

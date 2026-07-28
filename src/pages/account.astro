@@ -1,0 +1,90 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Account — Pegma"
+  description="The pegma.dev first-party Identity reference environment."
+>
+  <section class="account-hero">
+    <p class="eyebrow">Cloudflare reference environment</p>
+    <h1>Your Pegma account</h1>
+    <p class="lede">
+      Passwordless, first-party identity backed by Pegma components. Session credentials stay in a
+      secure cookie; session records and identity data stay in Cloudflare D1.
+    </p>
+  </section>
+
+  <div id="account-status" class="notice" role="status" aria-live="polite">
+    Checking identity availability…
+  </div>
+
+  <section id="signed-out" class="account-panel" hidden>
+    <h2>Sign in</h2>
+    <p>Use a passkey, sign in by email, or create a passwordless account.</p>
+    <div class="account-actions">
+      <button id="passkey-sign-in" type="button">Sign in with a passkey</button>
+    </div>
+
+    <form id="email-start" class="account-form">
+      <label for="account-email">Email address</label>
+      <div class="account-inline">
+        <input id="account-email" name="email" type="email" autocomplete="email" required />
+        <button type="submit" name="flow" value="sign-in">Email a sign-in code</button>
+        <button type="submit" name="flow" value="account">Create account</button>
+      </div>
+      <p id="email-availability" class="form-note"></p>
+    </form>
+
+    <form id="email-finish" class="account-form" hidden>
+      <label for="account-code">Verification code</label>
+      <div class="account-inline">
+        <input
+          id="account-code"
+          name="code"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          minlength="8"
+          maxlength="8"
+          required
+        />
+        <button type="submit">Verify</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="signed-in" class="account-panel" hidden>
+    <div class="account-heading">
+      <div>
+        <p class="eyebrow">Signed in</p>
+        <h2 id="account-email-display"></h2>
+      </div>
+      <button id="sign-out" class="secondary-button" type="button">Sign out</button>
+    </div>
+
+    <h3>Passkeys</h3>
+    <ul id="passkey-list" class="passkey-list"></ul>
+    <form id="add-passkey" class="account-form">
+      <label for="passkey-label">Name this passkey</label>
+      <div class="account-inline">
+        <input
+          id="passkey-label"
+          name="label"
+          type="text"
+          autocomplete="off"
+          maxlength="100"
+          placeholder="This laptop"
+          required
+        />
+        <button type="submit">Add passkey</button>
+      </div>
+    </form>
+  </section>
+
+  <noscript>
+    <p class="notice">Passkeys require JavaScript and the browser WebAuthn API.</p>
+  </noscript>
+
+  <script is:inline type="module" src="/account.js"></script>
+</Base>

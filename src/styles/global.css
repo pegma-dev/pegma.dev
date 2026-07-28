@@ -37,10 +37,10 @@ html {
 body {
   margin: 0;
   font-family:
-    'Manrope',
+    "Manrope",
     system-ui,
     -apple-system,
-    'Segoe UI',
+    "Segoe UI",
     Roboto,
     sans-serif;
   background: var(--paper);
@@ -61,7 +61,8 @@ a:hover {
 
 code,
 pre {
-  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace;
+  font-family:
+    ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
   font-size: 0.925em;
 }
 
@@ -118,7 +119,7 @@ pre code {
 }
 
 .site-header nav a:hover,
-.site-header nav a[aria-current='page'] {
+.site-header nav a[aria-current="page"] {
   color: var(--ink);
 }
 
@@ -242,7 +243,7 @@ h2 {
   white-space: nowrap;
 }
 
-.status[data-status='published'] {
+.status[data-status="published"] {
   border-color: color-mix(in srgb, var(--ink) 45%, transparent);
   color: var(--ink);
 }
@@ -298,6 +299,138 @@ h2 {
   margin-top: 1.1rem;
   font-size: 0.95rem;
   color: var(--slate);
+}
+
+/* First-party account reference surface */
+.account-hero {
+  padding: 3.5rem 0 1.5rem;
+  max-width: 43rem;
+}
+
+.account-hero h1 {
+  margin: 0.15rem 0 0.65rem;
+  font-size: clamp(1.9rem, 4.5vw, 2.75rem);
+  line-height: 1.15;
+}
+
+.account-hero .lede {
+  color: var(--slate);
+  font-size: 1.08rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--slate);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.account-panel {
+  max-width: 43rem;
+  margin-top: 1.5rem;
+  padding: 1.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: var(--card);
+}
+
+.account-panel h2,
+.account-panel h3 {
+  margin-top: 0;
+}
+
+.account-heading,
+.passkey-list li,
+.account-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.account-form {
+  margin-top: 1.5rem;
+}
+
+.account-form label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.account-form input {
+  min-width: 0;
+  flex: 1;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+}
+
+button {
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--ink);
+  border-radius: 0.4rem;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.secondary-button,
+.text-button {
+  background: transparent;
+  color: var(--ink);
+}
+
+.text-button {
+  padding: 0.25rem 0.45rem;
+  border-color: var(--line);
+  font-size: 0.85rem;
+}
+
+.form-note {
+  margin: 0.4rem 0 0;
+  color: var(--slate);
+  font-size: 0.86rem;
+}
+
+.passkey-list {
+  padding: 0;
+  list-style: none;
+}
+
+.passkey-list li {
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+#account-status[data-tone="error"] {
+  border-left-color: #a33;
+}
+
+@media (max-width: 38rem) {
+  .account-inline,
+  .account-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-inline button,
+  .account-heading button {
+    width: 100%;
+  }
 }
 
 /* Tables */

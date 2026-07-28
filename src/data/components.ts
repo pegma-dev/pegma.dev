@@ -50,7 +50,11 @@ export const components: readonly PegmaComponent[] = [
   {
     repo: 'storage-core',
     title: 'Storage Core',
-    packages: ['@pegma/storage-core', '@pegma/storage-azure-tables'],
+    packages: [
+      '@pegma/storage-core',
+      '@pegma/storage-azure-tables',
+      '@pegma/storage-cloudflare-d1',
+    ],
     status: 'published',
     summary: 'Persistence without the component knowing what the database is.',
     owns: [
@@ -65,7 +69,7 @@ export const components: readonly PegmaComponent[] = [
       'Cross-partition anything',
       'Compatibility layers for pre-existing data layouts — Pegma targets net-new projects',
     ],
-    now: '0.3.0 on npm with the Azure Tables adapter; in production behind the reference application.',
+    now: '0.4.0 on npm with Azure Tables and Cloudflare D1 adapters; both adapters pass the same conformance suite.',
   },
   {
     repo: 'authorization-core',
@@ -78,8 +82,9 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/authorization-stripe',
       '@pegma/authorization-storage',
       '@pegma/authorization-tokens',
+      '@pegma/authorization-identity',
     ],
-    status: 'in development',
+    status: 'published',
     summary:
       'Provider-neutral roles, entitlements, and permissions between identity, billing, and your API.',
     owns: [
@@ -94,7 +99,7 @@ export const components: readonly PegmaComponent[] = [
       'Offline commercial licensing — a different artifact entirely',
       'Email as an authentication or authorization key',
     ],
-    now: 'Phase 4 of 6 complete; first public 0.x packages are the next milestone.',
+    now: '0.1.2 on npm; the Identity claims adapter is composed by this Cloudflare reference application.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -102,7 +107,8 @@ export const components: readonly PegmaComponent[] = [
     title: 'Audit',
     packages: ['@pegma/audit'],
     status: 'published',
-    summary: 'Append-only audit records that commit atomically with the change they describe.',
+    summary:
+      'Append-only audit records that commit atomically with the change they describe.',
     owns: [
       'One audit vocabulary — actor, subject, event, idempotency — for every component',
       'A TransactionAction the caller includes in its own transact call',
@@ -119,7 +125,8 @@ export const components: readonly PegmaComponent[] = [
     title: 'Support Desk',
     packages: ['@pegma/support-desk-contracts', '@pegma/support-desk-core'],
     status: 'in development',
-    summary: 'A composable support queue for web and email, authorized by permissions from day one.',
+    summary:
+      'A composable support queue for web and email, authorized by permissions from day one.',
     owns: [
       'Tickets, channel-neutral messages, and requester trust levels',
       'Outbox-backed mail delivery — the state change and its delivery job commit in one transaction',
@@ -137,7 +144,8 @@ export const components: readonly PegmaComponent[] = [
     title: 'Webhooks',
     packages: ['@pegma/webhooks'],
     status: 'in development',
-    summary: 'Inbound webhook receipts: idempotent dedup, poison quarantine, retention.',
+    summary:
+      'Inbound webhook receipts: idempotent dedup, poison quarantine, retention.',
     owns: [
       'One receipt per provider event id — the durable answer to “did we already process this?”',
       'Quarantine-then-acknowledge after bounded failures, ending retry storms',
@@ -156,7 +164,8 @@ export const components: readonly PegmaComponent[] = [
     title: 'Sessions',
     packages: ['@pegma/sessions'],
     status: 'published',
-    summary: 'Server-side session records: hashed ids, dual expiry, revoke-everywhere.',
+    summary:
+      'Server-side session records: hashed ids, dual expiry, revoke-everywhere.',
     owns: [
       'SHA-256-hashed identifiers, non-optionally — a leaked table hands out no sessions',
       'Absolute plus idle expiry through one liveness predicate',
@@ -173,8 +182,9 @@ export const components: readonly PegmaComponent[] = [
     repo: 'mail',
     title: 'Mail',
     packages: ['@pegma/mail'],
-    status: 'planned',
-    summary: 'Transactional mail: provider ports and an outbox pattern that owns no store.',
+    status: 'published',
+    summary:
+      'Transactional mail: provider ports and an outbox pattern that owns no store.',
     owns: [
       'A delivery-job projection committed in the CALLER’s transaction — the lost-send gap closed by construction',
       'A lease-claiming delivery worker: bounded retries, dead jobs kept as durable human-visible rows',
@@ -185,15 +195,16 @@ export const components: readonly PegmaComponent[] = [
       'Inbound mail, bulk/marketing sending, rich templating',
       'Deliverability abstraction — SPF/DKIM/DMARC live in the host’s DNS',
     ],
-    now: 'Plan published; dormant by design — extracted from the support desk when identity becomes the second consumer.',
+    now: '0.1.0 on npm; extracted from Support Desk and now shared by Support Desk and Identity.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
     repo: 'identity',
     title: 'Identity',
     packages: ['@pegma/identity'],
-    status: 'planned',
-    summary: 'First-party identity: passkeys-first, email-code fallback, no passwords.',
+    status: 'published',
+    summary:
+      'First-party identity: passkeys-first, email-code fallback, no passwords.',
     owns: [
       'Account creation, passkey sign-in, and email one-time codes for enrollment, fallback, and recovery',
       'User records in the host’s own storage — no external provider',
@@ -204,15 +215,16 @@ export const components: readonly PegmaComponent[] = [
       'Being an OIDC/OAuth2 server for third parties',
       'Social login — external providers exist for that, and issuer-namespaced links let a host run both',
     ],
-    now: 'Plan published; queued behind sessions, rate-limit, and mail — the components it composes.',
+    now: '0.1.0 on npm; composed here with Sessions, durable rate limits, Mail, and Cloudflare D1.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
     repo: 'rate-limit',
     title: 'Rate Limit',
     packages: ['@pegma/rate-limit'],
-    status: 'planned',
-    summary: 'Two honest tiers: in-memory abuse dampening, durable limits for expensive operations.',
+    status: 'published',
+    summary:
+      'Two honest tiers: in-memory abuse dampening, durable limits for expensive operations.',
     owns: [
       'A per-instance sliding window that says it is per-instance',
       'A durable fixed-window counter that fails closed and refuses read-only under attack',
@@ -222,7 +234,7 @@ export const components: readonly PegmaComponent[] = [
       'DDoS protection — volumetric defense belongs at the edge',
       'Middleware and usage metering',
     ],
-    now: 'Plan published; deliberately dormant until the support desk pulls it.',
+    now: '0.1.0 on npm; both in-memory dampening and durable fixed-window limits are composed here.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {

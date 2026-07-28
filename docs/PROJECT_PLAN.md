@@ -5,8 +5,14 @@
 **Stage:** LIVE — Phases 1 and 2 complete 2026-07-27. https://pegma.dev
 serves the static site from Cloudflare Pages (project `pegma-dev`;
 `www` 301s to the apex); push-to-main deploys production via the SHA-pinned
-workflow, and same-repo PRs get branch previews. **Phase 3 complete
-2026-07-27.** Next: Phase 4, scheduled deliberately.
+workflow, while PRs validate without receiving production credentials.
+**Phase 3 complete
+2026-07-27. Phase 4 is in progress:** its D1-backed Identity consumer now
+composes the exact public Identity, Authorization adapter, Sessions, Mail,
+rate-limit, and storage packages. Production deployment remains gated on
+review and end-to-end account smoke tests. Email-code activation is a separate
+gate: provider-domain setup, its managed secret, an audited operator workflow,
+and an end-to-end delivery smoke test.
 
 **Hosting decision:** Cloudflare (Pages for the static site; Workers when a
 dynamic slice exists). Deliberate: the reference application
@@ -41,7 +47,7 @@ pieces snap together. Its audiences, in order:
 
 1. **AI agents building sites for people.** Pegma's governing principle is
    that components are assembled and maintained by agents. The site's
-   content is written to be *quoted into a context window*: terse component
+   content is written to be _quoted into a context window_: terse component
    summaries, copy-pasteable wiring examples, stable URLs, and llms.txt.
    An agent that lands here should leave with the right packages and the
    right composition in one read.
@@ -106,7 +112,7 @@ backend plus a small real consumer on Workers. Decisions taken now:
   `packages/storage-cloudflare-d1`), per the ecosystem's adapter convention
   — this site repo only consumes it.
 - This deliberately revisits the earlier "Azure Tables first, no backend
-  sprawl" stance: the sprawl rule was about not *promising* many databases;
+  sprawl" stance: the sprawl rule was about not _promising_ many databases;
   one second adapter to prove the conformance suite travels is the point of
   having a conformance suite. Decided 2026-07-27.
 
@@ -157,13 +163,16 @@ replaces); examples lifted from the storage-core and spine READMEs.
 ### Phase 2 — Cloudflare deployment ✓ (2026-07-27)
 
 Cloudflare Pages project, `pegma.dev` custom domain, GitHub integration or
-Actions deploy (SHA-pinned, per ecosystem standard), preview deploys on PRs.
+Actions deploy (SHA-pinned, per ecosystem standard).
 Exit: push-to-main publishes; the domain serves the site with an A grade on
 the obvious security headers. **Done:** project `pegma-dev`, deploys via
 plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
-Pages:Edit and Workers:Edit — deliberately no DNS scope; the custom domain
-was attached in the dashboard); security headers served from
-`public/_headers`, CSP with `script-src 'none'`; `www` 301s to the apex.
+Pages:Edit, Workers:Edit, and D1:Edit — deliberately no DNS scope; the custom
+domain was attached in the dashboard); security headers served from
+`public/_headers`, CSP with same-origin scripts only; `www` 301s to the apex.
+Pull requests run the build gate but never receive that production token;
+branch previews remain disabled until a separately scoped preview credential
+exists.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 
@@ -186,11 +195,25 @@ dynamic slice on Workers consuming it. Exit: the conformance suite green on
 a second real backend, and one production Pegma consumer running outside
 Azure.
 
+**Identity consumer composed (2026-07-28):** the Worker now pins
+`@pegma/identity@0.1.0`, `@pegma/authorization-identity@0.1.2`,
+`@pegma/sessions@0.1.0`, `@pegma/mail@0.1.0`,
+`@pegma/rate-limit@0.1.0`, and the D1/storage `0.4.0` packages. It exposes a
+secure account API/browser boundary for issuer `https://pegma.dev` and RP ID
+`pegma.dev`, uses four durable abuse limits, and schedules cursor-persisted
+maintenance. Email jobs commit atomically in Identity storage; a fail-closed
+Resend adapter provides idempotent send and reconciliation but remains
+disabled until the free-tier provider account, sender domain, managed secrets,
+delivery smoke test, and audited operator acknowledgement workflow are
+complete. No paid email service is assumed.
+
 **Logging precursor (2026-07-27):** Worker `pegma-dev-api` is deployed with
 `@pegma/logger-tee` → `@pegma/logger-cloudflare` + `@pegma/logger-datadog`.
 Workers Logs (Cloudflare’s log store) is enabled via Wrangler
 `observability.logs`. Datadog is optional until `DATADOG_API_KEY` is set.
-Full Phase 4 storage consumer remains gated on the D1 adapter.
+The Phase 4 account consumer now uses the published D1 adapter, Sessions,
+Identity, and Authorization adapter; its email entry points remain fail closed
+until the provider activation gate is complete.
 
 ### Phase 5 — dogfood support
 
@@ -217,15 +240,12 @@ with a source link where not. Decide in Phase 3.
 
 ## Near-term backlog
 
-1. Phase 3: build-time roadmap compilation from the component repos'
-   plans, llms.txt, and the stable-URL pass.
-2. Keep the hand-written registry honest until then — component status
-   changes are edited into `src/data/components.ts` with the snapshot date
-   bumped.
-3. Phase 4 waits until the storage-core adapter work is scheduled
-   deliberately. When the Workers consumer lands, wire
-   `createTeeLogger` from
-   [pegma-dev/logger-adapters](https://github.com/pegma-dev/logger-adapters)
-   with `@pegma/logger-cloudflare` and `@pegma/logger-datadog` at the
-   composition root (Spine `Logger` port; both reference hosts tee
-   Datadog — see that repo's plan).
+1. Complete independent review and local/remote D1 tests for the exact
+   Identity composition.
+2. Configure the Resend free-tier account, verify the `pegma.dev` sender,
+   install its managed provider secret, and smoke-test idempotent delivery
+   behind an authenticated, audited terminal-mail acknowledgement workflow
+   before enabling email-code entry points. The stable HMAC secret is already
+   installed in Cloudflare's managed secret store.
+3. Route same-origin `/api/*` traffic to `pegma-dev-api`, deploy, and verify the
+   D1-backed account flow without changing the Pages-hosted static architecture.
