@@ -14,7 +14,7 @@
   ],
   "vars": {
     "IDENTITY_EMAIL_FROM": "Pegma <identity@pegma.dev>",
-    "IDENTITY_EMAIL_ENABLED": "false",
+    "IDENTITY_EMAIL_ENABLED": "true",
   },
   "triggers": {
     "crons": ["* * * * *"],
