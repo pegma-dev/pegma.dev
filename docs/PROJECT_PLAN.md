@@ -161,9 +161,9 @@ Actions deploy (SHA-pinned, per ecosystem standard), preview deploys on PRs.
 Exit: push-to-main publishes; the domain serves the site with an A grade on
 the obvious security headers. **Done:** project `pegma-dev`, deploys via
 plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
-Pages:Edit only — deliberately no DNS scope; the custom domain was attached
-in the dashboard); security headers served from `public/_headers`, CSP with
-`script-src 'none'`; `www` 301s to the apex.
+Pages:Edit and Workers:Edit — deliberately no DNS scope; the custom domain
+was attached in the dashboard); security headers served from
+`public/_headers`, CSP with `script-src 'none'`; `www` 301s to the apex.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 

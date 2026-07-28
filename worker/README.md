@@ -29,10 +29,13 @@ Optional. Without `DATADOG_API_KEY`, only the Cloudflare sink runs.
 
 ```sh
 npx wrangler secret put DATADOG_API_KEY -c worker/wrangler.jsonc
-# if using the EU site:
+# optional site host (bare domain only; default is us5.datadoghq.com):
 npx wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
-# value: datadoghq.eu
+# value: us5.datadoghq.com   (or datadoghq.eu — not a full URL)
 ```
+
+CI deploys this Worker with the same `CLOUDFLARE_API_TOKEN` as Pages; that
+token needs **Workers:Edit** in addition to **Pages:Edit**.
 
 ## Endpoints
 

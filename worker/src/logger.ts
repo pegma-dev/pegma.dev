@@ -39,15 +39,16 @@ async function shipDatadogLog(
   site: string | undefined,
   input: DatadogSubmitInput,
 ): Promise<void> {
-  const host = site?.trim() || 'us5.datadoghq.com';
+  const host = datadogIntakeHost(site);
   const url = `https://http-intake.logs.${host}/api/v2/logs`;
   const body = [
     {
+      // Caller attributes first; fixed identity fields win on collision.
+      ...(input.attributes === undefined ? {} : { ...input.attributes }),
       message: input.message,
       status: input.status,
       ddsource: 'pegma-dev',
       service: 'pegma-dev-api',
-      ...(input.attributes === undefined ? {} : { ...input.attributes }),
     },
   ];
 
@@ -62,5 +63,17 @@ async function shipDatadogLog(
     });
   } catch {
     // Fail-soft: observability must not take down the request.
+  }
+}
+
+/** Bare site host for intake URLs; strips scheme/path from copy-paste mistakes. */
+function datadogIntakeHost(site: string | undefined): string {
+  const raw = site?.trim() || 'us5.datadoghq.com';
+  try {
+    const withScheme = raw.includes('://') ? raw : `https://${raw}`;
+    const hostname = new URL(withScheme).hostname;
+    return hostname || 'us5.datadoghq.com';
+  } catch {
+    return 'us5.datadoghq.com';
   }
 }
