@@ -33,7 +33,8 @@ npx wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
 ```
 
 CI deploys this Worker with the same `CLOUDFLARE_API_TOKEN` as Pages; that
-token needs **Workers:Edit** and **D1:Edit** in addition to **Pages:Edit**.
+token needs **Workers:Edit** in addition to **Pages:Edit**. It intentionally
+does not receive D1 authority.
 
 ## Identity composition
 
@@ -82,9 +83,11 @@ and must remain stable while any email-code or Mail job is live. Verify the
 The D1 schema is deployment-managed by
 `migrations/0001_pegma_storage.sql`. The adapter runs with
 `createSchemaIfMissing: false`, so request traffic never performs DDL.
-Production CI applies pending migrations before activating a new Worker
-version. The versioned route is limited to `pegma.dev/api/*`; Cloudflare Pages
-continues to serve every static path.
+Migration 0001 was applied to production before Worker activation. Production
+CI verifies that exact frozen baseline byte-for-byte; any future migration
+fails that gate until a separately least-privileged D1 deployment credential
+and migration step are reviewed. The versioned route is limited to
+`pegma.dev/api/*`; Cloudflare Pages continues to serve every static path.
 
 Passkey removal stays disabled until an email-code recovery implementation is
 live. This deliberately avoids a last-factor lockout in the passkey-only
