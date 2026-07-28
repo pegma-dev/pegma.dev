@@ -19,8 +19,9 @@
     "@pegma/logger-cloudflare": "^0.1.1",
     "@pegma/logger-datadog": "^0.1.1",
     "@pegma/logger-tee": "^0.1.1",
+    "@pegma/rate-limit": "0.1.0",
     "@pegma/sessions": "0.1.0",
-    "@pegma/storage-cloudflare-d1": "0.1.0",
+    "@pegma/storage-cloudflare-d1": "0.4.0",
     "@pegma/spine": "^0.1.1"
   },
   "devDependencies": {

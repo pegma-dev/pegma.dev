@@ -220,6 +220,41 @@ describe('identity API security boundary', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
 
+  it('preserves a bounded retry delay from Identity rate limits', async () => {
+    const fixture = createFixture();
+    vi.mocked(
+      fixture.identityPort.beginPasskeyAuthentication,
+    ).mockRejectedValueOnce({
+      code: 'rate_limited',
+      retryAfter: 1_001,
+    });
+
+    const response = await fixture.api(
+      mutation('/api/identity/passkeys/authentication/options', {}),
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('2');
+    expect(await response.json()).toEqual({ error: 'rate_limited' });
+  });
+
+  it('does not reflect malformed rate-limit delays', async () => {
+    const fixture = createFixture();
+    vi.mocked(
+      fixture.identityPort.beginPasskeyAuthentication,
+    ).mockRejectedValueOnce({
+      code: 'rate_limited',
+      retryAfter: Number.POSITIVE_INFINITY,
+    });
+
+    const response = await fixture.api(
+      mutation('/api/identity/passkeys/authentication/options', {}),
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.has('Retry-After')).toBe(false);
+  });
+
   it('rotates to an opaque secure host cookie after verified claims', async () => {
     const fixture = createFixture();
     const { response, body, cookie } = await signIn(fixture);

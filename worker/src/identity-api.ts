@@ -52,6 +52,7 @@ class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
+    readonly retryAfterSeconds?: number,
   ) {
     super(code);
   }
@@ -483,7 +484,16 @@ function publicError(error: unknown): ApiError {
       case 'verification_failed':
         return new ApiError(400, 'verification_failed');
       case 'rate_limited':
-        return new ApiError(429, 'rate_limited');
+        {
+          const retryAfter =
+            'retryAfter' in error &&
+            typeof error.retryAfter === 'number' &&
+            Number.isFinite(error.retryAfter) &&
+            error.retryAfter > 0
+              ? Math.ceil(error.retryAfter / 1_000)
+              : undefined;
+          return new ApiError(429, 'rate_limited', retryAfter);
+        }
       case 'not_found':
         return new ApiError(404, 'not_found');
       case 'conflict':
@@ -678,7 +688,13 @@ export function createIdentityApi(
       );
       return json(
         { error: safe.code },
-        { status: safe.status },
+        {
+          status: safe.status,
+          headers:
+            safe.retryAfterSeconds === undefined
+              ? undefined
+              : { 'Retry-After': String(safe.retryAfterSeconds) },
+        },
         error instanceof InvalidatedSessionError
           ? clearSessionCookie()
           : undefined,
