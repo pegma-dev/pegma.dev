@@ -167,12 +167,14 @@ Actions deploy (SHA-pinned, per ecosystem standard).
 Exit: push-to-main publishes; the domain serves the site with an A grade on
 the obvious security headers. **Done:** project `pegma-dev`, deploys via
 plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
-Pages:Edit, Workers:Edit, and D1:Edit — deliberately no DNS scope; the custom
+Pages:Edit and Workers:Edit — deliberately no D1 or DNS scope; the custom
 domain was attached in the dashboard); security headers served from
 `public/_headers`, CSP with same-origin scripts only; `www` 301s to the apex.
-Pull requests run the build gate but never receive that production token;
-branch previews remain disabled until a separately scoped preview credential
-exists.
+The initial D1 migration was operator-applied and production CI pins its exact
+hash; a future schema change remains fail-closed until it has a separate
+least-privileged D1 credential. Pull requests run the build gate but never
+receive the production token; branch previews remain disabled until a
+separately scoped preview credential exists.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 
