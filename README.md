@@ -17,15 +17,16 @@ retiregolden.org, runs the stack on Azure).
   component ecosystem: per-component summaries, a roadmap **compiled at
   build time from each repo's public PROJECT_PLAN.md** so it cannot drift,
   and composition examples lifted from real code.
-- A thin **Workers API** (`worker/`, script `pegma-dev-api`) that wires
+- A **Workers API** (`worker/`, script `pegma-dev-api`) that wires
   Spine logging through `@pegma/logger-tee` → Cloudflare Workers Logs +
   Datadog. Workers Logs persistence is enabled via Wrangler
   `observability` (the Cloudflare log store). Datadog ships when
   `DATADOG_API_KEY` is set as a Worker secret.
-- Eventually, the **portability exhibit**: a small real consumer on
-  Cloudflare Workers over a `storage-cloudflare-d1` adapter (which will
-  live in the storage-core repo and must pass the same conformance suite as
-  the Azure adapter).
+- The **portability exhibit**: the account API composes
+  `@pegma/storage-cloudflare-d1` and exact `@pegma/sessions@0.1.0` today.
+  Identity and its Authorization adapter remain fail-closed injected ports
+  until their first exact public versions can replace the release boundary in
+  `worker/src/identity-runtime.ts`.
 
 ## Worker logging
 
@@ -42,6 +43,12 @@ npm run worker:tail
 `GET /health` on the Worker uses `@pegma/health` (process + logging sink
 booleans), returns the shared JSON shape, and emits `health.ok` through the
 Pegma adapters with the checks registered today.
+
+`/account` is the static account shell. Its same-origin `/api/identity/*`
+contract supports passkey sign-in and enrollment, email-code sign-in through
+an injected delivery provider, server-side session revocation, and no-store
+account reads. The checked-in Worker does not assume or purchase an email
+provider.
 
 ## The content rule
 

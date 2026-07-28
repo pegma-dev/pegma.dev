@@ -70,3 +70,7 @@ status, design decisions, and non-goals.
   at build time from the repos' plans.
 - [Examples](https://pegma.dev/examples): snippets lifted from real code
   only, each citing its source.
+- [Account](https://pegma.dev/account): the static shell for pegma.dev's
+  D1-backed first-party Identity reference consumer. Its Worker runtime stays
+  fail closed until the exact Identity and Authorization adapter releases are
+  installed; email delivery is an injected provider seam.

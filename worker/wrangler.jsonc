@@ -2,16 +2,30 @@
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "pegma-dev-api",
   "main": "src/index.ts",
-  "compatibility_date": "2026-07-27",
+  "compatibility_date": "2026-07-28",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "pegma.dev/api/*",
+      "zone_name": "pegma.dev",
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "IDENTITY_DB",
+      "database_name": "pegma-dev-identity",
+      "database_id": "fe188a7f-7b5e-4889-bcfc-6150b64d45ae",
+      "migrations_dir": "migrations",
+    },
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,
-      "persist": true
-    }
-  }
+      "persist": true,
+    },
+  },
 }
