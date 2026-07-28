@@ -161,9 +161,9 @@ Actions deploy (SHA-pinned, per ecosystem standard), preview deploys on PRs.
 Exit: push-to-main publishes; the domain serves the site with an A grade on
 the obvious security headers. **Done:** project `pegma-dev`, deploys via
 plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
-Pages:Edit only — deliberately no DNS scope; the custom domain was attached
-in the dashboard); security headers served from `public/_headers`, CSP with
-`script-src 'none'`; `www` 301s to the apex.
+Pages:Edit and Workers:Edit — deliberately no DNS scope; the custom domain
+was attached in the dashboard); security headers served from
+`public/_headers`, CSP with `script-src 'none'`; `www` 301s to the apex.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 
@@ -185,6 +185,12 @@ conformance suite against real D1 (Miniflare/wrangler in CI). Then the
 dynamic slice on Workers consuming it. Exit: the conformance suite green on
 a second real backend, and one production Pegma consumer running outside
 Azure.
+
+**Logging precursor (2026-07-27):** Worker `pegma-dev-api` is deployed with
+`@pegma/logger-tee` → `@pegma/logger-cloudflare` + `@pegma/logger-datadog`.
+Workers Logs (Cloudflare’s log store) is enabled via Wrangler
+`observability.logs`. Datadog is optional until `DATADOG_API_KEY` is set.
+Full Phase 4 storage consumer remains gated on the D1 adapter.
 
 ### Phase 5 — dogfood support
 
