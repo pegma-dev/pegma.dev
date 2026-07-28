@@ -1,3 +1,9 @@
+import {
+  createDetailCheck,
+  createProcessCheck,
+  runHealthChecks,
+  toHealthResponse,
+} from '@pegma/health';
 import { createAppLogger, type LoggerEnv } from './logger';
 
 export interface Env extends LoggerEnv {}
@@ -24,18 +30,19 @@ export default {
     });
 
     if (request.method === 'GET' && (path === '/' || path === '/health')) {
-      logger.log('info', 'health.ok', { path });
-      return Response.json(
-        {
-          ok: true,
-          service: 'pegma-dev-api',
-          logging: {
+      const result = await runHealthChecks({
+        service: 'pegma-dev-api',
+        logger,
+        checks: [
+          createProcessCheck(),
+          createDetailCheck('logging', {
             cloudflare: true,
             datadog: Boolean(env.DATADOG_API_KEY),
-          },
-        },
-        { status: 200 },
-      );
+          }),
+        ],
+      });
+      const { status, body } = toHealthResponse(result);
+      return Response.json(body, { status });
     }
 
     logger.log('warn', 'request.not_found', { method: request.method, path });

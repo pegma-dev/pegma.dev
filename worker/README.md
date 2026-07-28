@@ -1,6 +1,7 @@
 # pegma-dev-api Worker
 
-Thin Cloudflare Worker that proves pegma.dev's Pegma logging composition:
+Thin Cloudflare Worker that proves pegma.dev's Pegma logging composition and
+hosts the public health endpoint via `@pegma/health`:
 
 ```ts
 createTeeLogger(
@@ -39,5 +40,31 @@ token needs **Workers:Edit** in addition to **Pages:Edit**.
 
 ## Endpoints
 
-- `GET /` or `GET /health` — JSON health; emits `request.received` and
-  `health.ok` through the teed Spine logger.
+- `GET /` or `GET /health` — JSON from `@pegma/health`
+  (`createProcessCheck` + logging sink booleans). Emits `request.received`
+  and `health.ok` / `health.degraded` / `health.failed` through the teed Spine
+  logger. HTTP `200` when status is `ok` or `degraded`; `503` on `fail`.
+  No storage probe yet (D1 consumer still gated).
+
+Example body:
+
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "service": "pegma-dev-api",
+  "checkedAt": "2026-07-27T21:00:00.000Z",
+  "checks": {
+    "process": { "status": "ok" },
+    "logging": {
+      "status": "ok",
+      "detail": { "cloudflare": true, "datadog": true }
+    }
+  }
+}
+```
+
+## Vendored `@pegma/health`
+
+Until `@pegma/health` is on npm, the Worker depends on
+`worker-vendor/pegma-health-0.1.0.tgz` packed from `pegma-dev/health`.

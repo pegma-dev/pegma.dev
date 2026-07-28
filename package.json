@@ -12,6 +12,7 @@
     "worker:tail": "wrangler tail pegma-dev-api"
   },
   "dependencies": {
+    "@pegma/health": "file:worker-vendor/pegma-health-0.1.0.tgz",
     "@pegma/logger-cloudflare": "^0.1.1",
     "@pegma/logger-datadog": "^0.1.1",
     "@pegma/logger-tee": "^0.1.1",

@@ -249,4 +249,24 @@ export const components: readonly PegmaComponent[] = [
     now: '0.1.1 on npm; trusted publishing configured. Host tee wiring next.',
     plan: 'docs/PROJECT_PLAN.md',
   },
+  {
+    repo: 'health',
+    title: 'Health',
+    packages: ['@pegma/health'],
+    status: 'in development',
+    summary:
+      'Composable health probes and HTTP responses for public liveness checks.',
+    owns: [
+      'Check contracts, aggregation, and HTTP status mapping',
+      'Process, detail, and injected Store ping helpers',
+      'Spine log events health.ok / health.degraded / health.failed',
+    ],
+    refuses: [
+      'Owning a storage adapter or inventing domain collections',
+      'Autodiscovery of checks — hosts register them at the composition root',
+      'Metrics, APM, or alert fan-out',
+    ],
+    now: '0.1.0 packaged; wired on pegma.dev Worker and RetireGolden /api/health pending npm publish.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
 ];

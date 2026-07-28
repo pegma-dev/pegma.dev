@@ -39,8 +39,9 @@ npx wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
 npm run worker:tail
 ```
 
-`GET /health` on the Worker returns whether each sink is configured and
-emits structured lines through the Pegma adapters.
+`GET /health` on the Worker uses `@pegma/health` (process + logging sink
+booleans), returns the shared JSON shape, and emits `health.ok` /
+`health.degraded` / `health.failed` through the Pegma adapters.
 
 ## The content rule
 
