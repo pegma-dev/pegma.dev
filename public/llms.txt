@@ -32,6 +32,9 @@ reference environment.
 - [Audit](https://github.com/pegma-dev/audit): @pegma/audit — append-only
   audit records that commit atomically inside the CALLER's transaction; owns
   no store of its own. Published.
+- [Health](https://github.com/pegma-dev/health): @pegma/health — composable
+  health probes and HTTP responses for public liveness checks (process,
+  detail, injected Store ping). Published as 0.1.1.
 - [Support Desk](https://github.com/pegma-dev/support-desk):
   @pegma/support-desk-* — composable support queue for web and email,
   authorized by permissions. In development.
