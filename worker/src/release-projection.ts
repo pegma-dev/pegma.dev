@@ -1,13 +1,14 @@
+import type { Store } from '@pegma/storage-core';
 import {
   componentReleaseCollection,
   componentReleaseKey,
   type ComponentRelease,
 } from './component-release';
-import type { Store } from '@pegma/storage-core';
 
 const GITHUB_ORG_PREFIX = 'https://github.com/pegma-dev/';
 const SAFE_REPO_NAME = /^[A-Za-z0-9_.-]+$/;
 const SAFE_TAG_NAME = /^[A-Za-z0-9._+/~^-]+$/;
+const DELETE_ATTEMPTS = 3;
 
 /** Fields extracted from an authenticated GitHub release webhook payload. */
 export interface ReleaseEventFacts {
@@ -30,6 +31,16 @@ export type ReleaseProjectionDecision =
       readonly releaseId: string;
     };
 
+function compareReleaseIds(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  if (left.length !== right.length) {
+    return left.length < right.length ? -1 : 1;
+  }
+  return left < right ? -1 : 1;
+}
+
 function isNewerOrSameRelease(
   incoming: Pick<ComponentRelease, 'publishedAt' | 'releaseId'>,
   current: Pick<ComponentRelease, 'publishedAt' | 'releaseId'>,
@@ -40,7 +51,7 @@ function isNewerOrSameRelease(
   if (incoming.publishedAt < current.publishedAt) {
     return false;
   }
-  return incoming.releaseId >= current.releaseId;
+  return compareReleaseIds(incoming.releaseId, current.releaseId) >= 0;
 }
 
 /** Build a pegma-dev release URL; never trust an arbitrary payload URL. */
@@ -62,16 +73,18 @@ export function decideReleaseProjection(
   facts: ReleaseEventFacts,
   observedAt: string,
 ): ReleaseProjectionDecision {
-  if (facts.draft || facts.prerelease) {
-    return { kind: 'ignore' };
-  }
-
+  // `unpublished` converts a release back to draft; check removal actions
+  // before the draft/prerelease filter so the current projection can clear.
   if (facts.action === 'unpublished' || facts.action === 'deleted') {
     return {
       kind: 'delete',
       repositoryId: facts.repositoryId,
       releaseId: facts.releaseId,
     };
+  }
+
+  if (facts.draft || facts.prerelease) {
+    return { kind: 'ignore' };
   }
 
   if (
@@ -114,11 +127,19 @@ export async function applyReleaseProjection(
 
   if (decision.kind === 'delete') {
     const key = componentReleaseKey(decision.repositoryId);
-    const current = await releases.getVersioned(key);
-    if (current !== null && current.value.releaseId === decision.releaseId) {
-      await releases.deleteIfUnchanged(key, current.version);
+    for (let attempt = 0; attempt < DELETE_ATTEMPTS; attempt += 1) {
+      const current = await releases.getVersioned(key);
+      if (current === null) {
+        return;
+      }
+      if (current.value.releaseId !== decision.releaseId) {
+        return;
+      }
+      if (await releases.deleteIfUnchanged(key, current.version)) {
+        return;
+      }
     }
-    return;
+    throw new Error('Release projection delete conflicted repeatedly.');
   }
 
   const incoming = decision.release;

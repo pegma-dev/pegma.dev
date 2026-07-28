@@ -119,6 +119,62 @@ describe('applyReleaseProjection', () => {
     expect(current?.releaseId).toBe('100');
   });
 
+  it('deletes unpublished drafts that were previously current', async () => {
+    const store = createMemoryStore();
+    const releases = store.collection(componentReleaseCollection());
+
+    await applyReleaseProjection(
+      store,
+      decideReleaseProjection(facts({ releaseId: '100' }), NOW),
+    );
+    await applyReleaseProjection(
+      store,
+      decideReleaseProjection(
+        facts({
+          action: 'unpublished',
+          releaseId: '100',
+          draft: true,
+        }),
+        NOW,
+      ),
+    );
+    expect(await releases.get(componentReleaseKey('1313911960'))).toBeNull();
+  });
+
+  it('orders same-timestamp releases by numeric release id', async () => {
+    const store = createMemoryStore();
+    const releases = store.collection(componentReleaseCollection());
+    const publishedAt = '2026-07-28T12:00:00.000Z';
+
+    await applyReleaseProjection(
+      store,
+      decideReleaseProjection(
+        facts({
+          releaseId: '100',
+          tagName: 'v0.1.0',
+          publishedAt,
+        }),
+        NOW,
+      ),
+    );
+    await applyReleaseProjection(
+      store,
+      decideReleaseProjection(
+        facts({
+          releaseId: '99',
+          tagName: 'v0.0.9',
+          publishedAt,
+        }),
+        NOW,
+      ),
+    );
+
+    expect(await releases.get(componentReleaseKey('1313911960'))).toMatchObject({
+      releaseId: '100',
+      tagName: 'v0.1.0',
+    });
+  });
+
   it('deletes only when releaseId matches the stored current release', async () => {
     const store = createMemoryStore();
     const releases = store.collection(componentReleaseCollection());

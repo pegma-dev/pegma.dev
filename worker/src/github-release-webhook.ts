@@ -78,20 +78,22 @@ export function readGitHubReleaseWebhookConfig(
 ): GitHubReleaseWebhookConfig | null {
   const webhookSecret = env.GITHUB_WEBHOOK_SECRET;
   const organizationId = env.GITHUB_ORGANIZATION_ID;
+  const allowedRepositoryIds = parseAllowedRepositoryIds(
+    env.GITHUB_ALLOWED_REPOSITORY_IDS,
+  );
   if (
     typeof webhookSecret !== 'string' ||
     webhookSecret.length === 0 ||
     typeof organizationId !== 'string' ||
-    organizationId.length === 0
+    organizationId.length === 0 ||
+    allowedRepositoryIds.size === 0
   ) {
     return null;
   }
   return {
     webhookSecret,
     organizationId,
-    allowedRepositoryIds: parseAllowedRepositoryIds(
-      env.GITHUB_ALLOWED_REPOSITORY_IDS,
-    ),
+    allowedRepositoryIds,
   };
 }
 
