@@ -305,18 +305,14 @@ async function readyEmailRecovery(options: IdentityApiOptions): Promise<{
   readonly codes: EmailCodeIdentityPort;
   readonly sender: VerificationEmailSender;
 } | null> {
-  if (
-    options.identity === undefined ||
-    options.identityLinkFromClaims === undefined ||
-    options.emailCodes === undefined ||
-    options.verificationEmailSender === undefined
-  ) {
+  const codes = composedEmailRecovery(options);
+  if (codes === null || options.verificationEmailSender === undefined) {
     return null;
   }
   try {
     return (await options.verificationEmailSender.ready()) === true
       ? {
-          codes: options.emailCodes,
+          codes,
           sender: options.verificationEmailSender,
         }
       : null;
@@ -325,14 +321,25 @@ async function readyEmailRecovery(options: IdentityApiOptions): Promise<{
   }
 }
 
+function composedEmailRecovery(
+  options: IdentityApiOptions,
+): EmailCodeIdentityPort | null {
+  return options.identity !== undefined &&
+    options.identityLinkFromClaims !== undefined &&
+    options.emailCodes !== undefined
+    ? options.emailCodes
+    : null;
+}
+
 async function invalidateSession(
   rawSessionId: string,
   options: IdentityApiOptions,
 ): Promise<never> {
   try {
     await options.sessions.destroy(rawSessionId);
-  } catch {
+  } catch (error) {
     options.logger.log('error', 'identity.session_invalidation_cleanup_failed');
+    throw error;
   }
   throw new InvalidatedSessionError();
 }
@@ -589,11 +596,11 @@ export function createIdentityApi(
           'challengeHandle',
           'code',
         ]);
-        const recovery = await readyEmailRecovery(options);
-        if (recovery === null) {
+        const codes = composedEmailRecovery(options);
+        if (codes === null) {
           throw new ApiError(503, 'email_code_unavailable');
         }
-        const claims = await recovery.codes.finish(
+        const claims = await codes.finish(
           boundedString(body.challengeHandle, 1, 512),
           boundedString(body.code, 4, 32),
           await rateLimitKey(request),

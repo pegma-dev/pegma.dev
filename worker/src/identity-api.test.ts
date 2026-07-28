@@ -30,6 +30,7 @@ class TestSessions implements SessionStore {
   readonly records = new Map<string, SessionRecord>();
   readonly destroyed: string[] = [];
   createFailure: Error | null = null;
+  destroyFailure: Error | null = null;
 
   async create(sessionId: string, session: NewSession): Promise<SessionRecord> {
     if (this.createFailure !== null) {
@@ -50,6 +51,9 @@ class TestSessions implements SessionStore {
   }
 
   async destroy(sessionId: string): Promise<void> {
+    if (this.destroyFailure !== null) {
+      throw this.destroyFailure;
+    }
     this.destroyed.push(sessionId);
     this.records.delete(sessionId);
   }
@@ -390,6 +394,38 @@ describe('identity API security boundary', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it('preserves a copied credential for retry when authoritative invalidation fails', async () => {
+    const fixture = createFixture();
+    const { cookie } = await signIn(fixture);
+    const token = cookieToken(cookie);
+    vi.mocked(fixture.identityPort.getUser).mockResolvedValue(null);
+    fixture.sessions.destroyFailure = new Error('temporary destroy failure');
+
+    const first = await fixture.api(
+      new Request(`${IDENTITY_ISSUER}/api/identity/account`, {
+        headers: { Cookie: cookie },
+      }),
+    );
+
+    expect(first.status).toBe(500);
+    expect(first.headers.get('Set-Cookie')).toBeNull();
+    expect(fixture.sessions.records.has(token)).toBe(true);
+
+    fixture.sessions.destroyFailure = null;
+    const retryWithCopiedToken = await fixture.api(
+      new Request(`${IDENTITY_ISSUER}/api/identity/account`, {
+        headers: { Cookie: cookie },
+      }),
+    );
+
+    expect(retryWithCopiedToken.status).toBe(401);
+    expect(retryWithCopiedToken.headers.get('Set-Cookie')).toContain(
+      'Max-Age=0',
+    );
+    expect(fixture.sessions.records.has(token)).toBe(false);
+    expect(fixture.sessions.destroyed).toContain(token);
+  });
+
   it('destroys the server-side session and expires the cookie on logout', async () => {
     const fixture = createFixture();
     const { cookie, body } = await signIn(fixture);
@@ -480,6 +516,11 @@ describe('identity API security boundary', () => {
     const capabilities = await fixture.api(
       new Request(`${IDENTITY_ISSUER}/api/identity/capabilities`),
     );
+    const start = await fixture.api(
+      mutation('/api/identity/email-code/options', {
+        email: 'person@example.test',
+      }),
+    );
     const response = await fixture.api(
       mutation(
         '/api/identity/passkeys',
@@ -495,12 +536,14 @@ describe('identity API security boundary', () => {
     expect((await capabilities.json<{ emailCode: boolean }>()).emailCode).toBe(
       false,
     );
+    expect(start.status).toBe(503);
+    expect(emailCodes.begin).not.toHaveBeenCalled();
     expect(response.status).toBe(409);
     expect(fixture.identityPort.removePasskey).not.toHaveBeenCalled();
     expect(await response.json()).toEqual({ error: 'recovery_required' });
   });
 
-  it('establishes the same session boundary from an injected email-code flow', async () => {
+  it('verifies an issued email code while its delivery sender is unready', async () => {
     const emailCodes: EmailCodeIdentityPort = {
       begin: vi.fn(async () => ({
         challengeHandle: 'email-handle',
@@ -508,7 +551,8 @@ describe('identity API security boundary', () => {
       })),
       finish: vi.fn(async () => claims),
     };
-    const fixture = createFixture(emailCodes, emailSender());
+    const sender = emailSender(false);
+    const fixture = createFixture(emailCodes, sender);
     const response = await fixture.api(
       mutation('/api/identity/email-code/verify', {
         challengeHandle: 'email-handle',
@@ -519,6 +563,7 @@ describe('identity API security boundary', () => {
     expect(response.status).toBe(200);
     expect(cookieToken(cookieFrom(response))).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(emailCodes.finish).toHaveBeenCalledTimes(1);
+    expect(sender.ready).not.toHaveBeenCalled();
   });
 
   it('advertises email recovery only when durable delivery is ready and accepted', async () => {
