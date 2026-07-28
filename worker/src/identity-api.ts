@@ -530,6 +530,16 @@ export function createIdentityApi(
         });
       }
 
+      if (request.method === 'GET' && path === '/api/secure') {
+        const authenticated = await requireAuthentication(request, options);
+        return json({
+          authenticated: true,
+          issuer: authenticated.link.issuer,
+          subject: authenticated.link.subject,
+          session: '@pegma/sessions',
+        });
+      }
+
       if (request.method !== 'POST' && request.method !== 'DELETE') {
         throw new ApiError(404, 'not_found');
       }

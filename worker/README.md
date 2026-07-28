@@ -54,6 +54,12 @@ require a per-session synchronizer token. Request bodies are bounded before
 JSON parsing, and logs contain route/error classifications rather than contact
 data, credentials, codes, or session identifiers.
 
+`GET /api/secure` is the generic backend-authentication proof. It resolves the
+opaque `__Host-pegma_session` cookie through `@pegma/sessions`, revalidates the
+stored principal against Identity and the Authorization claims adapter, and
+returns only the issuer and subject. Missing, expired, revoked, malformed, or
+account-invalid sessions receive `401`; every response is `no-store`.
+
 The production composition pins `@pegma/identity@0.1.0` and
 `@pegma/authorization-identity@0.1.2`. Account creation and fallback sign-in
 commit the email-code operation and its `@pegma/mail@0.1.0` job atomically in

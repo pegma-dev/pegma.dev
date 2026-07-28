@@ -312,6 +312,35 @@ describe('identity API security boundary', () => {
     expect(fixture.identityPort.claimsFor).toHaveBeenCalledWith(principalId);
   });
 
+  it('protects the generic backend endpoint with the server-side session', async () => {
+    const fixture = createFixture();
+    const anonymous = await fixture.api(
+      new Request(`${IDENTITY_ISSUER}/api/secure`),
+    );
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.json()).toEqual({
+      error: 'authentication_required',
+    });
+
+    const { cookie } = await signIn(fixture);
+    const authenticated = await fixture.api(
+      new Request(`${IDENTITY_ISSUER}/api/secure`, {
+        headers: { Cookie: cookie },
+      }),
+    );
+
+    expect(authenticated.status).toBe(200);
+    expect(authenticated.headers.get('Cache-Control')).toBe('no-store');
+    expect(authenticated.headers.get('Vary')).toBe('Cookie');
+    expect(await authenticated.json()).toEqual({
+      authenticated: true,
+      issuer: IDENTITY_ISSUER,
+      subject: principalId,
+      session: '@pegma/sessions',
+    });
+    expect(fixture.identityPort.claimsFor).toHaveBeenCalledWith(principalId);
+  });
+
   it('requires the server-side synchronizer token for account mutation', async () => {
     const fixture = createFixture();
     const { cookie } = await signIn(fixture);

@@ -65,6 +65,11 @@ describe('published Identity composition', () => {
         headers: { Cookie: `__Host-pegma_session=${sessionId}` },
       }),
     );
+    const secure = await runtime.api(
+      new Request('https://pegma.dev/api/secure', {
+        headers: { Cookie: `__Host-pegma_session=${sessionId}` },
+      }),
+    );
 
     expect(await capabilities.json()).toMatchObject({
       passkeys: true,
@@ -77,6 +82,13 @@ describe('published Identity composition', () => {
         email: 'person@example.test',
       },
       csrfToken,
+    });
+    expect(secure.status).toBe(200);
+    expect(await secure.json()).toEqual({
+      authenticated: true,
+      issuer: 'https://pegma.dev',
+      subject: user.principalId,
+      session: '@pegma/sessions',
     });
   });
 
