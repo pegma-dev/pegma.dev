@@ -51,6 +51,16 @@ function failureCategory(value: unknown, fallback: string): string {
     : fallback;
 }
 
+function providerCodeCategory(code: string): string {
+  const normalized = code
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '_')
+    .replace(/^_+|_+$/gu, '');
+  return normalized === ''
+    ? 'provider_unavailable'
+    : `cloudflare_${normalized}`.slice(0, 64);
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   try {
     return (
@@ -189,9 +199,7 @@ export function createCloudflareEmailMailPorts(options: {
           throw new CloudflareEmailMailError('provider_retryable');
         }
         throw new CloudflareEmailMailError(
-          code === ''
-            ? 'provider_unavailable'
-            : `cloudflare_${code.toLowerCase()}`.slice(0, 64),
+          providerCodeCategory(code),
         );
       }
     },

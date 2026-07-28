@@ -116,4 +116,31 @@ describe('Cloudflare Email Service Mail adapter', () => {
       'provider_unavailable',
     );
   });
+
+  it.each([
+    ['SMTP.RATE-LIMIT/Exceeded', 'cloudflare_smtp_rate_limit_exceeded'],
+    ['---', 'provider_unavailable'],
+  ])('normalizes provider code %s as %s', async (code, expected) => {
+    const email = {
+      send: vi.fn(async () => {
+        throw { code };
+      }),
+    } as unknown as SendEmail;
+    const ports = createCloudflareEmailMailPorts({
+      binding: email,
+      from: 'identity@pegma.dev',
+      acceptDoubleSendRisk: true,
+    });
+
+    await expect(
+      ports.provider.send({
+        idempotencyKey: 'pegma-mail:v1:partition:job:1',
+        mail: {
+          recipient: 'person@example.test',
+          subject: 'Verify',
+          text: 'Code 12345678',
+        },
+      }),
+    ).rejects.toMatchObject({ category: expected });
+  });
 });
