@@ -1,8 +1,8 @@
 /**
  * The component registry every page renders from — a hand-maintained fallback
- * snapshot. Build-time aggregation replaces each component's `now` line with
- * the Stage paragraph from its repository's docs/PROJECT_PLAN.md when
- * available, so facts here stay terse and useful during a fetch failure.
+ * snapshot. Build-time aggregation adds the Stage paragraph from each
+ * repository's docs/PROJECT_PLAN.md when available; pages prefer that `stage`
+ * field over `now`, so these facts stay useful during a fetch failure.
  */
 
 export type ComponentStatus = 'published' | 'in development' | 'planned';
