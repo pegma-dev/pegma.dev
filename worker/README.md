@@ -32,9 +32,12 @@ npx wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
 # value: us5.datadoghq.com   (or datadoghq.eu — not a full URL)
 ```
 
-CI deploys this Worker with the same `CLOUDFLARE_API_TOKEN` as Pages; that
-token needs **Workers:Edit** in addition to **Pages:Edit**. It intentionally
-does not receive D1 authority.
+The GitHub deployment credential is Pages-only. Deploy this Worker from an
+authenticated operator session with `npm run worker:deploy` until a separate,
+least-privileged credential has both Worker script and `pegma.dev` route
+authority. Do not substitute a broad personal OAuth token into GitHub. The
+production Worker was operator-deployed on 2026-07-28 as version
+`0a9956e6-01c6-4a9a-953f-4e71d94d0055`.
 
 ## Identity composition
 

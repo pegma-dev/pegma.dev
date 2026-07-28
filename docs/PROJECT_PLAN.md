@@ -6,13 +6,15 @@
 serves the static site from Cloudflare Pages (project `pegma-dev`;
 `www` 301s to the apex); push-to-main deploys production via the SHA-pinned
 workflow, while PRs validate without receiving production credentials.
-**Phase 3 complete
-2026-07-27. Phase 4 is in progress:** its D1-backed Identity consumer now
+**Phase 3 complete 2026-07-27. Phase 4 complete 2026-07-28:** its D1-backed
+Identity consumer now
 composes the exact public Identity, Authorization adapter, Sessions, Mail,
-rate-limit, and storage packages. Production deployment remains gated on
-review and end-to-end account smoke tests. Email-code activation is a separate
-gate: provider-domain setup, its managed secret, an audited operator workflow,
-and an end-to-end delivery smoke test.
+rate-limit, and storage packages. Worker version
+`0a9956e6-01c6-4a9a-953f-4e71d94d0055` is live on `pegma.dev/api/*`; production
+health, capabilities, unauthenticated account, and cross-origin rejection
+smoke tests pass. Email-code activation is a separate gate: provider-domain
+setup, its managed secret, an audited operator workflow, and an end-to-end
+delivery smoke test.
 
 **Hosting decision:** Cloudflare (Pages for the static site; Workers when a
 dynamic slice exists). Deliberate: the reference application
@@ -167,14 +169,18 @@ Actions deploy (SHA-pinned, per ecosystem standard).
 Exit: push-to-main publishes; the domain serves the site with an A grade on
 the obvious security headers. **Done:** project `pegma-dev`, deploys via
 plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
-Pages:Edit and Workers:Edit — deliberately no D1 or DNS scope; the custom
-domain was attached in the dashboard); security headers served from
+Pages:Edit only — deliberately no Worker, D1, or DNS scope; the custom domain
+was attached in the dashboard); security headers served from
 `public/_headers`, CSP with same-origin scripts only; `www` 301s to the apex.
 The initial D1 migration was operator-applied and production CI pins its exact
 hash; a future schema change remains fail-closed until it has a separate
 least-privileged D1 credential. Pull requests run the build gate but never
 receive the production token; branch previews remain disabled until a
 separately scoped preview credential exists.
+
+The Worker is an explicit operator deployment until a second GitHub credential
+has least-privileged Worker script plus `pegma.dev` route authority. The broad
+local OAuth credential is never copied into GitHub.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 
@@ -189,7 +195,7 @@ emits file-format output so extensionless URLs serve 200 with no
 trailing-slash redirect. Verified live: the roadmap shows plan text the
 registry never contained.
 
-### Phase 4 — the environment test
+### Phase 4 — the environment test ✓ (2026-07-28)
 
 `packages/storage-cloudflare-d1` in the storage-core repo, passing the full
 conformance suite against real D1 (Miniflare/wrangler in CI). Then the
@@ -243,7 +249,7 @@ with a source link where not. Decide in Phase 3.
 ## Near-term backlog
 
 1. Complete independent review and local/remote D1 tests for the exact
-   Identity composition.
+   Identity composition. **Done 2026-07-28.**
 2. Configure the Resend free-tier account, verify the `pegma.dev` sender,
    install its managed provider secret, and smoke-test idempotent delivery
    behind an authenticated, audited terminal-mail acknowledgement workflow
@@ -251,3 +257,4 @@ with a source link where not. Decide in Phase 3.
    installed in Cloudflare's managed secret store.
 3. Route same-origin `/api/*` traffic to `pegma-dev-api`, deploy, and verify the
    D1-backed account flow without changing the Pages-hosted static architecture.
+   **Done 2026-07-28; email activation remains separately gated.**
