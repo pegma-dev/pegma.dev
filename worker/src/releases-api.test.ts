@@ -212,6 +212,50 @@ describe('handleGetReleases', () => {
     expect(await second.text()).toBe('');
   });
 
+  it('returns 304 when If-None-Match is *', async () => {
+    const store = createMemoryStore();
+    await seedWebhooksRelease(store);
+
+    const response = await handleGetReleases({
+      request: new Request('https://pegma.dev/api/releases', {
+        method: 'GET',
+        headers: { 'If-None-Match': '*' },
+      }),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(response.status).toBe(304);
+  });
+
+  it('validates public URL against the catalog display name', async () => {
+    const store = createMemoryStore();
+    const releases = store.collection(componentReleaseCollection());
+    await releases.update(componentReleaseKey(WEBHOOKS_ID), () => ({
+      action: 'write',
+      value: {
+        repositoryId: WEBHOOKS_ID,
+        repositoryName: 'renamed-webhooks',
+        releaseId: '3001',
+        tagName: 'v0.0.1',
+        publishedAt: '2026-07-20T12:00:00.000Z',
+        releaseUrl:
+          'https://github.com/pegma-dev/webhooks/releases/tag/v0.0.1',
+        observedAt: '2026-07-28T18:00:00.000Z',
+      },
+    }));
+
+    const body = await buildReleasesResponse(store, config, NOW);
+    const webhooks = body.releases.find(
+      (entry) => entry.repositoryId === WEBHOOKS_ID,
+    );
+    expect(webhooks?.repositoryName).toBe('webhooks');
+    expect(webhooks?.current?.releaseUrl).toBe(
+      'https://github.com/pegma-dev/webhooks/releases/tag/v0.0.1',
+    );
+  });
+
   it('rejects non-GET methods without reading storage side effects', async () => {
     const store = createMemoryStore();
     const response = await handleGetReleases({

@@ -69,12 +69,17 @@ export function readReleasesConfig(
   return { allowedRepositoryIds };
 }
 
-/** Project a stored record into public fields; reject unsafe URLs. */
+/**
+ * Project a stored record into public fields; reject unsafe URLs.
+ * `displayRepositoryName` is the catalog name shown to clients; the release
+ * URL must match that name (not a stale stored rename).
+ */
 export function toPublicCurrentRelease(
   release: ComponentRelease,
+  displayRepositoryName: string = release.repositoryName,
 ): PublicCurrentRelease | null {
   const expectedUrl = buildPegmaReleaseUrl(
-    release.repositoryName,
+    displayRepositoryName,
     release.tagName,
   );
   if (
@@ -88,7 +93,7 @@ export function toPublicCurrentRelease(
     releaseId: release.releaseId,
     tagName: release.tagName,
     publishedAt: release.publishedAt,
-    releaseUrl: release.releaseUrl,
+    releaseUrl: expectedUrl,
     observedAt: release.observedAt,
   };
 }
@@ -116,15 +121,11 @@ export async function buildReleasesResponse(
       });
       continue;
     }
-    // Prefer the catalog display name when the stored name is unexpected.
-    const repositoryName =
-      stored.repositoryName === entry.repositoryName
-        ? stored.repositoryName
-        : entry.repositoryName;
+    // Catalog name is the public display authority (stable IDs, not renames).
     entries.push({
       repositoryId: entry.repositoryId,
-      repositoryName,
-      current: toPublicCurrentRelease(stored),
+      repositoryName: entry.repositoryName,
+      current: toPublicCurrentRelease(stored, entry.repositoryName),
     });
   }
 
@@ -150,10 +151,13 @@ function etagMatches(header: string | null, etag: string): boolean {
   if (header === null || header.trim() === '') {
     return false;
   }
-  return header
-    .split(',')
-    .map((part) => part.trim())
-    .some((token) => token === etag || token === etag.replace(/^W\//, ''));
+  const tokens = header.split(',').map((part) => part.trim());
+  // RFC 9110: If-None-Match: * matches any current representation.
+  if (tokens.includes('*')) {
+    return true;
+  }
+  const strong = etag.replace(/^W\//, '');
+  return tokens.some((token) => token === etag || token === strong);
 }
 
 /**

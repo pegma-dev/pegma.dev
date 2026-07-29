@@ -116,7 +116,6 @@ function applyReleases(body, fetchFailed) {
   }
 
   let populated = 0;
-  let empty = 0;
   let stale = 0;
 
   for (const line of releaseLines) {
@@ -137,7 +136,6 @@ function applyReleases(body, fetchFailed) {
       continue;
     }
     if (state === 'empty' || current === null) {
-      empty += 1;
       setLineState(line, 'empty', 'No stable release recorded yet');
       continue;
     }
@@ -184,9 +182,7 @@ function applyReleases(body, fetchFailed) {
 
   setStatus(
     'populated',
-    empty === releaseLines.length
-      ? 'No stable release versions are recorded yet.'
-      : 'Showing current stable releases from the live API (no site rebuild required).',
+    'Showing current stable releases from the live API (no site rebuild required).',
   );
 }
 
