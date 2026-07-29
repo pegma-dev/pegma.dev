@@ -305,7 +305,7 @@ Shipped:
 | --- | --- |
 | Skill markdown | `public/skill.md` → `https://pegma.dev/skill.md` |
 | Install notes | `src/pages/skill.astro` → `https://pegma.dev/skill` |
-| Index links | `public/llms.txt`, site nav |
+| Index links | `public/llms.txt`, footer agent links |
 
 The skill teaches judgment only; versions and package sets stay in
 `catalog.json`.
