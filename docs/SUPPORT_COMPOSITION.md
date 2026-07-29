@@ -2,7 +2,8 @@
 
 Public host composition notes for authenticated product feedback on
 [pegma.dev](https://pegma.dev). This is the ecosystem's Cloudflare reference
-environment for Support Desk customer create / list / read / reply.
+environment for Support Desk customer create / list / read / reply and a small
+staff operator surface over the same application services.
 
 ## Packages
 
@@ -36,6 +37,8 @@ two never share a cursor key.
 
 ## Authorization
 
+### Customer
+
 Any authenticated pegma.dev account receives customer permissions through host
 AccessContext defaults (no paid entitlement):
 
@@ -43,8 +46,34 @@ AccessContext defaults (no paid entitlement):
 - `support.ticket.read.own`
 - `support.ticket.reply.own`
 
-`principalId` is the Identity principal / account id from the server-side
-session (`__Host-pegma_session`). Browser-supplied identity fields are ignored.
+Policy version: `pegma.dev-support-customer-1`.
+
+### Staff (host allowlist)
+
+Staff are **not** a full role store. Operators are allowlisted via env:
+
+| Env | Meaning |
+| --- | --- |
+| `SUPPORT_STAFF_EMAILS` | Comma-separated verified emails (case-insensitive) |
+| `SUPPORT_STAFF_PRINCIPALS` | Comma-separated Identity principal / subject ids |
+
+A principal is staff only when authenticated **and** (principal id is in
+`SUPPORT_STAFF_PRINCIPALS` **or** verified user email is in
+`SUPPORT_STAFF_EMAILS`). Non-staff callers of staff routes receive **403**
+`forbidden` (not 404). Unauthenticated callers receive **401**.
+
+Staff AccessContext policy version: `pegma.dev-support-staff-1`. Permissions:
+
+- `support.queue.read`
+- `support.ticket.reply.any`
+- `support.ticket.note`
+- `support.ticket.assign`
+- `support.ticket.manage`
+- `support.audit.read`
+
+`principalId` is always the Identity principal / account id from the
+server-side session (`__Host-pegma_session`). Browser-supplied identity fields
+are ignored.
 
 ## Categories and markers
 
@@ -56,7 +85,9 @@ Display marker: `[PEG-{number}]`. Public tracking URL:
 
 ## HTTP boundary
 
-Worker routes (same-origin session + CSRF `X-Pegma-CSRF`):
+Worker routes (same-origin session + CSRF `X-Pegma-CSRF` for mutations):
+
+### Customer
 
 | Method | Path | Notes |
 | --- | --- | --- |
@@ -66,19 +97,56 @@ Worker routes (same-origin session + CSRF `X-Pegma-CSRF`):
 | `GET` | `/api/support/tickets/:id` | Read own; missing/non-owned → same 404 |
 | `POST` | `/api/support/tickets/:id/replies` | Reply (rate-limited) |
 
+### Staff (`/api/support/admin/…`)
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` | `/api/support/admin/queue` | `listStaffQueue`; query: `status`, `priority`, `sort` (`updated_newest` / `updated_oldest`), `unassignedOnly` |
+| `GET` | `/api/support/admin/tickets/:id` | `readStaffTicket` (includes requester email when present, internal notes) |
+| `POST` | `/api/support/admin/tickets/:id/messages` | Public staff reply → `replyAsStaff` body `{ body }` (rate-limited) |
+| `POST` | `/api/support/admin/tickets/:id/notes` | Internal note → `addNote` body `{ body }` (rate-limited) |
+| `PATCH` | `/api/support/admin/tickets/:id` | Lifecycle / assign / priority |
+
+`PATCH` body (strict keys):
+
+```json
+{
+  "action": "assign" | "unassign" | "change_priority" | "resolve" | "close" | "reopen",
+  "priority": "low" | "normal" | "high" | "urgent"
+}
+```
+
+- `assign` assigns the caller's principal; `unassign` clears assignee.
+- `change_priority` requires a valid `priority`.
+- resolve / close / reopen map to the corresponding application methods.
+- Command, correlation, and message IDs are server-minted.
+
+**Compose modes are distinct endpoints.** Public replies use `/messages`;
+internal notes use `/notes`. The staff UI requires an explicit mode selection
+with no default and styles the two modes differently. Mail / outbound
+notification is still deferred (Task 10) — staff reply omits `notification`
+like customer create/reply.
+
 Durable rate-limit policies (separate from Identity):
 
 - `pegma.support.ticket.create`
-- `pegma.support.ticket.reply`
+- `pegma.support.ticket.reply` (customer replies and staff message/note posts)
 
-Site pages: `/feedback` (create + list), `/feedback/ticket/?id=…` (read + reply; static shell).
+## Site pages
+
+| URL | Audience |
+| --- | --- |
+| `/feedback` | Customer create + list |
+| `/feedback/ticket/?id=…` | Customer read + reply |
+| `/staff/support` | Staff queue (allowlisted operators) |
+| `/staff/support/ticket/?id=…` | Staff ticket detail, compose, lifecycle |
 
 ## Maintenance and health
 
 Minute cron runs Support Desk queue repair and inactive projection sweep with
 independent cursors, plus Support Desk rate-limit sweeps. Mail send for support
-notifications is deferred (templates are defined; create/reply omit
-notification for this first host PR).
+notifications is deferred (templates are defined; create/reply/staff reply omit
+notification for this host surface).
 
 Health always reports Support Desk package detail without message content. A
 store probe runs only when `SUPPORT_HEALTH_PROBE` is exactly `"true"`.
@@ -89,7 +157,11 @@ store probe runs only when `SUPPORT_HEALTH_PROBE` is exactly `"true"`.
   authorized operators.
 - Feedback is not automatically published to the roadmap, documentation, or
   GitHub Issues.
-- Staff UI is deferred.
+- The staff surface is only for allowlisted operators (env allowlist). It is
+  not a shared control plane with other hosts.
+- Staff ticket views may include requester email after staff authz; customer
+  endpoints never gain staff fields.
+- Internal notes must never appear on customer reads.
 - Queue projection terminal retention follows Support Desk's default
   (30 days) for inactive projection rows; authoritative ticket retention and
   export/redaction procedures remain host operational policy and will be

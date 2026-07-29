@@ -24,6 +24,7 @@ import {
 } from './release-reconciliation';
 import { handleGetReleases, readReleasesConfig } from './releases-api';
 import { createSupportApi } from './support-api';
+import { parseStaffAllowlist } from './support-access';
 import {
   createProductionSupportRuntime,
   probeSupportStore,
@@ -54,6 +55,7 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     createLimiter: supportRuntime.createLimiter,
     replyLimiter: supportRuntime.replyLimiter,
     logger,
+    staffAllowlist: parseStaffAllowlist(env),
   });
   return { supportRuntime, api };
 }

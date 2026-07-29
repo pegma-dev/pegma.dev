@@ -1,0 +1,83 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+
+<Base
+  title="Staff support queue — Pegma"
+  description="Operator queue for pegma.dev product feedback. Allowlisted staff only."
+>
+  <section class="account-hero">
+    <p class="eyebrow">Staff · Support Desk</p>
+    <h1>Support queue</h1>
+    <p class="lede">
+      Review and act on product feedback tickets. Access is limited to operators
+      listed in the host staff allowlist — this is not a public control plane.
+    </p>
+  </section>
+
+  <div id="staff-queue-status" class="notice" role="status" aria-live="polite">
+    Checking staff access…
+  </div>
+
+  <section id="staff-queue-signed-out" class="account-panel" hidden>
+    <h2>Sign in required</h2>
+    <p>
+      Staff tools use your pegma.dev account session.
+      <a href="/account">Sign in</a> first.
+    </p>
+  </section>
+
+  <section id="staff-queue-forbidden" class="account-panel" hidden>
+    <h2>You do not have staff access</h2>
+    <p>
+      This surface is only available to allowlisted operators. If you expected
+      access, contact an administrator.
+    </p>
+    <p>
+      <a href="/account">Account</a>
+      ·
+      <a href="/feedback">Feedback</a>
+    </p>
+  </section>
+
+  <section id="staff-queue-panel" class="account-panel" hidden>
+    <div class="account-heading">
+      <div>
+        <p class="eyebrow">Signed in</p>
+        <h2 id="staff-queue-email"></h2>
+      </div>
+      <a class="secondary-button" href="/account">Account</a>
+    </div>
+
+    <form id="queue-filters" class="account-form staff-queue-filters">
+      <label for="filter-status">Status</label>
+      <select id="filter-status" name="status">
+        <option value="">All statuses</option>
+        <option value="open">Open</option>
+        <option value="waiting_on_support">Waiting on support</option>
+        <option value="waiting_on_customer">Waiting on customer</option>
+        <option value="resolved">Resolved</option>
+        <option value="closed">Closed</option>
+      </select>
+
+      <label for="filter-sort">Sort</label>
+      <select id="filter-sort" name="sort">
+        <option value="updated_newest">Updated newest</option>
+        <option value="updated_oldest">Updated oldest</option>
+      </select>
+
+      <div class="account-inline">
+        <button type="submit">Apply filters</button>
+      </div>
+    </form>
+
+    <h3>Queue</h3>
+    <ul id="queue-list" class="ticket-list staff-queue-list"></ul>
+  </section>
+
+  <noscript>
+    <p class="notice">Staff support requires JavaScript and a signed-in staff session.</p>
+  </noscript>
+
+  <script is:inline type="module" src="/staff-support.js"></script>
+</Base>
