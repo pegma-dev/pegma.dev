@@ -21,6 +21,15 @@ const withStage = await Promise.all(components.map(compileComponentStatus));
       <code>docs/PROJECT_PLAN.md</code> where one exists; the rest fall back to a snapshot dated
       {SNAPSHOT_DATE}. The repos are the source of truth.
     </p>
+    <p
+      id="release-status"
+      class="notice release-status"
+      role="status"
+      aria-live="polite"
+      data-state="loading"
+    >
+      Loading current stable release versions…
+    </p>
   </section>
 
   {
@@ -52,6 +61,12 @@ const withStage = await Promise.all(components.map(compileComponentStatus));
             </ul>
           </div>
         </div>
+        <p class="release-line" data-repository={c.repo}>
+          <strong>Release:</strong>{' '}
+          <span class="release-value" data-state="loading">
+            Loading…
+          </span>
+        </p>
         <p class="now-line">
           <strong>Now:</strong> {c.stage ?? c.now} —{' '}
           <a href={`https://github.com/pegma-dev/${c.repo}`}>repository</a>
@@ -65,4 +80,13 @@ const withStage = await Promise.all(components.map(compileComponentStatus));
       </section>
     ))
   }
+
+  <noscript>
+    <p class="notice">
+      Current release versions load from a same-origin API when JavaScript is available. Repository
+      links above remain the durable path to each component.
+    </p>
+  </noscript>
+
+  <script is:inline type="module" src="/stack-releases.js"></script>
 </Base>

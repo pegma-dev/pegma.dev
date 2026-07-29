@@ -301,6 +301,39 @@ h2 {
   color: var(--slate);
 }
 
+.release-status {
+  margin-top: 1rem;
+}
+
+.release-status[data-state="unavailable"] {
+  border-left-color: #a33;
+}
+
+.release-line {
+  margin: 1rem 0 0;
+  font-size: 0.95rem;
+  color: var(--slate);
+}
+
+.release-value[data-state="loading"] {
+  font-style: italic;
+}
+
+.release-value[data-state="empty"],
+.release-value[data-state="unavailable"] {
+  color: var(--slate);
+}
+
+.release-value[data-state="stale"] {
+  color: var(--slate);
+}
+
+.release-value[data-state="populated"] a,
+.release-value[data-state="stale"] a {
+  font-weight: 650;
+  color: var(--ink);
+}
+
 /* First-party account reference surface */
 .account-hero {
   padding: 3.5rem 0 1.5rem;
