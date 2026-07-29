@@ -319,19 +319,67 @@ export function planComposition(
     return a.recipe.id.localeCompare(b.recipe.id);
   });
 
+  // Ranked recipes for progressive disclosure: primary drives the package plan;
+  // other matches are alternatives (not unioned into the install set).
   const selectedRecipes = scoredRecipes.map((s) => s.recipe);
+  const primaryRecipe = selectedRecipes[0] ?? null;
+  if (primaryRecipe && selectedRecipes.length > 1) {
+    notes.push(
+      `primary recipe: ${primaryRecipe.id}; alternatives (not merged into packages): ${selectedRecipes
+        .slice(1)
+        .map((r) => r.id)
+        .join(', ')}`,
+    );
+  } else if (primaryRecipe) {
+    notes.push(`primary recipe: ${primaryRecipe.id}`);
+  }
 
-  // Close the plan over required component dependencies and recipe package
-  // owners so agents get a buildable package set, not only tag-matched roots.
+  // Close over required deps for either the primary recipe or tag-matched roots.
   const componentById = new Map(
     catalog.components.map((c) => [c.id, c] as const),
   );
   const closed = new Map<string, CatalogComponent>();
-  for (const s of scoredComponents) {
-    closed.set(s.component.id, s.component);
+  const queue: string[] = [];
+
+  const admitComponent = (comp: CatalogComponent, reason: string) => {
+    if (closed.has(comp.id)) return;
+    if (productionOnly && comp.publishUsability === 'unpublished') {
+      skipped.push({
+        id: comp.id,
+        kind: 'component',
+        reason: `${reason} but publishUsability=unpublished`,
+      });
+      return;
+    }
+    closed.set(comp.id, comp);
+    queue.push(comp.id);
+  };
+
+  if (primaryRecipe) {
+    for (const reqId of primaryRecipe.requiresPublished) {
+      const depComp = componentById.get(reqId);
+      if (!depComp) {
+        notes.push(
+          `missing requiresPublished component ${reqId} on recipe ${primaryRecipe.id}`,
+        );
+        continue;
+      }
+      admitComponent(depComp, `required by recipe ${primaryRecipe.id}`);
+    }
+    for (const spec of primaryRecipe.packages) {
+      const { name } = parsePackageSpecifier(spec);
+      const owner = catalog.components.find((c) =>
+        c.packages.some((p) => p.name === name),
+      );
+      if (!owner) continue;
+      admitComponent(owner, `package owner for recipe ${primaryRecipe.id}`);
+    }
+  } else {
+    for (const s of scoredComponents) {
+      admitComponent(s.component, 'tag match');
+    }
   }
 
-  const queue: string[] = [...closed.keys()];
   while (queue.length > 0) {
     const id = queue.pop()!;
     const comp = componentById.get(id);
@@ -346,61 +394,7 @@ export function planComposition(
         );
         continue;
       }
-      if (productionOnly && depComp.publishUsability === 'unpublished') {
-        skipped.push({
-          id: depComp.id,
-          kind: 'component',
-          reason: `required by ${id} but publishUsability=unpublished`,
-        });
-        continue;
-      }
-      closed.set(depComp.id, depComp);
-      queue.push(depComp.id);
-    }
-  }
-
-  // Recipe package owners and requiresPublished also enter the closure.
-  for (const r of selectedRecipes) {
-    for (const reqId of r.requiresPublished) {
-      if (closed.has(reqId)) continue;
-      const depComp = componentById.get(reqId);
-      if (!depComp) continue;
-      if (productionOnly && depComp.publishUsability === 'unpublished') continue;
-      closed.set(depComp.id, depComp);
-      queue.push(depComp.id);
-    }
-    for (const spec of r.packages) {
-      const { name } = parsePackageSpecifier(spec);
-      const owner = catalog.components.find((c) =>
-        c.packages.some((p) => p.name === name),
-      );
-      if (!owner || closed.has(owner.id)) continue;
-      if (productionOnly && owner.publishUsability === 'unpublished') continue;
-      closed.set(owner.id, owner);
-      queue.push(owner.id);
-    }
-  }
-
-  // Drain any deps discovered from recipe expansion.
-  while (queue.length > 0) {
-    const id = queue.pop()!;
-    const comp = componentById.get(id);
-    if (!comp) continue;
-    for (const dep of comp.dependencies) {
-      if (dep.kind !== 'requires') continue;
-      if (closed.has(dep.componentId)) continue;
-      const depComp = componentById.get(dep.componentId);
-      if (!depComp) continue;
-      if (productionOnly && depComp.publishUsability === 'unpublished') {
-        skipped.push({
-          id: depComp.id,
-          kind: 'component',
-          reason: `required by ${id} but publishUsability=unpublished`,
-        });
-        continue;
-      }
-      closed.set(depComp.id, depComp);
-      queue.push(depComp.id);
+      admitComponent(depComp, `required by ${id}`);
     }
   }
 
@@ -408,7 +402,29 @@ export function planComposition(
     a.id.localeCompare(b.id),
   );
 
-  // Packages from closed components plus explicit recipe package pins.
+  /**
+   * When host is set, emit core packages + adapters for that host (and memory).
+   * Adapter packages for other hosts are omitted so agents do not install
+   * Azure adapters on a Cloudflare plan (and vice versa).
+   */
+  const packagesForComponent = (
+    c: CatalogComponent,
+  ): readonly CatalogComponent['packages'][number][] => {
+    if (!input.host || c.adapters.length === 0) {
+      return c.packages;
+    }
+    const adapterByPackage = new Map<string, CatalogComponent['adapters'][number]['host']>();
+    for (const a of c.adapters) {
+      if (a.packageName) adapterByPackage.set(a.packageName, a.host);
+    }
+    return c.packages.filter((p) => {
+      const adapterHost = adapterByPackage.get(p.name);
+      if (!adapterHost) return true; // core / non-adapter package
+      return adapterHost === input.host || adapterHost === 'memory';
+    });
+  };
+
+  // Packages from closed components (host-filtered) plus primary recipe pins.
   const packages: PlanCompositionResult['packages'][number][] = [];
   const seenPkg = new Set<string>();
   const pushPkg = (
@@ -425,13 +441,13 @@ export function planComposition(
   };
 
   for (const c of selectedComponents) {
-    for (const p of c.packages) {
+    for (const p of packagesForComponent(c)) {
       pushPkg(p.name, p.version, p.published, c.id);
     }
   }
 
-  for (const r of selectedRecipes) {
-    for (const spec of r.packages) {
+  if (primaryRecipe) {
+    for (const spec of primaryRecipe.packages) {
       const { name, version: pinned } = parsePackageSpecifier(spec);
       const owner = catalog.components.find((c) =>
         c.packages.some((p) => p.name === name),
@@ -467,13 +483,15 @@ export function planComposition(
     }
   }
 
-  for (const r of selectedRecipes.slice(0, 5)) {
-    if (r.antiPatterns.length > 0) {
-      notes.push(`recipe ${r.id} anti-patterns: ${r.antiPatterns.join('; ')}`);
-    }
-    if (r.fixture.status !== 'green') {
+  if (primaryRecipe) {
+    if (primaryRecipe.antiPatterns.length > 0) {
       notes.push(
-        `recipe ${r.id} fixture is ${r.fixture.status} — do not invent wiring; use component READMEs until green`,
+        `recipe ${primaryRecipe.id} anti-patterns: ${primaryRecipe.antiPatterns.join('; ')}`,
+      );
+    }
+    if (primaryRecipe.fixture.status !== 'green') {
+      notes.push(
+        `recipe ${primaryRecipe.id} fixture is ${primaryRecipe.fixture.status} — do not invent wiring; use component READMEs until green`,
       );
     }
   }

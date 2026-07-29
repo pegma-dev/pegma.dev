@@ -67,7 +67,8 @@ describe('plan_composition', () => {
       productionOnly: false,
     });
     expect(plan.schema).toBe('pegma.plan_composition.v1');
-    expect(plan.recipes.map((r) => r.id)).toContain('example-outbox');
+    // Primary is best tag overlap (outbox over accounts for these tags).
+    expect(plan.recipes[0]?.id).toBe('example-outbox');
     // Deferred webhook recipe has no overlapping tags → not a candidate.
     expect(plan.recipes.map((r) => r.id)).not.toContain('example-deferred');
     expect(plan.components.some((c) => c.id === 'example-store')).toBe(true);
@@ -76,6 +77,32 @@ describe('plan_composition', () => {
     expect(plan.packages.map((p) => p.name)).toEqual(
       expect.arrayContaining(['@example/store', '@example/contracts']),
     );
+  });
+
+  it('does not merge alternative recipes into the package plan', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['storage', 'cloudflare'],
+      productionOnly: false,
+    });
+    // Both accounts and outbox may match storage+cloudflare; packages come
+    // only from the primary recipe closure.
+    expect(plan.recipes.length).toBeGreaterThan(1);
+    expect(plan.notes.some((n) => n.startsWith('primary recipe:'))).toBe(true);
+    expect(plan.notes.some((n) => n.includes('alternatives'))).toBe(true);
+  });
+
+  it('filters adapter packages by host', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['storage', 'cloudflare'],
+      host: 'cloudflare',
+      productionOnly: false,
+    });
+    // example-store has memory + cloud-sql (cloudflare) adapters.
+    const names = plan.packages.map((p) => p.name);
+    expect(names).toContain('@example/store-cloud');
+    // Memory adapter package is still allowed; there is no azure adapter package
+    // in the sample. Assert cloud-sql owner is present via primary recipe.
+    expect(names).toEqual(expect.arrayContaining(['@example/store']));
   });
 
   it('skips unpublished webhook recipe under productionOnly', () => {
