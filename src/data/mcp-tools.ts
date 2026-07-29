@@ -547,6 +547,7 @@ export const CAPABILITY_TAGS = [
   'sessions',
   'authorization',
   'storage',
+  'storage_blobs',
   'audit',
   'mail_transactional',
   'rate_limit_durable',

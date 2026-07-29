@@ -87,9 +87,8 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
       'Chosen blob adapter binding (R2 bucket, Azure container, or S3 credentials)',
       'Authorization and malware scanning at the host API — not inside the store',
     ],
-    // Same `storage` tag as record storage so plan_composition can surface it;
-    // agents still pick packages via host-filtered adapters.
-    capabilityTags: ['storage', 'cloudflare', 'azure'],
+    // Distinct from record `storage` so generic storage plans do not pull R2/Blob.
+    capabilityTags: ['storage_blobs', 'cloudflare', 'azure'],
   },
   'authorization-core': {
     dependencies: [
