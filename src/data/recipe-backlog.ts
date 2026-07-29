@@ -2,26 +2,27 @@
  * Prioritized synthetic recipe intents for the compiled catalog.
  * Source narrative: docs/catalog/RECIPE_BACKLOG.md
  *
- * Fixtures are pending until Phase 2; wiring code must not be invented here.
+ * Wiring code may only be quoted when fixture.status is `green` and the
+ * citation points at a CI-tested path under recipes/.
  */
 
 import type { CatalogRecipe } from './catalog-schema';
 
-/** Recipes included in catalog.json (intent metadata; fixtures still pending). */
+/** Recipes included in catalog.json. */
 export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
   {
     id: 'cf-passkey-accounts',
     intent:
       'A small Cloudflare Worker host for a fictional community library (Northshelf Branch) offers first-party accounts: passkey sign-in, email one-time codes for enrollment and recovery, server-side sessions, and durable rate limits on expensive auth paths. No passwords.',
     packages: [
-      '@pegma/identity',
-      '@pegma/sessions',
-      '@pegma/mail',
-      '@pegma/rate-limit',
-      '@pegma/authorization-identity',
-      '@pegma/storage-core',
-      '@pegma/storage-cloudflare-d1',
-      '@pegma/spine',
+      '@pegma/identity@0.1.0',
+      '@pegma/sessions@0.1.0',
+      '@pegma/mail@0.1.0',
+      '@pegma/rate-limit@0.1.0',
+      '@pegma/authorization-identity@0.1.2',
+      '@pegma/storage-core@0.4.0',
+      '@pegma/storage-cloudflare-d1@0.4.0',
+      '@pegma/spine@0.1.1',
     ],
     adapters: [{ componentId: 'storage-core', adapterId: 'cloudflare-d1' }],
     hostResponsibilities: [
@@ -42,10 +43,10 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       'Mail package owning its own outbox store',
     ],
     fixture: {
-      kind: 'pending',
+      kind: 'recipe_package',
       citation:
-        'docs/catalog/RECIPE_BACKLOG.md#p1--cf-passkey-accounts-first-end-to-end-accounts-recipe',
-      status: 'pending',
+        'https://github.com/pegma-dev/pegma.dev/tree/main/recipes/cf-passkey-accounts',
+      status: 'green',
     },
     capabilityTags: [
       'accounts',
@@ -73,7 +74,12 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
     id: 'storage-audit-mail-outbox',
     intent:
       'A fictional equipment checkout service (Yard Loan) records inventory mutations in Storage Core and, in the same single-partition transaction, appends an audit row and enqueues a transactional mail delivery job.',
-    packages: ['@pegma/storage-core', '@pegma/audit', '@pegma/mail', '@pegma/spine'],
+    packages: [
+      '@pegma/storage-core@0.4.0',
+      '@pegma/audit@0.1.0',
+      '@pegma/mail@0.1.0',
+      '@pegma/spine@0.1.1',
+    ],
     // Host chooses a durable storage-core adapter (cloudflare-d1 or azure-tables).
     // Do not pin memory here — the recipe needs durable inventory/audit/outbox rows.
     adapters: [],
@@ -94,10 +100,10 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       'Audit write outside the caller transact',
     ],
     fixture: {
-      kind: 'pending',
+      kind: 'recipe_package',
       citation:
-        'docs/catalog/RECIPE_BACKLOG.md#p2--storage-audit-mail-outbox-storage--auditmail-pattern',
-      status: 'pending',
+        'https://github.com/pegma-dev/pegma.dev/tree/main/recipes/storage-audit-mail-outbox',
+      status: 'green',
     },
     capabilityTags: ['storage', 'audit', 'mail_transactional'],
     requiresPublished: ['storage-core', 'audit', 'mail', 'spine'],

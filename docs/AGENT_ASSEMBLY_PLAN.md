@@ -2,13 +2,13 @@
 
 ## Status
 
-**Stage:** Phase 1 complete (compiled `catalog.json` at site build). No hosted
-skill, MCP surface, or recipe fixture package exists yet. This document is the
-working plan for closing the gap between what AI coding agents tend to do
-(regenerate common backend functions as bespoke code) and what the Pegma stack
-already packages (typed, tested, pin-able components).
+**Stage:** Phase 2 complete for required fixtures (P1 + P2 under `recipes/`).
+No hosted skill or MCP surface yet. This document is the working plan for
+closing the gap between what AI coding agents tend to do (regenerate common
+backend functions as bespoke code) and what the Pegma stack already packages
+(typed, tested, pin-able components).
 
-**Phase 0–1 artifacts:**
+**Phase 0–2 artifacts:**
 
 | Artifact | Path |
 | --- | --- |
@@ -19,6 +19,8 @@ already packages (typed, tested, pin-able components).
 | Example catalog (fictional shape sample) | `docs/catalog/example-catalog.json` |
 | Catalog compiler | `src/data/compile-catalog.ts` |
 | Published catalog | `https://pegma.dev/catalog.json` (build emit) |
+| P1 fixture (Northshelf accounts) | `recipes/cf-passkey-accounts/` |
+| P2 fixture (Yard Loan outbox) | `recipes/storage-audit-mail-outbox/` |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -262,14 +264,11 @@ enrichment + recipe backlog). `public/llms.txt` links the catalog without
 inlining it. Unpublished packages get `published: false` / `publishUsability:
 unpublished|partial`.
 
-### Phase 2 — Synthetic recipe fixtures
+### Phase 2 — Synthetic recipe fixtures ✓
 
 Create public, CI-tested fixtures for the highest-value published
-compositions. Preferred homes (decide at implementation, boring wins):
-
-- a dedicated public repo (e.g. recipe or examples host under pegma-dev), or
-- `packages/recipes` / fixture apps inside component repos where the
-  composition is local to one package boundary
+compositions. Home chosen: `recipes/` in this repository (boring wins over a
+second repo until coverage grows).
 
 Rules for fixtures:
 
@@ -279,12 +278,18 @@ Rules for fixtures:
 - Site/catalog may only quote code that exists in those fixtures (or in
   already-public package README/conformance sources)
 
-Ship at least one end-to-end “accounts on Cloudflare-shaped host” recipe
-and one “storage + audit/mail outbox pattern” recipe before declaring the
-phase done.
+Shipped:
 
-**Exit:** catalog recipe entries resolve to green fixtures; `/examples`
-can grow from skeleton to recipe index without inventing code.
+| Recipe | Path | Catalog fixture |
+| --- | --- | --- |
+| `cf-passkey-accounts` | `recipes/cf-passkey-accounts/` | green |
+| `storage-audit-mail-outbox` | `recipes/storage-audit-mail-outbox/` | green |
+
+P3–P6 remain pending. Deferred D1–D2 still wait on package publication.
+
+**Exit:** catalog recipe entries resolve to green fixtures for P1–P2;
+`/examples` indexes those recipes and quotes only fixture (or package
+README) sources.
 
 ### Phase 3 — Hosted skill
 

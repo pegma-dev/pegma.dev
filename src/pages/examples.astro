@@ -1,5 +1,8 @@
 ---
 import Base from '../layouts/Base.astro';
+import { RECIPE_BACKLOG } from '../data/recipe-backlog';
+import northshelfComposition from '../../recipes/cf-passkey-accounts/composition.ts?raw';
+import yardLoanComposition from '../../recipes/storage-audit-mail-outbox/composition.ts?raw';
 
 /* Examples are LIFTED FROM REAL CODE, per the site's hard rule — each block
    cites its source. Do not invent example code for this page. */
@@ -51,23 +54,179 @@ const bus = createEventBus();
 bus.subscribe(AccountCreated, (envelope) => {
   welcomeCache.invalidate(envelope.payload.principalId);
 });`;
+
+/**
+ * Extract a complete top-level function so the page never quotes truncated,
+ * non-compiling TypeScript (AGENTS.md examples rule).
+ *
+ * Skips the parameter list first, then takes the next `{` as the body.
+ * Fixture return types must not embed object-literal braces in the signature
+ * (use a named interface such as CheckoutResult) so the body brace is unambiguous.
+ */
+function excerptFunction(source: string, name: string): string {
+  const text = source.replace(/\r\n/g, '\n');
+  const marker = `function ${name}`;
+  const start = text.indexOf(marker);
+  if (start < 0) {
+    throw new Error(`examples.astro: function ${name} not found in fixture`);
+  }
+
+  let from = start;
+  const before = text.slice(0, start);
+  const doc = before.lastIndexOf('\n/**');
+  if (
+    doc >= 0 &&
+    !before.slice(doc).includes('\nexport ') &&
+    !before.slice(doc).includes('\nfunction ')
+  ) {
+    from = doc + 1;
+  } else {
+    const lineStart = before.lastIndexOf('\n');
+    from = lineStart < 0 ? 0 : lineStart + 1;
+  }
+
+  const nameEnd = start + marker.length;
+  let i = text.indexOf('(', nameEnd);
+  if (i < 0) {
+    throw new Error(`examples.astro: no parameter list for function ${name}`);
+  }
+  let paren = 0;
+  for (; i < text.length; i++) {
+    if (text[i] === '(') paren++;
+    else if (text[i] === ')') {
+      paren--;
+      if (paren === 0) {
+        i++;
+        break;
+      }
+    }
+  }
+
+  while (i < text.length && text[i] !== '{') i++;
+  if (text[i] !== '{') {
+    throw new Error(`examples.astro: no body for function ${name}`);
+  }
+
+  let depth = 0;
+  for (; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return text.slice(from, i + 1).trimEnd();
+      }
+    }
+  }
+  throw new Error(`examples.astro: unclosed function ${name}`);
+}
+
+const northshelfExcerpt = excerptFunction(
+  northshelfComposition,
+  'createNorthshelfComposition',
+);
+const yardLoanExcerpt = excerptFunction(
+  yardLoanComposition,
+  'checkoutEquipment',
+);
+
+const greenRecipes = RECIPE_BACKLOG.filter((r) => r.fixture.status === 'green');
+const pendingRecipes = RECIPE_BACKLOG.filter(
+  (r) => r.fixture.status === 'pending' || r.fixture.status === 'none',
+);
 ---
 
 <Base
   title="Examples — Pegma"
-  description="Composition examples for the Pegma stack, lifted from real code — never invented for the page."
+  description="Composition recipes and snippets for the Pegma stack, lifted from CI-tested fixtures and package sources — never invented for the page."
 >
   <section class="hero">
     <h1>Examples</h1>
     <p class="lede">
-      Every snippet here is lifted from real, maintained sources — component READMEs, conformance
-      tests, or production consumers — and cites where it lives. An example that was never executed
-      is documentation that lies.
+      Every snippet here is lifted from real, maintained sources — synthetic recipe
+      fixtures under <code>recipes/</code>, component READMEs, or conformance tests —
+      and cites where it lives. An example that was never executed is documentation
+      that lies.
     </p>
     <p class="notice">
-      This page is a skeleton on purpose: it grows as components publish, and full composition
-      recipes ("a site with accounts", "a support queue") arrive with the consumers they are lifted
-      from.
+      Full composition recipes are synthetic on purpose (fictional product shapes).
+      Machine-readable metadata lives in
+      <a href="/catalog.json"><code>catalog.json</code></a>. Agents should fetch the
+      catalog rather than inventing package sets.
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>Recipe index</h2>
+    <p>
+      Recipes with <strong>green</strong> fixtures are CI-tested and safe to quote.
+      Pending intents stay metadata-only until a fixture lands.
+    </p>
+    <ul class="recipe-list">
+      {
+        greenRecipes.map((recipe) => (
+          <li>
+            <strong>
+              <code>{recipe.id}</code>
+            </strong>
+            — green fixture
+            <a href={recipe.fixture.citation}>source</a>
+            <p class="recipe-intent">{recipe.intent}</p>
+          </li>
+        ))
+      }
+    </ul>
+    {
+      pendingRecipes.length > 0 && (
+        <details class="recipe-pending">
+          <summary>Pending / deferred recipe intents</summary>
+          <ul class="recipe-list">
+            {pendingRecipes.map((recipe) => (
+              <li>
+                <code>{recipe.id}</code> — {recipe.fixture.status}
+                {recipe.backlogPriority !== undefined &&
+                recipe.backlogPriority >= 90
+                  ? ' (awaits package publication)'
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )
+    }
+  </section>
+
+  <section class="example" id="cf-passkey-accounts">
+    <h2>Accounts on a Cloudflare-shaped host</h2>
+    <p>
+      <strong>Northshelf Branch</strong> (synthetic): first-party Identity with
+      passkeys and email codes, Sessions, durable rate limits, and Authorization
+      claims projection. Production hosts inject
+      <code>@pegma/storage-cloudflare-d1</code>; the fixture tests with memory.
+    </p>
+    <pre><code>{northshelfExcerpt}</code></pre>
+    <p class="source">
+      Source:{' '}
+      <a href="https://github.com/pegma-dev/pegma.dev/blob/main/recipes/cf-passkey-accounts/composition.ts"
+        >recipes/cf-passkey-accounts/composition.ts</a
+      >
+    </p>
+  </section>
+
+  <section class="example" id="storage-audit-mail-outbox">
+    <h2>Storage + audit + mail outbox in one transaction</h2>
+    <p>
+      <strong>Yard Loan</strong> (synthetic): inventory mutation, audit row, and
+      mail job commit together in a single-partition <code>transact</code>. Audit
+      and Mail own no store — the host collection is the atomic boundary.
+    </p>
+    <pre><code>{yardLoanExcerpt}</code></pre>
+    <p class="source">
+      Source:{' '}
+      <a
+        href="https://github.com/pegma-dev/pegma.dev/blob/main/recipes/storage-audit-mail-outbox/composition.ts"
+        >recipes/storage-audit-mail-outbox/composition.ts</a
+      >
     </p>
   </section>
 
@@ -112,3 +271,21 @@ bus.subscribe(AccountCreated, (envelope) => {
     </p>
   </section>
 </Base>
+
+<style>
+  .recipe-list {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+  .recipe-list li {
+    margin-bottom: 0.75rem;
+  }
+  .recipe-intent {
+    margin: 0.25rem 0 0;
+    color: var(--muted, #5c6570);
+    font-size: 0.95rem;
+  }
+  .recipe-pending {
+    margin-top: 1rem;
+  }
+</style>

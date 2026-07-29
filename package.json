@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "check": "astro check && tsc -p worker/tsconfig.json --noEmit",
+    "check": "astro check && tsc -p worker/tsconfig.json --noEmit && tsc -p recipes/tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.d1.config.ts",
     "test:node": "vitest run --config vitest.config.ts",
     "test:d1": "vitest run --config vitest.d1.config.ts",
@@ -17,6 +17,7 @@
     "worker:types": "wrangler types worker/worker-configuration.d.ts -c worker/wrangler.jsonc"
   },
   "dependencies": {
+    "@pegma/audit": "0.1.0",
     "@pegma/authorization-identity": "0.1.2",
     "@pegma/health": "^0.1.1",
     "@pegma/identity": "0.1.0",

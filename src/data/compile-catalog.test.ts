@@ -79,12 +79,16 @@ describe('compileCompositionCatalog', () => {
     expect(storage.packages.filter((p) => p.published)).toHaveLength(1);
   });
 
-  it('includes recipe intents without inventing green fixtures', async () => {
+  it('includes recipe intents with green fixtures only for CI-tested recipes', async () => {
     clearNpmVersionCache();
     const catalog = await compile({});
     const accounts = catalog.recipes.find((r) => r.id === 'cf-passkey-accounts')!;
     expect(accounts.backlogPriority).toBe(1);
-    expect(accounts.fixture.status).toBe('pending');
+    expect(accounts.fixture).toMatchObject({
+      kind: 'recipe_package',
+      status: 'green',
+    });
+    expect(accounts.fixture.citation).toContain('recipes/cf-passkey-accounts');
     expect(accounts.adapters[0]).toEqual({
       componentId: 'storage-core',
       adapterId: 'cloudflare-d1',
@@ -92,8 +96,23 @@ describe('compileCompositionCatalog', () => {
     const outbox = catalog.recipes.find((r) => r.id === 'storage-audit-mail-outbox')!;
     // Durable pattern: host picks adapter; memory must not be the recipe default.
     expect(outbox.adapters).toEqual([]);
+    expect(outbox.fixture).toMatchObject({
+      kind: 'recipe_package',
+      status: 'green',
+    });
+    expect(outbox.fixture.citation).toContain(
+      'recipes/storage-audit-mail-outbox',
+    );
     for (const recipe of catalog.recipes) {
       expect(recipe.intent).not.toMatch(/retiregolden/i);
+    }
+    // Unshipped backlog recipes remain non-green (no invented wiring).
+    const pendingOrNone = catalog.recipes.filter(
+      (r) =>
+        r.id !== 'cf-passkey-accounts' &&
+        r.id !== 'storage-audit-mail-outbox',
+    );
+    for (const recipe of pendingOrNone) {
       expect(recipe.fixture.status).not.toBe('green');
     }
   });
