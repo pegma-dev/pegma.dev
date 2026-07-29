@@ -194,6 +194,11 @@ export function createYardLoanComposition(
   });
 }
 
+export interface CheckoutResult {
+  readonly committed: boolean;
+  readonly reason?: string;
+}
+
 /**
  * Checkout: inventory row + audit event + mail outbox job in one transact.
  * If the transaction refuses, there is no orphan audit or pending mail.
@@ -201,7 +206,7 @@ export function createYardLoanComposition(
 export async function checkoutEquipment(
   composition: YardLoanComposition,
   input: CheckoutInput,
-): Promise<{ readonly committed: boolean; readonly reason?: string }> {
+): Promise<CheckoutResult> {
   const { deskId, partition, records, audit, mail } = composition;
 
   const outcome = await records.transact(partition, [
