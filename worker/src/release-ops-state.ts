@@ -94,62 +94,74 @@ export async function readReleaseOpsState(store: Store): Promise<ReleaseOpsState
 }
 
 /**
- * Record a successful webhook observation and drop the recon ETag for the
- * touched repository so a later 304 cannot mask a missed delete/unpublish
- * that returned GitHub to a previously cached representation.
+ * Drop the recon ETag for one repository. Critical for correctness after a
+ * webhook changes the local projection — must not be best-effort.
  */
-export async function markReleaseWebhookSuccess(
+export async function invalidateReleaseRepositoryEtag(
   store: Store,
-  at: string,
-  repositoryId?: string,
+  repositoryId: string,
 ): Promise<void> {
   await store.collection(releaseOpsCollection()).update(opsKey(), (current) => {
     const base = current ?? EMPTY;
-    const etags = { ...base.repositoryEtags };
-    if (typeof repositoryId === 'string' && repositoryId.length > 0) {
-      delete etags[repositoryId];
+    if (!(repositoryId in base.repositoryEtags)) {
+      return { action: 'keep' };
     }
+    const etags = { ...base.repositoryEtags };
+    delete etags[repositoryId];
     return {
       action: 'write',
       value: {
         ...base,
-        lastSuccessfulWebhookAt: at,
         repositoryEtags: etags,
       },
     };
   });
 }
 
-export async function markReleaseReconciliationSuccess(
+/** Record last successful webhook time only (health detail). */
+export async function markReleaseWebhookSuccess(
   store: Store,
   at: string,
-  repositoryEtags: Readonly<Record<string, string>>,
 ): Promise<void> {
   await store.collection(releaseOpsCollection()).update(opsKey(), (current) => ({
     action: 'write',
     value: {
       ...(current ?? EMPTY),
-      lastSuccessfulReconciliationAt: at,
-      repositoryEtags: { ...repositoryEtags },
+      lastSuccessfulWebhookAt: at,
     },
   }));
 }
 
 /**
- * Persist advanced per-repo ETags after a partial run without claiming a
- * successful reconciliation completion.
+ * Merge per-repository ETag updates into the live ops map. `null` deletes a
+ * key; omitted keys are left untouched so concurrent webhook invalidations
+ * are not restored by a full-map replace.
  */
-export async function saveReleaseRepositoryEtags(
+export async function mergeReleaseRepositoryEtagUpdates(
   store: Store,
-  repositoryEtags: Readonly<Record<string, string>>,
+  updates: Readonly<Record<string, string | null>>,
+  markSuccessAt: string | null,
 ): Promise<void> {
-  await store.collection(releaseOpsCollection()).update(opsKey(), (current) => ({
-    action: 'write',
-    value: {
-      ...(current ?? EMPTY),
-      repositoryEtags: { ...repositoryEtags },
-    },
-  }));
+  await store.collection(releaseOpsCollection()).update(opsKey(), (current) => {
+    const base = current ?? EMPTY;
+    const etags = { ...base.repositoryEtags };
+    for (const [repositoryId, value] of Object.entries(updates)) {
+      if (value === null) {
+        delete etags[repositoryId];
+      } else {
+        etags[repositoryId] = value;
+      }
+    }
+    return {
+      action: 'write',
+      value: {
+        ...base,
+        repositoryEtags: etags,
+        lastSuccessfulReconciliationAt:
+          markSuccessAt ?? base.lastSuccessfulReconciliationAt,
+      },
+    };
+  });
 }
 
 /** Reconciliation is stale when last success is older than this. */

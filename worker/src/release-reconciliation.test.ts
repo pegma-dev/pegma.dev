@@ -253,8 +253,6 @@ describe('runReleaseReconciliation', () => {
 
   it('does not 304-mask a missed delete after a later webhook projection', async () => {
     const store = createMemoryStore();
-    const { markReleaseWebhookSuccess } = await import('./release-ops-state');
-
     // Recon caches etag for A.
     await runReleaseReconciliation({
       store,
@@ -288,7 +286,10 @@ describe('runReleaseReconciliation', () => {
         observedAt: '2026-07-28T11:00:00.000Z',
       },
     }));
-    await markReleaseWebhookSuccess(store, '2026-07-28T11:00:00.000Z', WEBHOOKS_ID);
+    const { invalidateReleaseRepositoryEtag } = await import(
+      './release-ops-state'
+    );
+    await invalidateReleaseRepositoryEtag(store, WEBHOOKS_ID);
 
     // Missed delete of B: GitHub is A again. Without ETag invalidation this
     // would 304 and leave B; with invalidation we re-fetch A.
