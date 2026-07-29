@@ -34,8 +34,10 @@ import Base from '../layouts/Base.astro';
       <code>.claude/skills/pegma/SKILL.md</code>, <code>.agents/skills/pegma/SKILL.md</code>,
       or a project <code>AGENTS.md</code> / rules file that points at the same text).
     </p>
-    <pre><code>curl -fsSL https://pegma.dev/skill.md -o .grok/skills/pegma/SKILL.md
+    <pre><code>mkdir -p .grok/skills/pegma
+curl -fsSL https://pegma.dev/skill.md -o .grok/skills/pegma/SKILL.md
 # or
+mkdir -p .claude/skills/pegma
 curl -fsSL https://pegma.dev/skill.md -o .claude/skills/pegma/SKILL.md</code></pre>
     <p>
       Many tools treat a directory containing <code>SKILL.md</code> (with YAML
