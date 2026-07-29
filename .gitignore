@@ -16,3 +16,5 @@ Thumbs.db
 
 .astro/
 /.claude/worktrees
+
+.grok/
