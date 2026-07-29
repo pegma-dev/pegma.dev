@@ -4,3 +4,11 @@
 # IDENTITY_EMAIL_CODE_SECRET_BASE64=
 # RESEND_API_KEY=
 # GITHUB_WEBHOOK_SECRET=
+
+# Support Desk staff allowlist (comma-separated). A principal is staff when
+# authenticated and (principal id is listed OR verified email is listed).
+# SUPPORT_STAFF_EMAILS=ops@example.test,other@example.test
+# SUPPORT_STAFF_PRINCIPALS=principal-id-1,principal-id-2
+
+# Optional: set to "true" to probe Support Desk storage from /health.
+# SUPPORT_HEALTH_PROBE=true

@@ -1,0 +1,125 @@
+---
+import Base from '../../../layouts/Base.astro';
+---
+
+<Base
+  title="Staff ticket — Pegma"
+  description="Operator view of a pegma.dev support ticket. Allowlisted staff only."
+>
+  <section class="account-hero">
+    <p class="eyebrow">Staff · Ticket</p>
+    <h1 id="staff-ticket-heading">Loading…</h1>
+    <p class="lede">
+      Operator conversation for ticket
+      <code id="staff-ticket-id-display">…</code>. Public replies and internal
+      notes use separate endpoints and must never be confused.
+    </p>
+  </section>
+
+  <div id="staff-ticket-status" class="notice" role="status" aria-live="polite">
+    Loading ticket…
+  </div>
+
+  <section id="staff-ticket-signed-out" class="account-panel" hidden>
+    <h2>Sign in required</h2>
+    <p>
+      <a href="/account">Sign in</a> to open staff ticket tools.
+    </p>
+  </section>
+
+  <section id="staff-ticket-forbidden" class="account-panel" hidden>
+    <h2>You do not have staff access</h2>
+    <p>
+      This surface is only available to allowlisted operators.
+    </p>
+    <p>
+      <a href="/account">Account</a>
+      ·
+      <a href="/feedback">Feedback</a>
+    </p>
+  </section>
+
+  <section id="staff-ticket-detail" class="account-panel" hidden>
+    <p class="form-note">
+      <a href="/staff/support">← Queue</a>
+      ·
+      <span id="staff-ticket-meta"></span>
+    </p>
+    <p id="staff-ticket-requester" class="form-note"></p>
+
+    <ul id="staff-message-list" class="message-list"></ul>
+
+    <h3>Lifecycle</h3>
+    <div class="staff-lifecycle" id="staff-lifecycle">
+      <div class="account-inline staff-lifecycle-row">
+        <button type="button" id="action-assign" class="secondary-button">
+          Assign to me
+        </button>
+        <button type="button" id="action-unassign" class="secondary-button">
+          Unassign
+        </button>
+      </div>
+      <div class="account-form staff-priority-form">
+        <label for="priority-select">Priority</label>
+        <select id="priority-select">
+          <option value="low">Low</option>
+          <option value="normal">Normal</option>
+          <option value="high">High</option>
+          <option value="urgent">Urgent</option>
+        </select>
+        <div class="account-inline">
+          <button type="button" id="action-priority" class="secondary-button">
+            Apply priority
+          </button>
+        </div>
+      </div>
+      <div class="account-inline staff-lifecycle-row">
+        <button type="button" id="action-resolve">Resolve</button>
+        <button type="button" id="action-close" class="secondary-button">Close</button>
+        <button type="button" id="action-reopen" class="secondary-button">
+          Reopen
+        </button>
+      </div>
+    </div>
+
+    <h3>Compose</h3>
+    <form id="staff-compose-form" class="account-form staff-compose">
+      <fieldset class="staff-compose-mode">
+        <legend>Message type (required — no default)</legend>
+        <label class="staff-mode-option staff-mode-public">
+          <input type="radio" name="composeMode" value="public" />
+          <span>
+            <strong>Public reply</strong>
+            <span class="form-note">Visible to the customer on their ticket page.</span>
+          </span>
+        </label>
+        <label class="staff-mode-option staff-mode-internal">
+          <input type="radio" name="composeMode" value="internal" />
+          <span>
+            <strong>Internal note</strong>
+            <span class="form-note">Staff-only; never shown to the customer.</span>
+          </span>
+        </label>
+      </fieldset>
+
+      <label for="compose-body">Body</label>
+      <textarea
+        id="compose-body"
+        name="body"
+        rows="6"
+        maxlength="20000"
+        required
+      ></textarea>
+
+      <div class="account-inline">
+        <button type="submit" id="compose-submit" disabled>Send</button>
+      </div>
+      <p class="form-note">
+        Public replies post to <code>/messages</code>; internal notes post to
+        <code>/notes</code>. Outbound mail is not enabled yet.
+      </p>
+    </form>
+  </section>
+
+  <script is:inline type="module" src="/staff-support-ticket.js"></script>
+</Base>

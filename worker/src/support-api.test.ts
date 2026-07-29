@@ -17,7 +17,13 @@ import type {
   VerifiedIdentityClaims,
 } from './identity-contracts';
 import { createSupportApi } from './support-api';
-import { customerAccessContext } from './support-access';
+import {
+  customerAccessContext,
+  parseStaffAllowlist,
+  staffAccessContext,
+  SUPPORT_STAFF_PERMISSIONS,
+  SUPPORT_STAFF_POLICY_VERSION,
+} from './support-access';
 import {
   createSupportRuntime,
   formatPegmaTicketSubject,
@@ -33,6 +39,7 @@ import { runSupportMaintenance } from './support-maintenance';
 
 const principalA = 'principal-a' as PrincipalId;
 const principalB = 'principal-b' as PrincipalId;
+const principalStaff = 'principal-staff' as PrincipalId;
 const clock = fixedClock('2026-07-29T12:00:00.000Z');
 const logger: Logger = { log: vi.fn() };
 
@@ -119,12 +126,33 @@ function post(
   });
 }
 
-function fixture() {
+function patch(
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Request {
+  return new Request(`https://pegma.dev${path}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: IDENTITY_ISSUER,
+      'Sec-Fetch-Site': 'same-origin',
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function fixture(options: {
+  readonly staffPrincipals?: readonly PrincipalId[];
+  readonly staffEmails?: readonly string[];
+} = {}) {
   const store = createMemoryStore();
   const sessions = createSessionStore(store, { logger });
   const users = new Map<PrincipalId, IdentityUser>([
     [principalA, userFor(principalA, 'a@example.test')],
     [principalB, userFor(principalB, 'b@example.test')],
+    [principalStaff, userFor(principalStaff, 'staff@example.test')],
   ]);
   const identity = identityFor(users);
   const runtime = createSupportRuntime({
@@ -135,6 +163,10 @@ function fixture() {
     logger,
     clock,
   });
+  const staffAllowlist = parseStaffAllowlist({
+    SUPPORT_STAFF_PRINCIPALS: (options.staffPrincipals ?? []).join(','),
+    SUPPORT_STAFF_EMAILS: (options.staffEmails ?? []).join(','),
+  });
   const api = createSupportApi({
     application: runtime.application,
     sessions,
@@ -143,8 +175,47 @@ function fixture() {
     createLimiter: runtime.createLimiter,
     replyLimiter: runtime.replyLimiter,
     logger,
+    staffAllowlist,
   });
   return { store, sessions, runtime, api, application: runtime.application };
+}
+
+async function createCustomerTicket(
+  api: ReturnType<typeof createSupportApi>,
+  sessions: ReturnType<typeof createSessionStore>,
+  principalId: PrincipalId,
+  csrfChar = 'c',
+): Promise<{
+  cookie: string;
+  csrfToken: string;
+  ticketId: string;
+  ticketNumber: number;
+}> {
+  const auth = await sessionCookie(sessions, principalId, csrfChar.repeat(43));
+  const created = await api(
+    post(
+      '/api/support/tickets',
+      {
+        subject: 'Roadmap clarity',
+        body: 'The roadmap page is hard to scan.',
+        category: 'feedback',
+      },
+      {
+        Cookie: auth.cookie,
+        'X-Pegma-CSRF': auth.csrfToken,
+      },
+    ),
+  );
+  expect(created.status).toBe(201);
+  const body = (await created.json()) as {
+    ticket: { id: string; number: number };
+  };
+  return {
+    cookie: auth.cookie,
+    csrfToken: auth.csrfToken,
+    ticketId: body.ticket.id,
+    ticketNumber: body.ticket.number,
+  };
 }
 
 describe('support subject markers and URLs', () => {
@@ -441,5 +512,391 @@ describe('application ownership boundary', () => {
         'ticket-owned',
       ),
     ).rejects.toBeInstanceOf(SupportDeskNotFoundError);
+  });
+});
+
+describe('staff allowlist and access', () => {
+  it('parses env allowlists case-insensitively for emails', () => {
+    const allowlist = parseStaffAllowlist({
+      SUPPORT_STAFF_EMAILS: ' Ops@Example.TEST , other@example.test ',
+      SUPPORT_STAFF_PRINCIPALS: ' principal-staff , principal-x ',
+    });
+    expect(allowlist.emails.has('ops@example.test')).toBe(true);
+    expect(allowlist.emails.has('other@example.test')).toBe(true);
+    expect(allowlist.principals.has('principal-staff')).toBe(true);
+    expect(allowlist.principals.has('principal-x')).toBe(true);
+  });
+
+  it('grants staff permissions only for allowlisted principals or emails', () => {
+    const byPrincipal = parseStaffAllowlist({
+      SUPPORT_STAFF_PRINCIPALS: principalStaff,
+    });
+    const byEmail = parseStaffAllowlist({
+      SUPPORT_STAFF_EMAILS: 'staff@example.test',
+    });
+    const empty = parseStaffAllowlist({});
+
+    const staffByPrincipal = staffAccessContext(
+      principalStaff,
+      byPrincipal,
+      'staff@example.test',
+    );
+    expect(staffByPrincipal).not.toBeNull();
+    expect(staffByPrincipal?.policyVersion).toBe(SUPPORT_STAFF_POLICY_VERSION);
+    expect(staffByPrincipal?.permissions).toEqual(
+      expect.arrayContaining([...SUPPORT_STAFF_PERMISSIONS]),
+    );
+
+    const staffByEmail = staffAccessContext(
+      principalA,
+      byEmail,
+      'STAFF@example.test',
+    );
+    expect(staffByEmail).not.toBeNull();
+
+    expect(staffAccessContext(principalA, empty, 'a@example.test')).toBeNull();
+    expect(
+      staffAccessContext(principalA, byPrincipal, 'a@example.test'),
+    ).toBeNull();
+  });
+});
+
+describe('staff support API', () => {
+  it('returns 401 for unauthenticated staff routes', async () => {
+    const { api } = fixture({ staffPrincipals: [principalStaff] });
+    const queue = await api(get('/api/support/admin/queue'));
+    expect(queue.status).toBe(401);
+    expect(await queue.json()).toEqual({ error: 'authentication_required' });
+
+    const ticket = await api(get('/api/support/admin/tickets/any-id'));
+    expect(ticket.status).toBe(401);
+  });
+
+  it('returns 403 for authenticated non-staff on queue, read, reply, and note', async () => {
+    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const customer = await createCustomerTicket(api, sessions, principalA, 'a');
+    const nonStaff = await sessionCookie(sessions, principalB, 'b'.repeat(43));
+
+    const queue = await api(get('/api/support/admin/queue', nonStaff.cookie));
+    expect(queue.status).toBe(403);
+    expect(await queue.json()).toEqual({ error: 'forbidden' });
+
+    const read = await api(
+      get(
+        `/api/support/admin/tickets/${customer.ticketId}`,
+        nonStaff.cookie,
+      ),
+    );
+    expect(read.status).toBe(403);
+    expect(await read.json()).toEqual({ error: 'forbidden' });
+
+    const reply = await api(
+      post(
+        `/api/support/admin/tickets/${customer.ticketId}/messages`,
+        { body: 'Should fail.' },
+        {
+          Cookie: nonStaff.cookie,
+          'X-Pegma-CSRF': nonStaff.csrfToken,
+        },
+      ),
+    );
+    expect(reply.status).toBe(403);
+    expect(await reply.json()).toEqual({ error: 'forbidden' });
+
+    const note = await api(
+      post(
+        `/api/support/admin/tickets/${customer.ticketId}/notes`,
+        { body: 'Internal should fail.' },
+        {
+          Cookie: nonStaff.cookie,
+          'X-Pegma-CSRF': nonStaff.csrfToken,
+        },
+      ),
+    );
+    expect(note.status).toBe(403);
+    expect(await note.json()).toEqual({ error: 'forbidden' });
+  });
+
+  it('lists the queue for allowlisted staff after customer create', async () => {
+    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const customer = await createCustomerTicket(api, sessions, principalA, 'a');
+    const staff = await sessionCookie(
+      sessions,
+      principalStaff,
+      's'.repeat(43),
+    );
+
+    const queue = await api(get('/api/support/admin/queue', staff.cookie));
+    expect(queue.status).toBe(200);
+    const body = (await queue.json()) as {
+      items: readonly { ticketId: string; status: string }[];
+      csrfToken: string;
+    };
+    expect(body.items.some((item) => item.ticketId === customer.ticketId)).toBe(
+      true,
+    );
+    expect(typeof body.csrfToken).toBe('string');
+  });
+
+  it('reads staff ticket including messages and requester email', async () => {
+    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const customer = await createCustomerTicket(api, sessions, principalA, 'a');
+    const staff = await sessionCookie(
+      sessions,
+      principalStaff,
+      's'.repeat(43),
+    );
+
+    const read = await api(
+      get(
+        `/api/support/admin/tickets/${customer.ticketId}`,
+        staff.cookie,
+      ),
+    );
+    expect(read.status).toBe(200);
+    const body = (await read.json()) as {
+      ticket: {
+        id: string;
+        number: number;
+        subject: string;
+        requester: { email?: string; association: string };
+      };
+      messages: readonly { body: string; authorKind: string }[];
+    };
+    expect(body.ticket.id).toBe(customer.ticketId);
+    expect(body.ticket.number).toBe(customer.ticketNumber);
+    expect(body.ticket.subject).toBe('Roadmap clarity');
+    expect(body.ticket.requester.email).toBe('a@example.test');
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0]?.authorKind).toBe('customer');
+  });
+
+  it('public staff reply is customer-visible and advances status', async () => {
+    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const customer = await createCustomerTicket(api, sessions, principalA, 'a');
+    const staff = await sessionCookie(
+      sessions,
+      principalStaff,
+      's'.repeat(43),
+    );
+
+    const replied = await api(
+      post(
+        `/api/support/admin/tickets/${customer.ticketId}/messages`,
+        { body: 'Thanks — we will clarify the roadmap sections.' },
+        {
+          Cookie: staff.cookie,
+          'X-Pegma-CSRF': staff.csrfToken,
+        },
+      ),
+    );
+    expect(replied.status).toBe(201);
+    const staffView = (await replied.json()) as {
+      ticket: { status: string };
+      messages: readonly {
+        body: string;
+        authorKind: string;
+        visibility: string;
+      }[];
+    };
+    expect(staffView.ticket.status).toBe('waiting_on_customer');
+    const publicStaff = staffView.messages.find(
+      (m) => m.authorKind === 'staff' && m.visibility === 'customer',
+    );
+    expect(publicStaff?.body).toContain('clarify the roadmap');
+
+    const customerRead = await api(
+      get(`/api/support/tickets/${customer.ticketId}`, customer.cookie),
+    );
+    expect(customerRead.status).toBe(200);
+    const customerView = (await customerRead.json()) as {
+      ticket: { status: string };
+      messages: readonly { body: string; authorKind: string }[];
+    };
+    expect(customerView.ticket.status).toBe('waiting_on_customer');
+    expect(
+      customerView.messages.some((m) =>
+        m.body.includes('clarify the roadmap'),
+      ),
+    ).toBe(true);
+  });
+
+  it('internal notes are staff-only and never on customer read', async () => {
+    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const customer = await createCustomerTicket(api, sessions, principalA, 'a');
+    const staff = await sessionCookie(
+      sessions,
+      principalStaff,
+      's'.repeat(43),
+    );
+
+    const noted = await api(
+      post(
+        `/api/support/admin/tickets/${customer.ticketId}/notes`,
+        { body: 'Internal: check docs PR #42 before replying.' },
+        {
+          Cookie: staff.cookie,
+          'X-Pegma-CSRF': staff.csrfToken,
+        },
+      ),
+    );
+    expect(noted.status).toBe(201);
+    const staffView = (await noted.json()) as {
+      messages: readonly {
+        body: string;
+        visibility: string;
+        authorKind: string;
+      }[];
+    };
+    const internal = staffView.messages.find(
+      (m) => m.visibility === 'internal',
+    );
+    expect(internal?.body).toContain('docs PR #42');
+    expect(internal?.authorKind).toBe('staff');
+
+    const customerRead = await api(
+      get(`/api/support/tickets/${customer.ticketId}`, customer.cookie),
+    );
+    expect(customerRead.status).toBe(200);
+    const customerView = (await customerRead.json()) as {
+      messages: readonly { body: string; visibility: string }[];
+    };
+    expect(
+      customerView.messages.some((m) => m.body.includes('docs PR #42')),
+    ).toBe(false);
+    expect(
+      customerView.messages.every((m) => m.visibility === 'customer'),
+    ).toBe(true);
+  });
+
+  it('keeps public reply and internal note on separate endpoints', async () => {
+    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const customer = await createCustomerTicket(api, sessions, principalA, 'a');
+    const staff = await sessionCookie(
+      sessions,
+      principalStaff,
+      's'.repeat(43),
+    );
+
+    const viaMessages = await api(
+      post(
+        `/api/support/admin/tickets/${customer.ticketId}/messages`,
+        { body: 'Public only path.' },
+        {
+          Cookie: staff.cookie,
+          'X-Pegma-CSRF': staff.csrfToken,
+        },
+      ),
+    );
+    expect(viaMessages.status).toBe(201);
+    const publicView = (await viaMessages.json()) as {
+      messages: readonly { body: string; visibility: string }[];
+    };
+    expect(
+      publicView.messages.some(
+        (m) =>
+          m.body === 'Public only path.' && m.visibility === 'customer',
+      ),
+    ).toBe(true);
+
+    const viaNotes = await api(
+      post(
+        `/api/support/admin/tickets/${customer.ticketId}/notes`,
+        { body: 'Note only path.' },
+        {
+          Cookie: staff.cookie,
+          'X-Pegma-CSRF': staff.csrfToken,
+        },
+      ),
+    );
+    expect(viaNotes.status).toBe(201);
+    const noteView = (await viaNotes.json()) as {
+      messages: readonly { body: string; visibility: string }[];
+    };
+    expect(
+      noteView.messages.some(
+        (m) => m.body === 'Note only path.' && m.visibility === 'internal',
+      ),
+    ).toBe(true);
+
+    // Wrong resource path stays not_found (does not silently create notes).
+    const wrong = await api(
+      post(
+        `/api/support/admin/tickets/${customer.ticketId}/replies`,
+        { body: 'Wrong path.' },
+        {
+          Cookie: staff.cookie,
+          'X-Pegma-CSRF': staff.csrfToken,
+        },
+      ),
+    );
+    expect(wrong.status).toBe(404);
+  });
+
+  it('supports assign, priority change, and resolve for staff', async () => {
+    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const customer = await createCustomerTicket(api, sessions, principalA, 'a');
+    const staff = await sessionCookie(
+      sessions,
+      principalStaff,
+      's'.repeat(43),
+    );
+    const headers = {
+      Cookie: staff.cookie,
+      'X-Pegma-CSRF': staff.csrfToken,
+    };
+
+    const assigned = await api(
+      patch(
+        `/api/support/admin/tickets/${customer.ticketId}`,
+        { action: 'assign' },
+        headers,
+      ),
+    );
+    expect(assigned.status).toBe(200);
+    const assignedBody = (await assigned.json()) as {
+      ticket: { assignedTo?: string; priority: string; status: string };
+    };
+    expect(assignedBody.ticket.assignedTo).toBe(principalStaff);
+
+    const priority = await api(
+      patch(
+        `/api/support/admin/tickets/${customer.ticketId}`,
+        { action: 'change_priority', priority: 'high' },
+        headers,
+      ),
+    );
+    expect(priority.status).toBe(200);
+    const priorityBody = (await priority.json()) as {
+      ticket: { priority: string };
+    };
+    expect(priorityBody.ticket.priority).toBe('high');
+
+    const resolved = await api(
+      patch(
+        `/api/support/admin/tickets/${customer.ticketId}`,
+        { action: 'resolve' },
+        headers,
+      ),
+    );
+    expect(resolved.status).toBe(200);
+    const resolvedBody = (await resolved.json()) as {
+      ticket: { status: string };
+    };
+    expect(resolvedBody.ticket.status).toBe('resolved');
+  });
+
+  it('allows staff by verified email allowlist', async () => {
+    const { api, sessions } = fixture({
+      staffEmails: ['staff@example.test'],
+    });
+    await createCustomerTicket(api, sessions, principalA, 'a');
+    const staff = await sessionCookie(
+      sessions,
+      principalStaff,
+      's'.repeat(43),
+    );
+    const queue = await api(get('/api/support/admin/queue', staff.cookie));
+    expect(queue.status).toBe(200);
   });
 });

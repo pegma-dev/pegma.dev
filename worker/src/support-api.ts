@@ -4,8 +4,17 @@ import type { DurableRateLimiter } from '@pegma/rate-limit';
 import type {
   CustomerTicketSummary,
   CustomerTicketView,
+  StaffQueueItem,
+  StaffQueueQuery,
+  StaffTicketView,
   SupportDeskApplication,
 } from '@pegma/support-desk-application';
+import type {
+  Ticket,
+  TicketMessage,
+  TicketPriority,
+  TicketStatus,
+} from '@pegma/support-desk-contracts';
 import {
   IDENTITY_ISSUER,
   SESSION_COOKIE,
@@ -17,7 +26,12 @@ import type {
   IdentityUser,
   VerifiedIdentityClaims,
 } from './identity-contracts';
-import { customerAccessContext } from './support-access';
+import {
+  customerAccessContext,
+  emptyStaffAllowlist,
+  staffAccessContext,
+  type StaffAllowlist,
+} from './support-access';
 import {
   mapSupportError,
   mintSupportId,
@@ -38,6 +52,40 @@ const SESSION_DATA_KEYS = new Set([
 ]);
 const TICKET_ID_PATH =
   /^\/api\/support\/tickets\/([A-Za-z0-9._~-]{1,200})(?:\/(replies))?$/u;
+const ADMIN_TICKET_PATH =
+  /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})(?:\/(messages|notes))?$/u;
+
+const TICKET_STATUSES = new Set<TicketStatus>([
+  'open',
+  'waiting_on_support',
+  'waiting_on_customer',
+  'resolved',
+  'closed',
+]);
+const TICKET_PRIORITIES = new Set<TicketPriority>([
+  'low',
+  'normal',
+  'high',
+  'urgent',
+]);
+const QUEUE_SORTS = new Set(['updated_newest', 'updated_oldest'] as const);
+const STAFF_PATCH_ACTIONS = new Set([
+  'assign',
+  'unassign',
+  'change_priority',
+  'resolve',
+  'close',
+  'reopen',
+] as const);
+
+type QueueSort = 'updated_newest' | 'updated_oldest';
+type StaffPatchAction =
+  | 'assign'
+  | 'unassign'
+  | 'change_priority'
+  | 'resolve'
+  | 'close'
+  | 'reopen';
 
 interface SupportApiOptions {
   readonly application: SupportDeskApplication;
@@ -47,6 +95,11 @@ interface SupportApiOptions {
   readonly createLimiter: DurableRateLimiter;
   readonly replyLimiter: DurableRateLimiter;
   readonly logger: Logger;
+  /**
+   * Host staff allowlist. Prefer injecting from env via `parseStaffAllowlist`
+   * so tests can supply a fixed list without process env.
+   */
+  readonly staffAllowlist?: StaffAllowlist;
 }
 
 interface SessionData {
@@ -437,6 +490,74 @@ function publicTicketView(view: CustomerTicketView) {
   };
 }
 
+/** Staff-safe ticket fields for operator surfaces (includes requester email). */
+function staffTicketDto(ticket: Ticket) {
+  return {
+    id: ticket.id,
+    number: ticket.number,
+    subject: ticket.subject,
+    ...(ticket.category === undefined ? {} : { category: ticket.category }),
+    status: ticket.status,
+    priority: ticket.priority,
+    channel: ticket.channel,
+    revision: ticket.revision,
+    requester: {
+      association: ticket.requester.association,
+      ...(ticket.requester.principalId === undefined
+        ? {}
+        : { principalId: ticket.requester.principalId }),
+      ...(ticket.requester.email === undefined
+        ? {}
+        : { email: ticket.requester.email }),
+    },
+    ...(ticket.assignedTo === undefined
+      ? {}
+      : { assignedTo: ticket.assignedTo }),
+    createdAt: ticket.createdAt,
+    updatedAt: ticket.updatedAt,
+    customerUpdatedAt: ticket.customerUpdatedAt,
+    ...(ticket.resolvedAt === undefined
+      ? {}
+      : { resolvedAt: ticket.resolvedAt }),
+    ...(ticket.closedAt === undefined ? {} : { closedAt: ticket.closedAt }),
+    marker: pegSubjectMarker(ticket.number),
+  };
+}
+
+function staffMessageDto(message: TicketMessage) {
+  return {
+    id: message.id,
+    ticketId: message.ticketId,
+    authorKind: message.authorKind,
+    channel: message.channel,
+    visibility: message.visibility,
+    format: message.format,
+    body: message.body,
+    createdAt: message.createdAt,
+  };
+}
+
+function staffTicketView(view: StaffTicketView) {
+  return {
+    ticket: staffTicketDto(view.ticket),
+    messages: view.messages.map(staffMessageDto),
+  };
+}
+
+function staffQueueItemDto(item: StaffQueueItem) {
+  return {
+    ticketId: item.ticketId,
+    revision: item.revision,
+    status: item.status,
+    priority: item.priority,
+    ...(item.category === undefined ? {} : { category: item.category }),
+    requesterAssociation: item.requesterAssociation,
+    channel: item.channel,
+    ...(item.assignedTo === undefined ? {} : { assignedTo: item.assignedTo }),
+    updatedAt: item.updatedAt,
+  };
+}
+
 function publicError(error: unknown): ApiError {
   if (error instanceof ApiError) {
     return error;
@@ -456,16 +577,107 @@ function parseCategory(value: unknown): PegmaSupportCategory {
   return value as PegmaSupportCategory;
 }
 
+function parseTicketStatus(value: string): TicketStatus {
+  if (!TICKET_STATUSES.has(value as TicketStatus)) {
+    throw new ApiError(400, 'invalid_request');
+  }
+  return value as TicketStatus;
+}
+
+function parseTicketPriority(value: unknown): TicketPriority {
+  if (
+    typeof value !== 'string' ||
+    !TICKET_PRIORITIES.has(value as TicketPriority)
+  ) {
+    throw new ApiError(400, 'invalid_request');
+  }
+  return value as TicketPriority;
+}
+
+function parseQueueSort(value: string): QueueSort {
+  if (!QUEUE_SORTS.has(value as QueueSort)) {
+    throw new ApiError(400, 'invalid_request');
+  }
+  return value as QueueSort;
+}
+
+function parseStaffPatchAction(value: unknown): StaffPatchAction {
+  if (
+    typeof value !== 'string' ||
+    !STAFF_PATCH_ACTIONS.has(value as StaffPatchAction)
+  ) {
+    throw new ApiError(400, 'invalid_request');
+  }
+  return value as StaffPatchAction;
+}
+
+function parseStaffQueueQuery(url: URL): StaffQueueQuery {
+  const query: {
+    status?: TicketStatus;
+    priority?: TicketPriority;
+    sort?: QueueSort;
+    unassignedOnly?: boolean;
+  } = {};
+
+  const statusParam = url.searchParams.get('status');
+  if (statusParam !== null && statusParam !== '') {
+    query.status = parseTicketStatus(statusParam);
+  }
+
+  const priorityParam = url.searchParams.get('priority');
+  if (priorityParam !== null && priorityParam !== '') {
+    query.priority = parseTicketPriority(priorityParam);
+  }
+
+  const sortParam = url.searchParams.get('sort');
+  if (sortParam !== null && sortParam !== '') {
+    query.sort = parseQueueSort(sortParam);
+  }
+
+  const unassignedOnly = url.searchParams.get('unassignedOnly');
+  if (unassignedOnly !== null && unassignedOnly !== '') {
+    if (unassignedOnly === 'true' || unassignedOnly === '1') {
+      query.unassignedOnly = true;
+    } else if (unassignedOnly === 'false' || unassignedOnly === '0') {
+      query.unassignedOnly = false;
+    } else {
+      throw new ApiError(400, 'invalid_request');
+    }
+  }
+
+  return query;
+}
+
+function requireStaffAccess(
+  authenticated: Authenticated,
+  allowlist: StaffAllowlist,
+) {
+  const access = staffAccessContext(
+    authenticated.link.subject,
+    allowlist,
+    authenticated.user.email,
+  );
+  if (access === null) {
+    throw new ApiError(403, 'forbidden');
+  }
+  return access;
+}
+
 /**
- * Authenticated Support Desk customer API.
+ * Authenticated Support Desk customer and staff API.
  *
  * Session cookie `__Host-pegma_session`, CSRF `X-Pegma-CSRF`, same-origin
  * Fetch Metadata for mutations. Principal is the Identity subject from the
  * session — never taken from the request body.
+ *
+ * Staff routes live under `/api/support/admin/…` and require host allowlist
+ * membership (`SUPPORT_STAFF_EMAILS` / `SUPPORT_STAFF_PRINCIPALS`).
  */
 export function createSupportApi(
   options: SupportApiOptions,
 ): (request: Request) => Promise<Response> {
+  const staffAllowlist = options.staffAllowlist ?? emptyStaffAllowlist();
+
   return async (request) => {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -508,6 +720,205 @@ export function createSupportApi(
           csrfToken: authenticated.csrfToken,
         });
       }
+
+      // --- Staff admin surface ---
+
+      if (request.method === 'GET' && path === '/api/support/admin/queue') {
+        const authenticated = await requireAuthentication(request, options);
+        const access = requireStaffAccess(authenticated, staffAllowlist);
+        const queueQuery = parseStaffQueueQuery(url);
+        const result = await options.application.listStaffQueue(
+          access,
+          queueQuery,
+        );
+        return json({
+          items: result.items.map(staffQueueItemDto),
+          csrfToken: authenticated.csrfToken,
+        });
+      }
+
+      const adminMatch = ADMIN_TICKET_PATH.exec(path);
+      if (
+        adminMatch !== null &&
+        adminMatch[2] === undefined &&
+        request.method === 'GET'
+      ) {
+        const ticketId = adminMatch[1]!;
+        const authenticated = await requireAuthentication(request, options);
+        const access = requireStaffAccess(authenticated, staffAllowlist);
+        const view = await options.application.readStaffTicket(
+          access,
+          ticketId,
+        );
+        return json({
+          ...staffTicketView(view),
+          csrfToken: authenticated.csrfToken,
+        });
+      }
+
+      if (
+        adminMatch !== null &&
+        adminMatch[2] === undefined &&
+        request.method === 'PATCH'
+      ) {
+        requireSameOriginMutation(request);
+        const ticketId = adminMatch[1]!;
+        const authenticated = await requireAuthentication(request, options);
+        await requireCsrf(request, authenticated);
+        const access = requireStaffAccess(authenticated, staffAllowlist);
+
+        const body = optionalKeysObject(
+          await readJson(request),
+          ['action'],
+          ['priority'],
+        );
+        const action = parseStaffPatchAction(body.action);
+        // priority is only meaningful for change_priority — reject silent ignore.
+        if (action !== 'change_priority' && Object.hasOwn(body, 'priority')) {
+          throw new ApiError(400, 'invalid_request');
+        }
+        const commandId = mintSupportId();
+        const correlationId = mintSupportId();
+
+        let view: StaffTicketView;
+        switch (action) {
+          case 'assign':
+            view = await options.application.assignTicket(access, {
+              commandId,
+              correlationId,
+              ticketId,
+              assigneeId: authenticated.link.subject,
+            });
+            break;
+          case 'unassign':
+            view = await options.application.assignTicket(access, {
+              commandId,
+              correlationId,
+              ticketId,
+              assigneeId: null,
+            });
+            break;
+          case 'change_priority': {
+            if (!Object.hasOwn(body, 'priority')) {
+              throw new ApiError(400, 'invalid_request');
+            }
+            const priority = parseTicketPriority(body.priority);
+            view = await options.application.changePriority(access, {
+              commandId,
+              correlationId,
+              ticketId,
+              priority,
+            });
+            break;
+          }
+          case 'resolve':
+            view = await options.application.resolveTicket(access, {
+              commandId,
+              correlationId,
+              ticketId,
+            });
+            break;
+          case 'close':
+            view = await options.application.closeTicket(access, {
+              commandId,
+              correlationId,
+              ticketId,
+            });
+            break;
+          case 'reopen':
+            view = await options.application.reopenTicket(access, {
+              commandId,
+              correlationId,
+              ticketId,
+            });
+            break;
+          default: {
+            action satisfies never;
+            throw new ApiError(400, 'invalid_request');
+          }
+        }
+
+        options.logger.log('info', 'support.staff_ticket_patched', {
+          ticketNumber: view.ticket.number,
+          action,
+        });
+
+        return json(staffTicketView(view));
+      }
+
+      if (
+        adminMatch !== null &&
+        adminMatch[2] === 'messages' &&
+        request.method === 'POST'
+      ) {
+        requireSameOriginMutation(request);
+        const ticketId = adminMatch[1]!;
+        const authenticated = await requireAuthentication(request, options);
+        await requireCsrf(request, authenticated);
+        // Authorize before debiting the shared customer/staff reply limiter so
+        // non-staff sessions fail closed without mutating quota state.
+        const access = requireStaffAccess(authenticated, staffAllowlist);
+        await enforceRateLimit(
+          options.replyLimiter,
+          authenticated.link.subject,
+        );
+
+        const body = exactObject(await readJson(request), ['body']);
+        const messageBody = boundedString(body.body, 1, 20_000, {
+          allowMultiline: true,
+        });
+        // Mail/outbound notification deferred (Task 10) — omit notification.
+        const view = await options.application.replyAsStaff(access, {
+          commandId: mintSupportId(),
+          correlationId: mintSupportId(),
+          ticketId,
+          messageId: mintSupportId(),
+          body: messageBody,
+        });
+
+        options.logger.log('info', 'support.staff_replied', {
+          ticketNumber: view.ticket.number,
+        });
+
+        return json(staffTicketView(view), { status: 201 });
+      }
+
+      if (
+        adminMatch !== null &&
+        adminMatch[2] === 'notes' &&
+        request.method === 'POST'
+      ) {
+        requireSameOriginMutation(request);
+        const ticketId = adminMatch[1]!;
+        const authenticated = await requireAuthentication(request, options);
+        await requireCsrf(request, authenticated);
+        // Same order as messages: staff check before shared limiter debit.
+        const access = requireStaffAccess(authenticated, staffAllowlist);
+        await enforceRateLimit(
+          options.replyLimiter,
+          authenticated.link.subject,
+        );
+
+        const body = exactObject(await readJson(request), ['body']);
+        const messageBody = boundedString(body.body, 1, 20_000, {
+          allowMultiline: true,
+        });
+        const view = await options.application.addNote(access, {
+          commandId: mintSupportId(),
+          correlationId: mintSupportId(),
+          ticketId,
+          messageId: mintSupportId(),
+          body: messageBody,
+        });
+
+        options.logger.log('info', 'support.staff_note_added', {
+          ticketNumber: view.ticket.number,
+        });
+
+        return json(staffTicketView(view), { status: 201 });
+      }
+
+      // --- Customer mutations ---
 
       if (request.method !== 'POST') {
         throw new ApiError(404, 'not_found');
