@@ -98,7 +98,7 @@ CompositionCatalog
 | `nonGoals` | string[] | Out of scope for the recipe |
 | `antiPatterns` | string[] | What not to invent |
 | `fixture` | object | Citation + kind + status |
-| `capabilityTags` | tags | Overlap with component tags for planning |
+| `capabilityTags` | `CapabilityTag[]` | Overlap with component tags for planning |
 | `requiresPublished` | string[] | Component ids that must be usable |
 | `backlogPriority` | number? | Phase 0 ordering only (1 = first) |
 

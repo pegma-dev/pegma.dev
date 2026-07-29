@@ -193,7 +193,7 @@ export interface CatalogRecipe {
  * Published at a stable URL in Phase 1 (static `catalog.json`).
  */
 export interface CompositionCatalog {
-  readonly schemaVersion: typeof CATALOG_SCHEMA_VERSION | string;
+  readonly schemaVersion: typeof CATALOG_SCHEMA_VERSION;
   /** ISO-8601 generation timestamp */
   readonly generatedAt: string;
   /** Calendar date of the hand-maintained registry snapshot when used as input */
@@ -202,7 +202,7 @@ export interface CompositionCatalog {
   readonly recipes: readonly CatalogRecipe[];
 }
 
-/** Type guard helpers for compile and MCP validation (Phase 1+). */
+/** Boolean helpers for compile and MCP validation (Phase 1+). Not type predicates. */
 export function isPublishUsable(component: CatalogComponent): boolean {
   return component.publishUsability === 'usable' || component.publishUsability === 'partial';
 }

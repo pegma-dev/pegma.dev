@@ -61,7 +61,12 @@ describe('composition catalog schema', () => {
         expect(recipe.intent).not.toMatch(pattern);
       }
       expect(recipe.intent.length).toBeGreaterThan(40);
-      expect(recipe.requiresPublished.length).toBeGreaterThan(0);
+      // Empty requiresPublished is valid (e.g. static-brochure-minimal).
+      expect(Array.isArray(recipe.requiresPublished)).toBe(true);
+      for (const id of recipe.requiresPublished) {
+        expect(typeof id).toBe('string');
+        expect(id.length).toBeGreaterThan(0);
+      }
     }
   });
 

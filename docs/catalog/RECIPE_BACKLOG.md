@@ -5,7 +5,7 @@ Prioritized composition intents for the agent catalog. Every intent is
 describe a commercial host’s routes, tenancy, or operations.
 
 **Fixture rule:** catalog and `/examples` may only quote wiring that exists in
-a public, CI-tested source (`fixture.status === green`). Until then, recipes
+a public, CI-tested source (`fixture.status === 'green'`). Until then, recipes
 appear as intent metadata only.
 
 **Publish rule:** recipes whose `requiresPublished` set is not fully usable

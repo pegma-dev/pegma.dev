@@ -14,7 +14,7 @@ surfaces against the composition catalog schema
 | `repo` | yes | `id` + `repo` | No separate stable `id` field (today `repo` is the id) |
 | `title` | yes | `title` | — |
 | `packages` | yes (`string[]`) | `packages[]` with version/published | No per-package version or publish flag |
-| `status` | yes | `status` | No `publishUsability` aggregate |
+| `status` | yes | `status` | Hand-maintained only — **do not trust as sole authority** (see below); also no `publishUsability` aggregate |
 | `summary` | yes | `summary` | — |
 | `owns` | yes | `owns` | — |
 | `refuses` | yes | `refuses` | — |
@@ -25,6 +25,7 @@ surfaces against the composition catalog schema
 
 | Schema field | Why agents need it | Suggested Phase 1 source |
 | --- | --- | --- |
+| `status` | Lifecycle without registry drift | Prefer mapping from each repo’s `PROJECT_PLAN.md` stage (same discipline as the compiled roadmap); hand registry is fallback only when the plan is unreachable |
 | `packages[].version` | Exact 0.x pins | npm / release projection / registry snapshot with precedence |
 | `packages[].published` | Skip unpublished packages | npm existence + hand status |
 | `publishUsability` | Fast list filter | Derived from package flags |
