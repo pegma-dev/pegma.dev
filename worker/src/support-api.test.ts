@@ -226,7 +226,7 @@ describe('authenticated support API', () => {
     expect(createdBody.ticket.number).toBe(1);
     expect(createdBody.ticket.marker).toBe('[PEG-1]');
     expect(createdBody.ticket.url).toBe(
-      `https://pegma.dev/feedback/${createdBody.ticket.id}`,
+      `https://pegma.dev/feedback/ticket/?id=${createdBody.ticket.id}`,
     );
     expect(createdBody.messages).toHaveLength(1);
     expect(createdBody.messages[0]?.body).toContain('hard to scan');

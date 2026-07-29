@@ -21,7 +21,10 @@ import { customerAccessContext } from './support-access';
 import {
   mapSupportError,
   mintSupportId,
+  pegSubjectMarker,
+  PEGMA_SUPPORT_CATEGORIES,
   PEGMA_SUPPORT_CATEGORY_SET,
+  publicTicketUrl,
   type PegmaSupportCategory,
 } from './support-desk';
 
@@ -150,17 +153,30 @@ function optionalKeysObject(
   return value;
 }
 
+/**
+ * Validate a host-supplied string.
+ * @param options.allowMultiline When true, HT LF/CR/TAB are permitted (message
+ * bodies from textareas). Other C0/C1 controls remain rejected.
+ */
 function boundedString(
   value: unknown,
   minimum: number,
   maximum: number,
+  options: { allowMultiline?: boolean } = {},
 ): string {
   if (
     typeof value !== 'string' ||
     value.length < minimum ||
-    value.length > maximum ||
-    /[\u0000-\u001F\u007F-\u009F]/u.test(value)
+    value.length > maximum
   ) {
+    throw new ApiError(400, 'invalid_request');
+  }
+  // Never write literal control characters into source; use escapes.
+  // Multiline fields may include \t, \n, \r only.
+  const controlPattern = options.allowMultiline
+    ? /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u
+    : /[\u0000-\u001F\u007F-\u009F]/u;
+  if (controlPattern.test(value)) {
     throw new ApiError(400, 'invalid_request');
   }
   return value;
@@ -400,8 +416,8 @@ function publicTicketSummary(ticket: CustomerTicketSummary) {
     channel: ticket.channel,
     createdAt: ticket.createdAt,
     customerUpdatedAt: ticket.customerUpdatedAt,
-    marker: `[PEG-${ticket.number}]`,
-    url: `https://pegma.dev/feedback/${encodeURIComponent(ticket.id)}`,
+    marker: pegSubjectMarker(ticket.number),
+    url: publicTicketUrl(ticket.id),
   };
 }
 
@@ -459,13 +475,7 @@ export function createSupportApi(
         // feedback form can only load them after sign-in.
         const authenticated = await requireAuthentication(request, options);
         return json({
-          categories: [
-            'feedback',
-            'bug',
-            'feature_request',
-            'documentation',
-            'question',
-          ],
+          categories: [...PEGMA_SUPPORT_CATEGORIES],
           csrfToken: authenticated.csrfToken,
         });
       }
@@ -518,7 +528,9 @@ export function createSupportApi(
           [],
         );
         const subject = boundedString(body.subject, 1, 200);
-        const messageBody = boundedString(body.body, 1, 20_000);
+        const messageBody = boundedString(body.body, 1, 20_000, {
+          allowMultiline: true,
+        });
         const category = parseCategory(body.category);
 
         const access = customerAccessContext(authenticated.link.subject);
@@ -560,7 +572,9 @@ export function createSupportApi(
         );
 
         const body = exactObject(await readJson(request), ['body']);
-        const messageBody = boundedString(body.body, 1, 20_000);
+        const messageBody = boundedString(body.body, 1, 20_000, {
+          allowMultiline: true,
+        });
         const access = customerAccessContext(authenticated.link.subject);
         const view = await options.application.replyToCustomerTicket(access, {
           commandId: mintSupportId(),
