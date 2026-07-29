@@ -93,7 +93,7 @@ CompositionCatalog
 | `id` | string | Stable recipe id |
 | `intent` | string | Synthetic product shape (one paragraph) |
 | `packages` | string[] | Package names, optionally pinned as `name@version` |
-| `adapters` | string[] | Selected adapter ids |
+| `adapters` | `{ componentId, adapterId }[]` | Component-scoped adapter selections |
 | `hostResponsibilities` | string[] | Host-owned work |
 | `nonGoals` | string[] | Out of scope for the recipe |
 | `antiPatterns` | string[] | What not to invent |
@@ -124,8 +124,10 @@ Structured flags (not free text) so `plan_composition` can stay rule-based:
 Canonical types: [`src/data/catalog-schema.ts`](../../src/data/catalog-schema.ts).
 
 Illustrative (non-authoritative) document:
-[`example-catalog.json`](./example-catalog.json) — incomplete sample for shape
-checking only; Phase 1 replaces hand examples with a compiled artifact.
+[`example-catalog.json`](./example-catalog.json) — **fictional** component ids and
+packages for shape checking only (not Pegma lifecycle facts). Phase 1 emits a
+compiled catalog from plans + version authority; do not treat this sample as
+roadmap truth.
 
 ## Gap inventory and recipes
 

@@ -159,6 +159,15 @@ export interface RecipeFixtureCitation {
 }
 
 /**
+ * Recipe adapter selection. Adapter ids are only unique within a component,
+ * so recipes always pair them with `componentId`.
+ */
+export interface CatalogRecipeAdapterRef {
+  readonly componentId: string;
+  readonly adapterId: string;
+}
+
+/**
  * A named composition intent. Product shape is synthetic on purpose;
  * wiring sketches only appear when `fixture.status === 'green'`.
  */
@@ -168,8 +177,8 @@ export interface CatalogRecipe {
   readonly intent: string;
   /** Package names, optionally pinned as `name@version` once fixtures exist */
   readonly packages: readonly string[];
-  /** Adapter ids selected for this recipe */
-  readonly adapters: readonly string[];
+  /** Adapter selections (component-scoped ids) */
+  readonly adapters: readonly CatalogRecipeAdapterRef[];
   readonly hostResponsibilities: readonly string[];
   readonly nonGoals: readonly string[];
   /** Anti-patterns agents must not invent */
