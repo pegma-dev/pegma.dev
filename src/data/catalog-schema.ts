@@ -234,18 +234,20 @@ export function publishedPackageNames(
  */
 export function parsePackageSpecifier(spec: string): {
   readonly name: string;
+  /** Exact version, `null` when bare, or `''` when the specifier is malformed (`name@`). */
   readonly version: string | null;
 } {
   if (spec.startsWith('@')) {
     const sep = spec.lastIndexOf('@');
     if (sep > 0) {
-      return { name: spec.slice(0, sep), version: spec.slice(sep + 1) || null };
+      // Keep empty suffix as '' so callers can reject `name@` — do not coerce to bare.
+      return { name: spec.slice(0, sep), version: spec.slice(sep + 1) };
     }
     return { name: spec, version: null };
   }
   const sep = spec.indexOf('@');
   if (sep > 0) {
-    return { name: spec.slice(0, sep), version: spec.slice(sep + 1) || null };
+    return { name: spec.slice(0, sep), version: spec.slice(sep + 1) };
   }
   return { name: spec, version: null };
 }
@@ -262,6 +264,8 @@ export function recipePackagesReady(
   if (recipe.packages.length === 0) return true;
   for (const spec of recipe.packages) {
     const { name, version } = parsePackageSpecifier(spec);
+    // Empty version suffix (`@pegma/spine@`) is not a bare name and not a pin.
+    if (version === '') return false;
     const owner = catalog.components.find((c) =>
       c.packages.some((p) => p.name === name),
     );

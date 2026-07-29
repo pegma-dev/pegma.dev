@@ -191,6 +191,12 @@ function parseRecipe(raw: unknown, index: number): CatalogRecipe {
   if (typeof f.status !== 'string' || !FIXTURE_STATUSES.has(f.status as RecipeFixtureStatus)) {
     throw new Error(`recipes[${index}].fixture.status invalid`);
   }
+  // Green means CI-proven wiring — pending kind cannot claim green.
+  if (f.status === 'green' && f.kind === 'pending') {
+    throw new Error(
+      `recipes[${index}].fixture: status 'green' cannot use kind 'pending'`,
+    );
+  }
   return {
     id: r.id,
     intent: r.intent,
@@ -365,6 +371,52 @@ describe('composition catalog schema', () => {
       name: 'left-pad',
       version: '1.0.0',
     });
+    expect(parsePackageSpecifier('@pegma/spine@')).toEqual({
+      name: '@pegma/spine',
+      version: '',
+    });
+    expect(
+      recipePackagesReady(loadExample(), {
+        id: 'bad-pin',
+        intent: 'A fictional recipe with a trailing-@ package specifier that must not pass.',
+        packages: ['@pegma/spine@'],
+        adapters: [],
+        hostResponsibilities: [],
+        nonGoals: [],
+        antiPatterns: [],
+        fixture: { kind: 'pending', citation: 'n/a', status: 'pending' },
+        capabilityTags: [],
+        requiresPublished: ['spine'],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects green fixtures that are still pending', () => {
+    expect(() =>
+      parseCompositionCatalog({
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        generatedAt: '2026-07-28T00:00:00.000Z',
+        components: [],
+        recipes: [
+          {
+            id: 'fake-green',
+            intent: 'A fictional recipe that claims green without a real fixture source kind.',
+            packages: [],
+            adapters: [],
+            hostResponsibilities: [],
+            nonGoals: [],
+            antiPatterns: [],
+            fixture: {
+              kind: 'pending',
+              citation: 'docs/catalog/RECIPE_BACKLOG.md',
+              status: 'green',
+            },
+            capabilityTags: [],
+            requiresPublished: [],
+          },
+        ],
+      }),
+    ).toThrow(/green.*pending/i);
   });
 
   it('rejects malformed dependency entries', () => {
