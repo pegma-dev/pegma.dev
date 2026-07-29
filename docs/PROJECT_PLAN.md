@@ -265,8 +265,8 @@ with a source link where not. Decide in Phase 3.
    **Done 2026-07-28, including email activation.**
 4. Keep public component release versions current on pegma.dev without a
    content commit or Pages deploy per release — see
-   `docs/GITHUB_RELEASE_WEBHOOK_PLAN.md`. **Phase A (2026-07-28):** vendored
-   `@pegma/webhooks` artifact aligned to Storage Core `0.4.0` and proven over
-   memory + D1. **Phase B (2026-07-28):** signed GitHub release webhook
-   handler + current-release projection. Read API, UI, reconciliation, and
-   activation remain.
+   `docs/GITHUB_RELEASE_WEBHOOK_PLAN.md`. **Phases A–D (2026-07-28):** vendored
+   `@pegma/webhooks`, signed release webhook + projection, public
+   `GET /api/releases` + Stack UI, six-hour reconciliation/backfill, health
+   details, and operator docs. **Phase E remains:** Worker secret, deploy,
+   backfill verification, organization webhook, and production smoke.
