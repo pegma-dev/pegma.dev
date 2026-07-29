@@ -1,0 +1,201 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-07-28T00:00:00.000Z",
+  "snapshotDate": "2026-07-28",
+  "components": [
+    {
+      "id": "example-contracts",
+      "title": "Example Contracts",
+      "repo": "example-contracts",
+      "packages": [
+        {
+          "name": "@example/contracts",
+          "version": "0.0.1",
+          "published": true,
+          "npmUrl": "https://www.npmjs.com/package/@example/contracts"
+        }
+      ],
+      "status": "published",
+      "publishUsability": "usable",
+      "summary": "Fictional shared contracts package for schema shape-checking only.",
+      "owns": ["Shared demo types and a one-method logger port"],
+      "refuses": ["Durable cross-process events on an in-process bus"],
+      "dependencies": [],
+      "adapters": [],
+      "hostMustProvide": ["Composition-root Clock and Logger wiring"],
+      "capabilityTags": ["logging", "events_in_process"],
+      "recipeIds": ["example-accounts", "example-outbox", "example-deferred"],
+      "links": {
+        "githubRepo": "https://github.com/example/example-contracts",
+        "readme": "https://github.com/example/example-contracts#readme",
+        "npm": "https://www.npmjs.com/package/@example/contracts"
+      },
+      "now": "Fictional pin for schema samples — not a Pegma lifecycle fact."
+    },
+    {
+      "id": "example-store",
+      "title": "Example Store",
+      "repo": "example-store",
+      "packages": [
+        {
+          "name": "@example/store",
+          "version": "0.0.1",
+          "published": true,
+          "npmUrl": "https://www.npmjs.com/package/@example/store"
+        },
+        {
+          "name": "@example/store-cloud",
+          "version": "0.0.1",
+          "published": true,
+          "npmUrl": "https://www.npmjs.com/package/@example/store-cloud"
+        }
+      ],
+      "status": "published",
+      "publishUsability": "usable",
+      "summary": "Fictional persistence port used only to illustrate adapters and deps.",
+      "owns": ["Declared collections and single-partition transactions"],
+      "refuses": ["Cross-partition transactions"],
+      "dependencies": [
+        {
+          "componentId": "example-contracts",
+          "kind": "requires",
+          "note": "Shared contracts"
+        }
+      ],
+      "adapters": [
+        {
+          "id": "memory",
+          "packageName": "@example/store",
+          "host": "memory",
+          "when": "Tests and local sketches"
+        },
+        {
+          "id": "cloud-sql",
+          "packageName": "@example/store-cloud",
+          "host": "cloudflare",
+          "when": "Cloudflare-shaped hosts in the sample recipe"
+        }
+      ],
+      "hostMustProvide": ["Chosen adapter binding and collection codecs"],
+      "capabilityTags": ["storage", "cloudflare"],
+      "recipeIds": ["example-accounts", "example-outbox"],
+      "links": {
+        "githubRepo": "https://github.com/example/example-store",
+        "readme": "https://github.com/example/example-store#readme",
+        "npm": "https://www.npmjs.com/package/@example/store"
+      },
+      "now": "Fictional pin for schema samples — not a Pegma lifecycle fact."
+    },
+    {
+      "id": "example-inbox",
+      "title": "Example Inbox",
+      "repo": "example-inbox",
+      "packages": [
+        {
+          "name": "@example/inbox",
+          "version": null,
+          "published": false
+        }
+      ],
+      "status": "in_development",
+      "publishUsability": "unpublished",
+      "summary": "Fictional unpublished component for unusable-package shape checks.",
+      "owns": ["Idempotent receipt rows"],
+      "refuses": ["Storing full provider payloads in the receipt"],
+      "dependencies": [
+        {
+          "componentId": "example-store",
+          "kind": "requires"
+        },
+        {
+          "componentId": "example-contracts",
+          "kind": "requires"
+        }
+      ],
+      "adapters": [],
+      "hostMustProvide": ["HTTP endpoint and storage binding"],
+      "capabilityTags": ["webhooks_inbound"],
+      "recipeIds": ["example-deferred"],
+      "links": {
+        "githubRepo": "https://github.com/example/example-inbox",
+        "plan": "https://github.com/example/example-inbox/blob/main/docs/PROJECT_PLAN.md"
+      },
+      "now": "Fictional unpublished sample — not a Pegma lifecycle fact."
+    }
+  ],
+  "recipes": [
+    {
+      "id": "example-accounts",
+      "intent": "A fictional community library (Northshelf Branch) offers first-party passkey accounts with email codes on a Cloudflare-shaped host. Synthetic shape sample only.",
+      "packages": [
+        "@example/contracts",
+        "@example/store",
+        "@example/store-cloud"
+      ],
+      "adapters": [
+        { "componentId": "example-store", "adapterId": "cloud-sql" }
+      ],
+      "hostResponsibilities": [
+        "HTTP routes and cookie/session boundary",
+        "WebAuthn relying-party configuration"
+      ],
+      "nonGoals": ["Passwords", "Social login"],
+      "antiPatterns": ["Password table", "Durable events on an in-process bus"],
+      "fixture": {
+        "kind": "pending",
+        "citation": "docs/catalog/RECIPE_BACKLOG.md#p1--cf-passkey-accounts-first-end-to-end-accounts-recipe",
+        "status": "pending"
+      },
+      "capabilityTags": [
+        "accounts",
+        "passkeys",
+        "storage",
+        "cloudflare"
+      ],
+      "requiresPublished": [
+        "example-contracts",
+        "example-store"
+      ],
+      "backlogPriority": 1
+    },
+    {
+      "id": "example-outbox",
+      "intent": "A fictional equipment checkout service (Yard Loan) commits an audit row and mail outbox job in the same storage transaction.",
+      "packages": ["@example/store", "@example/contracts"],
+      "adapters": [
+        { "componentId": "example-store", "adapterId": "memory" }
+      ],
+      "hostResponsibilities": [
+        "Transaction boundary",
+        "Outbox collection in host storage"
+      ],
+      "nonGoals": ["Mail-owned outbox store"],
+      "antiPatterns": ["Send email after commit without an outbox job"],
+      "fixture": {
+        "kind": "pending",
+        "citation": "docs/catalog/RECIPE_BACKLOG.md#p2--storage-audit-mail-outbox-storage--auditmail-pattern",
+        "status": "pending"
+      },
+      "capabilityTags": ["storage", "audit", "mail_transactional"],
+      "requiresPublished": ["example-store", "example-contracts"],
+      "backlogPriority": 2
+    },
+    {
+      "id": "example-deferred",
+      "intent": "A fictional donation platform (Copper Plate) records inbound webhook receipts once the inbox package is published.",
+      "packages": ["@example/inbox", "@example/store", "@example/contracts"],
+      "adapters": [],
+      "hostResponsibilities": ["HTTP endpoint", "Provider signature verification"],
+      "nonGoals": ["Exactly-once delivery"],
+      "antiPatterns": ["Storing full webhook bodies in receipts"],
+      "fixture": {
+        "kind": "pending",
+        "citation": "docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts-when-pegmawebhooks-is-published",
+        "status": "none"
+      },
+      "capabilityTags": ["webhooks_inbound"],
+      "requiresPublished": ["example-inbox", "example-store", "example-contracts"],
+      "backlogPriority": 90
+    }
+  ]
+}
