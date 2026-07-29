@@ -49,9 +49,9 @@ reference environment.
   authorized by permissions. In development.
 - [Webhooks](https://github.com/pegma-dev/webhooks): @pegma/webhooks —
   inbound receipt ledger: idempotent dedup, poison quarantine, retention;
-  at-least-once on purpose. In development and unpublished: Phase 2 is
-  merged into RetireGolden, with its operational exit awaiting production
-  Stripe traffic; Phase 3 is gated on a second real provider.
+  at-least-once on purpose. Published as 0.1.0 from a protected signed
+  release through trusted-publisher OIDC with provenance; RetireGolden
+  Stripe and pegma.dev GitHub are the first two real provider integrations.
 - [Sessions](https://github.com/pegma-dev/sessions): @pegma/sessions —
   server-side session records: hashed ids, absolute + idle expiry,
   principal-wide revocation. Published as 0.1.0: Phase 1 is merged, Phase 2

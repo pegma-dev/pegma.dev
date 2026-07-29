@@ -271,4 +271,7 @@ with a source link where not. Decide in Phase 3.
    details, and operator docs. **Phase E activated (2026-07-29):** Worker secret
    installed, Worker version `52d03e76-b69a-42c8-9d63-bcb6316e33f3` live,
    release projection + read API verified, organization release webhook live
-   (GitHub authenticated `ping` → 204).
+   (GitHub authenticated `ping` → 204). **First real stable publish observed
+   2026-07-29:** the signed Webhooks `v0.1.0` release projected immediately
+   without a site deploy; the exact registry package replaced the vendored
+   bridge.

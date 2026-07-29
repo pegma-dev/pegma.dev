@@ -117,9 +117,9 @@ These constrain every phase below.
    the same discipline as the compiled roadmap.
 
 7. **Pin exact 0.x versions; say what is unpublished.**  
-   Agents must not compose fiction. Unpublished packages (for example
-   Support Desk or Webhooks while they remain so) are marked unusable for
-   production assembly until published.
+   Agents must not compose fiction. Unpublished packages (for example Support
+   Desk while it remains so) are marked unusable for production assembly until
+   published.
 
 8. **Explicit wiring only.**  
    No autodiscovery story in agent docs. The composition root is the map
@@ -194,7 +194,7 @@ Named composition intents, for example:
 - Durable rate limits on expensive auth paths
 - Transactional mail outbox jobs committed in the caller’s transaction
 - Append-only audit records inside the caller’s storage transaction
-- Inbound webhook receipt ledger (when `@pegma/webhooks` is published)
+- Inbound webhook receipt ledger (package published; synthetic fixture pending)
 - Support queue slice (when Support Desk packages are published)
 
 Each recipe records:
@@ -292,7 +292,8 @@ Shipped:
 | `cf-passkey-accounts` | `recipes/cf-passkey-accounts/` | green |
 | `storage-audit-mail-outbox` | `recipes/storage-audit-mail-outbox/` | green |
 
-P3–P6 remain pending. Deferred D1–D2 still wait on package publication.
+P3–P6 remain pending. Deferred D1 waits on a green fixture; D2 still waits on
+package publication.
 
 **Exit:** catalog recipe entries resolve to green fixtures for P1–P2;
 `/examples` indexes those recipes and quotes only fixture (or package

@@ -190,7 +190,7 @@
       "antiPatterns": ["Storing full webhook bodies in receipts"],
       "fixture": {
         "kind": "pending",
-        "citation": "docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts-when-pegmawebhooks-is-published",
+        "citation": "docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts",
         "status": "none"
       },
       "capabilityTags": ["webhooks_inbound"],

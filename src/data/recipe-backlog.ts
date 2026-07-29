@@ -213,7 +213,7 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
   {
     id: 'inbound-webhook-receipts',
     intent:
-      'A fictional donation platform (Copper Plate) records inbound provider webhook receipts with idempotent dedup and poison quarantine. Deferred until @pegma/webhooks is published.',
+      'A fictional donation platform (Copper Plate) records inbound provider webhook receipts with idempotent dedup and poison quarantine. The package is published; a CI-tested synthetic fixture remains pending.',
     packages: ['@pegma/webhooks', '@pegma/storage-core', '@pegma/spine'],
     adapters: [],
     hostResponsibilities: [
@@ -229,7 +229,7 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
     fixture: {
       kind: 'pending',
       citation:
-        'docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts-when-pegmawebhooks-is-published',
+        'docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts',
       status: 'none',
     },
     capabilityTags: ['webhooks_inbound'],

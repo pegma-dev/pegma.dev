@@ -5,7 +5,7 @@ import type { Logger } from '@pegma/spine';
 
 const logger: Logger = { log: vi.fn() };
 
-describe('vendored @pegma/webhooks over createMemoryStore', () => {
+describe('published @pegma/webhooks over createMemoryStore', () => {
   it('records begin, markProcessed, and duplicate begin outcomes', async () => {
     const store = createMemoryStore();
     const ledger = createWebhookLedger({

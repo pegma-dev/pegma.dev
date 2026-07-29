@@ -2,16 +2,19 @@
 
 ## Status
 
-**Stage:** Phase E activated (2026-07-29). Worker secret installed,
+**Stage:** Phase E activated and first real stable publish observed
+(2026-07-29). Worker secret installed,
 `pegma-dev-api` version `52d03e76-b69a-42c8-9d63-bcb6316e33f3` deployed with
 release routes and six-hour recon cron. Organization release webhook is live;
 GitHub's authenticated `ping` returned **204**. Controlled release projections
-and `GET /api/releases` / Stack shell are live. Optional follow-up: observe a
-real stable publish and the first scheduled recon success marker.
+and `GET /api/releases` / Stack shell are live. The signed Webhooks `v0.1.0`
+release projected at `2026-07-29T21:49:02.667Z` without a site deployment,
+proving the production event path. The registry artifact is exact and carries
+SLSA provenance.
 
 **Phase A reconciliation (2026-07-28):** `@pegma/webhooks` is pinned to
 `@pegma/storage-core@0.4.0` (commit `1e5ef0732c3595ea82cb80394cf55cd9a0442318`).
-pegma.dev vendors that exact `npm pack` artifact under
+pegma.dev initially vendored that exact `npm pack` artifact under
 `vendor/@pegma/webhooks/` with SHA-256 and integrity recorded in
 `PROVENANCE.md`. Ledger smoke tests exercise `createMemoryStore()` and the
 production D1 composition (`createSchemaIfMissing: false` over the generic
@@ -21,8 +24,8 @@ published `@pegma/health`, `@pegma/rate-limit`, and `@pegma/sessions` pins —
 pre-existing on `main`, with no newer published releases that declare 0.4.0.
 Phase A closes the Webhooks/host Store contract gap; republishing those three
 packages is separate host debt, not a webhook-handler prerequisite. The
-vendored package README carries only the MIT copyright line for
-RetireGolden, LLC — no consumer-migration or commercial planning text.
+temporary vendored bridge was removed after `@pegma/webhooks@0.1.0` published
+with matching registry integrity and provenance.
 
 **Phase B reconciliation (2026-07-28):** `POST /api/webhooks/github/releases`
 authenticates raw-body HMAC-SHA256, allowlists organization `309286193` and
@@ -134,7 +137,7 @@ Before implementation:
    assume structural compatibility.
 2. Run the Webhooks memory and real-Azurite suites after the pin change, then
    exercise the exact packed artifact against the D1 adapter in pegma.dev.
-3. Because `@pegma/webhooks` is unpublished, consume a byte-reproducible
+3. At implementation time, because `@pegma/webhooks` was unpublished, consume a byte-reproducible
    `npm pack` artifact from an identified Webhooks commit. Record its commit,
    SHA-256, npm integrity, and reproduction command beside the vendored
    artifact. Remove this bridge after the first package release.
@@ -558,14 +561,16 @@ After activation:
   operator recovery;
 - remove any controlled test release or tag used only for activation;
 - remove the vendored artifact and provenance note after
-  `@pegma/webhooks` is published and the registry artifact is verified;
+  `@pegma/webhooks` is published and the registry artifact is verified —
+  **done 2026-07-29 for exact `0.1.0` with SLSA provenance**;
 - do not publish Webhooks, cut a release, or create a tag as an incidental
   implementation step.
 
 ## Decisions to confirm before implementation
 
-1. **Phase 3 accounting:** Treat this as partial Webhooks Phase 3 evidence
-   unless the owner deliberately changes the same-host requirement.
+1. **Phase 3 accounting:** On 2026-07-29 the owner accepted the second real
+   provider, host, cloud, and store as sufficient first-release evidence.
+   Same-host multi-source operation remains post-release evidence.
 2. **Display:** Show current stable versions on the Stack page first; add a
    separate release-history page only if real demand appears.
 3. **Release class:** Stable GitHub releases only; omit drafts and prereleases.
