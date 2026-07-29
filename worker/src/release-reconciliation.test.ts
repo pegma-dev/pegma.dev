@@ -214,7 +214,41 @@ describe('runReleaseReconciliation', () => {
     const release = await store
       .collection(componentReleaseCollection())
       .get(componentReleaseKey(WEBHOOKS_ID));
-    expect(release?.observedAt).toBe('2026-07-28T12:00:00.000Z');
+    // 304 still refreshes observedAt so UI staleness tracks successful recon.
+    expect(release?.observedAt).toBe(NOW);
+    expect(release?.tagName).toBe('v0.2.0');
+  });
+
+  it('fails closed on 2xx bodies that are not a usable stable release', async () => {
+    const store = createMemoryStore();
+    const releases = store.collection(componentReleaseCollection());
+    await releases.update(componentReleaseKey(WEBHOOKS_ID), () => ({
+      action: 'write',
+      value: {
+        repositoryId: WEBHOOKS_ID,
+        repositoryName: 'webhooks',
+        releaseId: '1',
+        tagName: 'v0.1.0',
+        publishedAt: '2026-07-01T00:00:00.000Z',
+        releaseUrl: 'https://github.com/pegma-dev/webhooks/releases/tag/v0.1.0',
+        observedAt: '2026-07-01T00:00:00.000Z',
+      },
+    }));
+
+    const summary = await runReleaseReconciliation({
+      store,
+      logger,
+      config: { allowedRepositoryIds: new Set([WEBHOOKS_ID]) },
+      now: NOW,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ id: 'not-a-number' }), {
+          status: 200,
+          headers: { ETag: '"bad"' },
+        })) as unknown as typeof fetch,
+    });
+
+    expect(summary.failed).toBe(1);
+    expect(await releases.get(componentReleaseKey(WEBHOOKS_ID))).not.toBeNull();
   });
 
   it('replaces a local newer release with GitHub preceding stable after delete', async () => {

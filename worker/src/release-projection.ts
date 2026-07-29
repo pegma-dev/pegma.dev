@@ -161,7 +161,11 @@ export async function applyReleaseProjection(
  * Authoritative write of GitHub's current stable release (reconciliation /
  * backfill). Unlike webhook projection, an older preceding stable release
  * must displace a local current row after a missed delete/unpublish.
- * Returns whether the stored row changed.
+ *
+ * Always writes (including a fresh `observedAt`) so UI staleness tracks
+ * successful recon. A rare concurrent webhook publish during the GitHub GET
+ * can lose a race; the webhook or the next recon restores truth within the
+ * six-hour cadence — delete convergence requires force-write here.
  */
 export async function applyAuthoritativeCurrentRelease(
   store: Store,
@@ -176,7 +180,8 @@ export async function applyAuthoritativeCurrentRelease(
       current.tagName === release.tagName &&
       current.publishedAt === release.publishedAt &&
       current.releaseUrl === release.releaseUrl &&
-      current.repositoryName === release.repositoryName
+      current.repositoryName === release.repositoryName &&
+      current.observedAt === release.observedAt
     ) {
       return { action: 'keep' };
     }
@@ -184,4 +189,28 @@ export async function applyAuthoritativeCurrentRelease(
     return { action: 'write', value: release };
   });
   return changed;
+}
+
+/** Touch observedAt on an existing current row (successful 304 revalidation). */
+export async function touchCurrentReleaseObservedAt(
+  store: Store,
+  repositoryId: string,
+  observedAt: string,
+): Promise<boolean> {
+  const releases = store.collection(componentReleaseCollection());
+  let touched = false;
+  await releases.update(componentReleaseKey(repositoryId), (current) => {
+    if (current === null) {
+      return { action: 'keep' };
+    }
+    if (current.observedAt === observedAt) {
+      return { action: 'keep' };
+    }
+    touched = true;
+    return {
+      action: 'write',
+      value: { ...current, observedAt },
+    };
+  });
+  return touched;
 }

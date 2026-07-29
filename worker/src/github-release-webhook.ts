@@ -341,7 +341,17 @@ export async function handleGitHubReleaseWebhook(
     const decision = decideReleaseProjection(facts, observedAt);
     await applyReleaseProjection(store, decision);
     await ledger.markProcessed(deliveryId);
-    await markReleaseWebhookSuccess(store, observedAt);
+    try {
+      await markReleaseWebhookSuccess(store, observedAt);
+    } catch (markerError) {
+      // Projection and ledger are already final; health-marker failure must
+      // not re-enter markFailed or flip the delivery outcome.
+      logger.log('error', 'github_release_webhook.ops_marker_failed', {
+        deliveryId,
+        error:
+          markerError instanceof Error ? markerError.name : 'unknown',
+      });
+    }
     logger.log('info', 'github_release_webhook.processed', {
       deliveryId,
       action: facts.action,

@@ -16,6 +16,7 @@ import {
 import {
   applyAuthoritativeCurrentRelease,
   buildPegmaReleaseUrl,
+  touchCurrentReleaseObservedAt,
   type ReleaseEventFacts,
 } from './release-projection';
 import type { ComponentRelease } from './component-release';
@@ -204,6 +205,7 @@ async function reconcileOneRepository(
   }
 
   if (response.status === 304) {
+    await touchCurrentReleaseObservedAt(store, entry.repositoryId, observedAt);
     return { outcome: 'not_modified', etag: options.etag };
   }
 
@@ -228,11 +230,9 @@ async function reconcileOneRepository(
 
   const facts = githubLatestToFacts(entry, parsed.value);
   if (facts === null) {
-    const cleared = await clearCurrentRelease(store, entry.repositoryId);
-    return {
-      outcome: cleared ? 'cleared' : 'unchanged',
-      etag: nextEtag,
-    };
+    // 2xx with an unusable body is not proof that no stable release exists
+    // (unlike 404). Fail closed so we do not clear good local state.
+    return { outcome: 'failed', etag: options.etag };
   }
 
   const releaseUrl = buildPegmaReleaseUrl(facts.repositoryName, facts.tagName);
@@ -281,13 +281,28 @@ export async function runReleaseReconciliation(
 
   for (const entry of catalog) {
     examined += 1;
-    const result = await reconcileOneRepository({
-      store,
-      entry,
-      etag: nextEtags[entry.repositoryId],
-      observedAt,
-      fetchImpl,
-    });
+    let result: {
+      readonly outcome:
+        | 'upserted'
+        | 'cleared'
+        | 'not_modified'
+        | 'unchanged'
+        | 'failed';
+      readonly etag: string | undefined;
+    };
+    try {
+      result = await reconcileOneRepository({
+        store,
+        entry,
+        etag: nextEtags[entry.repositoryId],
+        observedAt,
+        fetchImpl,
+      });
+    } catch {
+      // Version conflicts and unexpected store errors stay per-repository so
+      // one hot key cannot abort the catalog pass or skip etag persistence.
+      result = { outcome: 'failed', etag: nextEtags[entry.repositoryId] };
+    }
 
     if (result.etag === undefined) {
       delete nextEtags[entry.repositoryId];
