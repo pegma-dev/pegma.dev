@@ -38,12 +38,7 @@ describe('cf-passkey-accounts (Northshelf Branch)', () => {
     expect(link.subject).toBe(user.principalId);
 
     const sessionId = 'n'.repeat(43);
-    await openNorthshelfSession(
-      composition,
-      sessionId,
-      user.principalId,
-      claims,
-    );
+    await openNorthshelfSession(composition, sessionId, claims);
     const session = await composition.sessions.get(sessionId);
     expect(session?.principalId).toBe(user.principalId);
     expect(session?.data).toContain('authorizationLink');

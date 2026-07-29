@@ -182,13 +182,16 @@ export function createNorthshelfComposition(
  * Host sketch: after Identity verifies a principal, open a server-side
  * session. Session `data` is opaque to `@pegma/sessions` — never put IdP
  * access tokens or other re-presentable credentials here.
+ *
+ * The session principal is always `claims.subject` so a mismatched caller
+ * argument cannot create a cross-account session.
  */
 export async function openNorthshelfSession(
   composition: NorthshelfComposition,
   sessionId: string,
-  principalId: PrincipalId,
   claims: VerifiedIdentityClaims,
 ): Promise<void> {
+  const principalId = claims.subject as PrincipalId;
   const link = composition.identityLinkFromClaims(claims);
   await composition.sessions.create(sessionId, {
     principalId,
