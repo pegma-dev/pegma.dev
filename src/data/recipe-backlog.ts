@@ -15,14 +15,14 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
     intent:
       'A small Cloudflare Worker host for a fictional community library (Northshelf Branch) offers first-party accounts: passkey sign-in, email one-time codes for enrollment and recovery, server-side sessions, and durable rate limits on expensive auth paths. No passwords.',
     packages: [
-      '@pegma/identity',
-      '@pegma/sessions',
-      '@pegma/mail',
-      '@pegma/rate-limit',
-      '@pegma/authorization-identity',
-      '@pegma/storage-core',
-      '@pegma/storage-cloudflare-d1',
-      '@pegma/spine',
+      '@pegma/identity@0.1.0',
+      '@pegma/sessions@0.1.0',
+      '@pegma/mail@0.1.0',
+      '@pegma/rate-limit@0.1.0',
+      '@pegma/authorization-identity@0.1.2',
+      '@pegma/storage-core@0.4.0',
+      '@pegma/storage-cloudflare-d1@0.4.0',
+      '@pegma/spine@0.1.1',
     ],
     adapters: [{ componentId: 'storage-core', adapterId: 'cloudflare-d1' }],
     hostResponsibilities: [
@@ -74,7 +74,12 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
     id: 'storage-audit-mail-outbox',
     intent:
       'A fictional equipment checkout service (Yard Loan) records inventory mutations in Storage Core and, in the same single-partition transaction, appends an audit row and enqueues a transactional mail delivery job.',
-    packages: ['@pegma/storage-core', '@pegma/audit', '@pegma/mail', '@pegma/spine'],
+    packages: [
+      '@pegma/storage-core@0.4.0',
+      '@pegma/audit@0.1.0',
+      '@pegma/mail@0.1.0',
+      '@pegma/spine@0.1.1',
+    ],
     // Host chooses a durable storage-core adapter (cloudflare-d1 or azure-tables).
     // Do not pin memory here — the recipe needs durable inventory/audit/outbox rows.
     adapters: [],

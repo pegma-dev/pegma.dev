@@ -18,6 +18,10 @@ import {
   createHmacEmailCodeProtector,
   createIdentity,
   type Identity,
+  type IdentityMailRenderer,
+  type MailProvider,
+  type MailReconciliationPort,
+  type MailWorker,
   type VerifiedIdentityClaims,
 } from '@pegma/identity';
 import {
@@ -37,6 +41,14 @@ export const NORTHSHELF_RP = {
   origins: ['https://northshelf.example'] as const,
 } as const;
 
+/** Host-owned mail delivery ports — required for email-code account flows. */
+export interface NorthshelfMailDelivery {
+  readonly provider: MailProvider;
+  readonly reconciliation: MailReconciliationPort;
+  readonly renderer: IdentityMailRenderer;
+  readonly workerId?: string;
+}
+
 export interface NorthshelfCompositionOptions {
   /**
    * Required injected store. Production hosts pass a durable adapter
@@ -49,6 +61,11 @@ export interface NorthshelfCompositionOptions {
    * Host-managed; never generated at process start in production.
    */
   readonly emailCodeSecretBase64: string;
+  /**
+   * Required mail ports so email-code account creation can be drained.
+   * Production: real provider (e.g. Resend). Tests: recording stubs.
+   */
+  readonly mailDelivery: NorthshelfMailDelivery;
   readonly clock?: Clock;
   readonly logger?: Logger;
 }
@@ -57,6 +74,8 @@ export interface NorthshelfComposition {
   readonly store: Store;
   readonly identity: Identity;
   readonly sessions: SessionStore;
+  /** Drains Identity mail outbox jobs (email codes, notices). */
+  readonly mailWorker: MailWorker;
   readonly registrationLimiter: DurableRateLimiter;
   readonly authenticationLimiter: DurableRateLimiter;
   readonly emailCodeRequestLimiter: DurableRateLimiter;
@@ -168,10 +187,20 @@ export function createNorthshelfComposition(
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 
+  const mailWorker = identity.createMailWorker({
+    workerId: options.mailDelivery.workerId ?? 'northshelf-identity-mail',
+    provider: options.mailDelivery.provider,
+    reconciliation: options.mailDelivery.reconciliation,
+    renderer: options.mailDelivery.renderer,
+    leaseMilliseconds: 30_000,
+    acceptedCallbackMilliseconds: 5 * 60_000,
+  });
+
   return Object.freeze({
     store,
     identity,
     sessions,
+    mailWorker,
     registrationLimiter,
     authenticationLimiter,
     emailCodeRequestLimiter,
