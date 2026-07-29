@@ -16,6 +16,13 @@ The stack runs in production behind retiregolden.org (Azure). This site
 deploys on Cloudflare from a public repo (pegma-dev/pegma.dev) as the second
 reference environment.
 
+## Get started
+
+- [Get started](https://pegma.dev/start): put Pegma in a coding agent —
+  install the skill (skill.md), fetch catalog.json for facts and pins,
+  optionally wire the MCP endpoint — then assemble from the scaffold or a green
+  recipe.
+
 ## Components
 
 - [Spine](https://github.com/pegma-dev/spine): @pegma/spine — shared
@@ -105,6 +112,8 @@ status, design decisions, and non-goals.
 
 ## Site
 
+- [Get started](https://pegma.dev/start): the install hub — skill, catalog,
+  optional MCP, first prompt.
 - [The stack](https://pegma.dev/stack): every component — owns, refuses,
   status, links.
 - [Roadmap](https://pegma.dev/roadmap): the aggregate view; status compiled

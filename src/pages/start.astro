@@ -1,0 +1,135 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Get started — Pegma"
+  description="Put Pegma in your coding agent: install the assembly skill, point at catalog.json, optionally wire MCP, then assemble from a scaffold or a green recipe."
+>
+  <section class="hero">
+    <h1>Use Pegma with your coding agent</h1>
+    <p class="lede">
+      Pegma is assembled, not hand-installed: you teach your agent — Claude Code,
+      Cursor, Codex, Grok Build, or anything that reads a markdown skill — how to
+      compose <code>@pegma/*</code> packages, and it does the wiring. Two steps,
+      an optional third, then a first prompt.
+    </p>
+    <p class="notice">
+      An untrained agent will regenerate sessions, identity, and rate limits from
+      scratch. A trained one composes tested packages and pins exact versions.
+      The whole difference is one markdown file and one JSON URL.
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>1. Install the assembly skill</h2>
+    <p>
+      The skill is a short judgment document — assemble over generate, explicit
+      composition root, refusals as hard constraints. It deliberately
+      holds <strong>no package versions</strong>; those live in the catalog
+      (step 2). There is no universal skill registry, so use whichever path your
+      tool supports. The document is plain markdown either
+      way: <a href="/skill.md"><code>https://pegma.dev/skill.md</code></a>
+    </p>
+
+    <h3>Skills directory (Claude Code, Grok Build, and similar)</h3>
+    <p>
+      Tools in this family treat a project directory
+      containing <code>SKILL.md</code> (with YAML frontmatter — keep it) as an
+      installable skill. From your project root:
+    </p>
+    <pre><code>mkdir -p .claude/skills/pegma
+curl -fsSL https://pegma.dev/skill.md -o .claude/skills/pegma/SKILL.md</code></pre>
+    <pre><code>mkdir -p .grok/skills/pegma
+curl -fsSL https://pegma.dev/skill.md -o .grok/skills/pegma/SKILL.md</code></pre>
+    <p>
+      Tools that use a generic agent directory follow the same shape, for
+      example <code>.agents/skills/pegma/SKILL.md</code>.
+    </p>
+
+    <h3>Rules file (Cursor, Codex, and similar)</h3>
+    <p>
+      If your tool reads project rules or custom instructions instead of a
+      skills directory, paste the body of <a href="/skill.md">skill.md</a> into
+      that file — a Cursor project rule, an <code>AGENTS.md</code>, or the
+      agent's system instructions. Keep the catalog URL in the text so the agent
+      re-fetches facts instead of caching versions in the prompt.
+    </p>
+    <p>
+      Longer notes — plugin wrappers and per-tool details — are on
+      the <a href="/skill">skill page</a>.
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>2. Point at the catalog</h2>
+    <p>
+      <a href="/catalog.json"><code>https://pegma.dev/catalog.json</code></a> is
+      the machine-readable source of truth: components, exact npm pins when
+      known, what each package owns and <strong>refuses</strong>, adapters, and
+      recipe intents with fixture citations. The skill tells the agent to fetch
+      it at the start of every assembly task — versions are never hardcoded in
+      the skill, so a stale skill install cannot pin stale packages.
+    </p>
+    <p>
+      Nothing to configure here. Just don't defeat it: if you paste the skill
+      into a rules file, leave the catalog URL intact.
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>3. Optional: wire the MCP server</h2>
+    <p>
+      The same catalog facts are available as MCP tools over Streamable HTTP
+      at <code>https://pegma.dev/api/mcp</code> — public reads, no auth, no
+      private data plane. Useful when your agent prefers tool calls over
+      fetching JSON:
+    </p>
+    <pre><code>{`{
+  "mcpServers": {
+    "pegma": {
+      "url": "https://pegma.dev/api/mcp"
+    }
+  }
+}`}</code></pre>
+    <p>
+      Clients without native remote MCP can proxy
+      with <code>npx mcp-remote https://pegma.dev/api/mcp</code>. Tool list and
+      details are on the <a href="/skill">skill page</a>. Skipping this step is
+      fine — the catalog URL alone is enough.
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>4. Assemble something</h2>
+    <p>Hand your agent a real task. A good first prompt:</p>
+    <pre><code>Assemble a Cloudflare Worker with passkey accounts using Pegma.
+Fetch https://pegma.dev/catalog.json first. Pin exact versions.
+Do not invent passwords.</code></pre>
+    <p>
+      That exercises the whole path: the skill's judgment, the catalog's pins,
+      a green recipe
+      (<a href="/examples#cf-passkey-accounts">accounts on a Cloudflare-shaped
+      host</a>), and a refusal — Identity is passkeys-first and refuses
+      passwords outright.
+    </p>
+    <p>Two starting points, both CI-tested:</p>
+    <ul>
+      <li>
+        <strong>Scaffold</strong> — an empty-ish Cloudflare-shaped composition
+        root to
+        modify: <a href="https://github.com/pegma-dev/pegma.dev/tree/main/recipes/scaffold-cf-minimal"
+          ><code>recipes/scaffold-cf-minimal</code></a
+        >. Wiring happens in one explicit place; pin versions from the catalog.
+      </li>
+      <li>
+        <strong>Green recipes</strong> — full composition fixtures on
+        the <a href="/examples">examples page</a>, each quoting its tested
+        source. Agents should quote these rather than invent wiring.
+      </li>
+    </ul>
+    <p>
+      Related: <a href="/skill">skill install notes</a> · <a href="/catalog.json">catalog.json</a> · <a href="/examples">examples</a> · <a href="/stack">the stack</a> · <a href="/llms.txt">llms.txt</a>
+    </p>
+  </section>
+</Base>
