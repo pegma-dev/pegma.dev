@@ -35,7 +35,11 @@ import {
   type StoredRecord,
 } from '@pegma/storage-core';
 
-/** One collection, one partition per loan — the only atomic scope. */
+/**
+ * One collection, one partition per desk (`desk|{deskId}`).
+ * All loan, audit, and mail rows for that desk share the only atomic scope
+ * Storage Core offers (single collection + single partition).
+ */
 export type YardLoanRecord =
   | {
       readonly kind: 'loan';
