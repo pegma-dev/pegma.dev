@@ -2,11 +2,22 @@
 
 ## Status
 
-**Stage:** Planning. No catalog schema, hosted skill, MCP surface, or recipe
-package exists yet. This document is the working plan for closing the gap
-between what AI coding agents tend to do (regenerate common backend
-functions as bespoke code) and what the Pegma stack already packages
-(typed, tested, pin-able components).
+**Stage:** Phase 0 complete (schema + gap inventory + recipe backlog). No
+compiled `catalog.json`, hosted skill, MCP surface, or recipe fixture package
+exists yet. This document is the working plan for closing the gap between what
+AI coding agents tend to do (regenerate common backend functions as bespoke
+code) and what the Pegma stack already packages (typed, tested, pin-able
+components).
+
+**Phase 0 artifacts:**
+
+| Artifact | Path |
+| --- | --- |
+| TypeScript schema | `src/data/catalog-schema.ts` |
+| Schema documentation | `docs/catalog/SCHEMA.md` |
+| Registry gap inventory | `docs/catalog/GAP_INVENTORY.md` |
+| Prioritized recipe backlog | `docs/catalog/RECIPE_BACKLOG.md` |
+| Example catalog (illustrative) | `docs/catalog/example-catalog.json` |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -215,7 +226,7 @@ recipe fixture, not a branded product clone.
 
 ## Phased delivery
 
-### Phase 0 — Catalog schema and gap inventory ✓-ready to start
+### Phase 0 — Catalog schema and gap inventory ✓ complete
 
 Define the catalog schema (TypeScript types + example JSON) in this repo or
 a small public agent-facing package. Inventory current registry fields vs.
@@ -225,6 +236,11 @@ rate-limit, authorization-identity, health, logger adapters, audit).
 
 **Exit:** schema documented; recipe backlog prioritized; no production
 architecture disclosure in any recipe intent.
+
+**Done:** schema 0.1.0 in `src/data/catalog-schema.ts` with docs under
+`docs/catalog/`; gap inventory maps `PegmaComponent` → catalog fields; recipe
+backlog prioritizes P1 `cf-passkey-accounts` and P2 `storage-audit-mail-outbox`
+(synthetic intents only); deferred recipes gated on unpublished packages.
 
 ### Phase 1 — Compiled catalog artifact
 
@@ -343,17 +359,23 @@ Pegma’s scope:
 
 ## Open questions
 
-- **Catalog compile home:** site build only vs. small shared package used
-  by site and MCP.
-- **Version authority:** registry snapshot vs. release-projection Store vs.
-  npm at compile time (or a combination with clear precedence).
-- **Recipe repo layout:** monorepo fixtures vs. one examples repository.
-- **`plan_composition` input shape:** free text tags vs. structured
-  capability flags (structured is easier to keep deterministic).
+Phase 0 recommendations (not irreversible) are recorded in
+`docs/catalog/GAP_INVENTORY.md` under “Decisions locked for Phase 1 compile.”
+
+- **Catalog compile home:** ~~site build only vs. small shared package~~ →
+  **prefer site build first**; extract a package only if MCP cannot fetch the
+  static catalog cleanly.
+- **Version authority:** ~~registry prose vs Store vs npm~~ → **precedence:**
+  release-projection Store when present → npm at compile time → else
+  `version: null` / unpublished (never parse versions from `now` prose).
+- **Recipe repo layout:** monorepo fixtures vs. one examples repository
+  (still open for Phase 2; backlog citations are layout-agnostic).
+- **`plan_composition` input shape:** ~~free text vs structured~~ →
+  **structured `capabilityTags`** (see schema).
 - **Skill packaging:** single canonical markdown vs. thin per-tool wrappers
-  that only differ in install paths.
+  that only differ in install paths. (Phase 3)
 - **MCP hosting:** extend `pegma-dev-api` vs. separate Worker to keep the
-  account API’s privilege surface small.
+  account API’s privilege surface small. (Phase 4)
 
 ## Implementation note
 

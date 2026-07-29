@@ -1,0 +1,294 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-07-28T00:00:00.000Z",
+  "snapshotDate": "2026-07-28",
+  "components": [
+    {
+      "id": "spine",
+      "title": "Spine",
+      "repo": "spine",
+      "packages": [
+        {
+          "name": "@pegma/spine",
+          "version": "0.1.1",
+          "published": true,
+          "npmUrl": "https://www.npmjs.com/package/@pegma/spine"
+        }
+      ],
+      "status": "published",
+      "publishUsability": "usable",
+      "summary": "The small, stable contracts every component shares.",
+      "owns": [
+        "PrincipalId and IsoTimestamp — shared identity and time types",
+        "Clock — time as an injected, test-replaceable input",
+        "Logger — a one-method structured logging port",
+        "Typed event declarations and a best-effort in-process bus"
+      ],
+      "refuses": [
+        "Durable events — anything that must survive a crash goes to a storage-backed outbox, never the in-process bus",
+        "Growth — the more spine changes, the more the ecosystem churns"
+      ],
+      "dependencies": [],
+      "adapters": [],
+      "hostMustProvide": [
+        "Composition-root wiring for Clock, Logger, and any in-process bus subscribers"
+      ],
+      "capabilityTags": ["logging", "events_in_process"],
+      "recipeIds": [
+        "cf-passkey-accounts",
+        "storage-audit-mail-outbox",
+        "health-public-liveness",
+        "logger-tee-composition"
+      ],
+      "links": {
+        "githubRepo": "https://github.com/pegma-dev/spine",
+        "readme": "https://github.com/pegma-dev/spine#readme",
+        "npm": "https://www.npmjs.com/package/@pegma/spine"
+      },
+      "now": "0.1.1 on npm; deliberately close to frozen."
+    },
+    {
+      "id": "storage-core",
+      "title": "Storage Core",
+      "repo": "storage-core",
+      "packages": [
+        {
+          "name": "@pegma/storage-core",
+          "version": "0.4.0",
+          "published": true,
+          "npmUrl": "https://www.npmjs.com/package/@pegma/storage-core"
+        },
+        {
+          "name": "@pegma/storage-azure-tables",
+          "version": "0.4.0",
+          "published": true,
+          "npmUrl": "https://www.npmjs.com/package/@pegma/storage-azure-tables"
+        },
+        {
+          "name": "@pegma/storage-cloudflare-d1",
+          "version": "0.4.0",
+          "published": true,
+          "npmUrl": "https://www.npmjs.com/package/@pegma/storage-cloudflare-d1"
+        }
+      ],
+      "status": "published",
+      "publishUsability": "usable",
+      "summary": "Persistence without the component knowing what the database is.",
+      "owns": [
+        "Declared collections with codecs — schema-agnostic on purpose",
+        "update deciders re-run against fresh state on every conflict",
+        "Single-collection, single-partition transactions"
+      ],
+      "refuses": [
+        "Server-side queries and secondary indexes",
+        "Cross-partition anything"
+      ],
+      "dependencies": [
+        {
+          "componentId": "spine",
+          "kind": "requires",
+          "note": "Shared contracts and logging port"
+        }
+      ],
+      "adapters": [
+        {
+          "id": "memory",
+          "packageName": "@pegma/storage-core",
+          "host": "memory",
+          "when": "Tests and local sketches; not a production durability claim"
+        },
+        {
+          "id": "azure-tables",
+          "packageName": "@pegma/storage-azure-tables",
+          "host": "azure",
+          "when": "Azure-hosted apps that want the Tables adapter"
+        },
+        {
+          "id": "cloudflare-d1",
+          "packageName": "@pegma/storage-cloudflare-d1",
+          "host": "cloudflare",
+          "when": "Cloudflare Workers/Pages with D1"
+        }
+      ],
+      "hostMustProvide": [
+        "Chosen adapter binding (e.g. D1 database, Azure connection)",
+        "Collection declarations and codecs"
+      ],
+      "capabilityTags": ["storage", "cloudflare", "azure"],
+      "recipeIds": [
+        "cf-passkey-accounts",
+        "storage-audit-mail-outbox",
+        "durable-auth-rate-limits"
+      ],
+      "links": {
+        "githubRepo": "https://github.com/pegma-dev/storage-core",
+        "readme": "https://github.com/pegma-dev/storage-core#readme",
+        "npm": "https://www.npmjs.com/package/@pegma/storage-core"
+      },
+      "now": "0.4.0 on npm with Azure Tables and Cloudflare D1 adapters."
+    },
+    {
+      "id": "webhooks",
+      "title": "Webhooks",
+      "repo": "webhooks",
+      "packages": [
+        {
+          "name": "@pegma/webhooks",
+          "version": null,
+          "published": false
+        }
+      ],
+      "status": "in_development",
+      "publishUsability": "unpublished",
+      "summary": "Inbound webhook receipts: idempotent dedup, poison quarantine, retention.",
+      "owns": [
+        "One receipt per provider event id",
+        "Quarantine-then-acknowledge after bounded failures"
+      ],
+      "refuses": [
+        "Exactly-once delivery",
+        "Storing payloads — receipts hold ids and counters, never customer data"
+      ],
+      "dependencies": [
+        {
+          "componentId": "storage-core",
+          "kind": "requires"
+        },
+        {
+          "componentId": "spine",
+          "kind": "requires"
+        }
+      ],
+      "adapters": [],
+      "hostMustProvide": [
+        "HTTP endpoint and provider signature verification",
+        "Storage binding for the receipt ledger"
+      ],
+      "capabilityTags": ["webhooks_inbound"],
+      "recipeIds": ["inbound-webhook-receipts"],
+      "links": {
+        "githubRepo": "https://github.com/pegma-dev/webhooks",
+        "plan": "https://github.com/pegma-dev/webhooks/blob/main/docs/PROJECT_PLAN.md"
+      },
+      "now": "Unpublished; not usable for production assembly."
+    }
+  ],
+  "recipes": [
+    {
+      "id": "cf-passkey-accounts",
+      "intent": "A small Cloudflare Worker host for a fictional community library (Northshelf Branch) offers first-party accounts: passkey sign-in, email one-time codes for enrollment and recovery, server-side sessions, and durable rate limits on expensive auth paths. No passwords.",
+      "packages": [
+        "@pegma/identity",
+        "@pegma/sessions",
+        "@pegma/mail",
+        "@pegma/rate-limit",
+        "@pegma/authorization-identity",
+        "@pegma/storage-core",
+        "@pegma/storage-cloudflare-d1",
+        "@pegma/spine"
+      ],
+      "adapters": ["cloudflare-d1"],
+      "hostResponsibilities": [
+        "HTTP routes and cookie/session boundary",
+        "WebAuthn relying-party configuration",
+        "Email provider adapter and DNS",
+        "Secrets and any account UI"
+      ],
+      "nonGoals": [
+        "Social login",
+        "OIDC server for third parties",
+        "Passwords",
+        "Multi-tenant organizations"
+      ],
+      "antiPatterns": [
+        "Password table or reset flow",
+        "Durable events on Spine in-process bus",
+        "Mail package owning its own outbox store"
+      ],
+      "fixture": {
+        "kind": "pending",
+        "citation": "docs/catalog/RECIPE_BACKLOG.md#p1--cf-passkey-accounts-first-end-to-end-accounts-recipe",
+        "status": "pending"
+      },
+      "capabilityTags": [
+        "accounts",
+        "passkeys",
+        "email_codes",
+        "sessions",
+        "authorization",
+        "mail_transactional",
+        "rate_limit_durable",
+        "storage",
+        "cloudflare"
+      ],
+      "requiresPublished": [
+        "identity",
+        "sessions",
+        "mail",
+        "rate-limit",
+        "authorization-core",
+        "storage-core",
+        "spine"
+      ],
+      "backlogPriority": 1
+    },
+    {
+      "id": "storage-audit-mail-outbox",
+      "intent": "A fictional equipment checkout service (Yard Loan) records inventory mutations in Storage Core and, in the same single-partition transaction, appends an audit row and enqueues a transactional mail delivery job.",
+      "packages": [
+        "@pegma/storage-core",
+        "@pegma/audit",
+        "@pegma/mail",
+        "@pegma/spine"
+      ],
+      "adapters": ["memory"],
+      "hostResponsibilities": [
+        "Collection declarations",
+        "Transaction boundary",
+        "Outbox collection in host storage",
+        "Mail provider and delivery worker schedule"
+      ],
+      "nonGoals": [
+        "Mail-owned outbox store",
+        "Audit-owned store",
+        "Cross-partition transactions"
+      ],
+      "antiPatterns": [
+        "Send email after commit without an outbox job in the same transaction",
+        "Audit write outside the caller transact"
+      ],
+      "fixture": {
+        "kind": "pending",
+        "citation": "docs/catalog/RECIPE_BACKLOG.md#p2--storage-audit-mail-outbox-storage--auditmail-pattern",
+        "status": "pending"
+      },
+      "capabilityTags": ["storage", "audit", "mail_transactional"],
+      "requiresPublished": ["storage-core", "audit", "mail", "spine"],
+      "backlogPriority": 2
+    },
+    {
+      "id": "inbound-webhook-receipts",
+      "intent": "A fictional donation platform (Copper Plate) records inbound provider webhook receipts with idempotent dedup and poison quarantine. Receipts hold ids and counters, never payloads.",
+      "packages": ["@pegma/webhooks", "@pegma/storage-core", "@pegma/spine"],
+      "adapters": [],
+      "hostResponsibilities": [
+        "HTTP endpoint",
+        "Provider signature verification",
+        "Storage for the receipt ledger"
+      ],
+      "nonGoals": ["Exactly-once delivery", "Payload archival in the receipt ledger"],
+      "antiPatterns": [
+        "Claiming exactly-once processing",
+        "Storing full webhook bodies in receipts"
+      ],
+      "fixture": {
+        "kind": "pending",
+        "citation": "docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts-when-pegmawebhooks-is-published",
+        "status": "none"
+      },
+      "capabilityTags": ["webhooks_inbound"],
+      "requiresPublished": ["webhooks", "storage-core", "spine"],
+      "backlogPriority": 90
+    }
+  ]
+}
