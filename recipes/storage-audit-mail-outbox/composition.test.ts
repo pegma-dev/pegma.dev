@@ -1,4 +1,5 @@
 import type { PrincipalId } from '@pegma/spine';
+import { createMemoryStore } from '@pegma/storage-core';
 import { describe, expect, it } from 'vitest';
 import {
   checkoutEquipment,
@@ -10,9 +11,14 @@ const DESK = 'desk_main';
 const PARTITION = yardLoanPartition(DESK);
 const WHEN = '2026-07-29T15:00:00.000Z';
 
+/** Explicit memory store for tests — production injects a durable adapter. */
+function makeComposition() {
+  return createYardLoanComposition(DESK, createMemoryStore());
+}
+
 describe('storage-audit-mail-outbox (Yard Loan)', () => {
   it('commits loan, audit, and mail job in one single-partition transaction', async () => {
-    const composition = createYardLoanComposition(DESK);
+    const composition = makeComposition();
 
     const result = await checkoutEquipment(composition, {
       itemId: 'ladder-12ft',
@@ -56,7 +62,7 @@ describe('storage-audit-mail-outbox (Yard Loan)', () => {
   });
 
   it('leaves no orphan audit or mail when the transaction rolls back', async () => {
-    const composition = createYardLoanComposition(DESK);
+    const composition = makeComposition();
 
     // Seed an existing loan so a second insert of the same item is refused.
     await composition.records.put({

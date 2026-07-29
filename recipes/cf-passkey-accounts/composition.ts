@@ -27,7 +27,7 @@ import {
 } from '@pegma/rate-limit';
 import { createSessionStore, type SessionStore } from '@pegma/sessions';
 import { systemClock, type Clock, type Logger, type PrincipalId } from '@pegma/spine';
-import { createMemoryStore, type Store } from '@pegma/storage-core';
+import type { Store } from '@pegma/storage-core';
 
 /** Fictional relying-party surface for the Northshelf Branch library. */
 export const NORTHSHELF_RP = {
@@ -38,8 +38,12 @@ export const NORTHSHELF_RP = {
 } as const;
 
 export interface NorthshelfCompositionOptions {
-  /** Injected store. Production: D1 adapter. Tests: memory. */
-  readonly store?: Store;
+  /**
+   * Required injected store. Production hosts pass a durable adapter
+   * (e.g. Cloudflare D1). Tests pass `createMemoryStore()` explicitly —
+   * memory is never the silent default.
+   */
+  readonly store: Store;
   /**
    * Base64-encoded email-code HMAC secret (≥32 raw bytes).
    * Host-managed; never generated at process start in production.
@@ -112,7 +116,7 @@ function durableLimiter(
 export function createNorthshelfComposition(
   options: NorthshelfCompositionOptions,
 ): NorthshelfComposition {
-  const store = options.store ?? createMemoryStore();
+  const store = options.store;
   // Live clock by default so production-shaped hosts expire challenges/sessions.
   // Tests inject fixedClock when they need deterministic timestamps.
   const clock = options.clock ?? systemClock;

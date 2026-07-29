@@ -29,7 +29,6 @@ import {
 } from '@pegma/mail';
 import type { IsoTimestamp, PrincipalId } from '@pegma/spine';
 import {
-  createMemoryStore,
   defineCollection,
   type CollectionStore,
   type Store,
@@ -152,10 +151,13 @@ export interface CheckoutInput {
 
 /**
  * Explicit composition root for one Yard Loan desk partition.
+ *
+ * `store` is required. Production hosts inject a durable adapter; tests pass
+ * `createMemoryStore()` explicitly so memory is never a silent default.
  */
 export function createYardLoanComposition(
   deskId: string,
-  store: Store = createMemoryStore(),
+  store: Store,
 ): YardLoanComposition {
   const partition = yardLoanPartition(deskId);
   const records = store.collection(yardLoanRecords);

@@ -1,4 +1,5 @@
 import { fixedClock, type PrincipalId } from '@pegma/spine';
+import { createMemoryStore } from '@pegma/storage-core';
 import { describe, expect, it } from 'vitest';
 import {
   createNorthshelfComposition,
@@ -9,9 +10,10 @@ import {
 /** Deterministic 32-byte secret, base64 — tests only. */
 const TEST_SECRET = btoa(String.fromCharCode(...new Uint8Array(32).fill(11)));
 
-/** Inject a fixed clock so expiry math stays deterministic in tests. */
+/** Explicit memory store + fixed clock — never a silent production default. */
 function makeComposition() {
   return createNorthshelfComposition({
+    store: createMemoryStore(),
     emailCodeSecretBase64: TEST_SECRET,
     clock: fixedClock('2026-07-29T12:00:00.000Z'),
   });
@@ -74,7 +76,10 @@ describe('cf-passkey-accounts (Northshelf Branch)', () => {
 
   it('refuses a missing or invalid email-code secret', () => {
     expect(() =>
-      createNorthshelfComposition({ emailCodeSecretBase64: 'short' }),
+      createNorthshelfComposition({
+        store: createMemoryStore(),
+        emailCodeSecretBase64: 'short',
+      }),
     ).toThrow(/missing or invalid/);
   });
 });

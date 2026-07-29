@@ -20,7 +20,8 @@ CI-tested composition sketches for agents. Product names and domains are
 
 ## Production vs test adapters
 
-Fixtures use `@pegma/storage-core` **memory** stores in tests so CI stays
-fast and free of cloud credentials. Recipe metadata and comments name the
-production adapter the host should choose (for example Cloudflare D1 for
-`cf-passkey-accounts`). Memory is never a durability claim.
+Composition roots **require** an injected `Store`. Tests pass
+`createMemoryStore()` explicitly so CI stays fast and free of cloud
+credentials; production hosts inject a durable adapter (for example
+Cloudflare D1 for `cf-passkey-accounts`). Memory is never a silent default
+and never a durability claim.
