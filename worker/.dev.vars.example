@@ -1,3 +1,6 @@
 # Local secrets for `wrangler dev` (never commit real values).
 # DATADOG_API_KEY=
 # DATADOG_SITE=us5.datadoghq.com
+# IDENTITY_EMAIL_CODE_SECRET_BASE64=
+# RESEND_API_KEY=
+# GITHUB_WEBHOOK_SECRET=

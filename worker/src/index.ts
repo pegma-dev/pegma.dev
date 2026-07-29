@@ -10,8 +10,14 @@ import {
   createProductionIdentityRuntime,
   type IdentityRuntimeEnv,
 } from './identity-runtime';
+import {
+  createProductionStore,
+  handleGitHubReleaseWebhook,
+  readGitHubReleaseWebhookConfig,
+  type GitHubReleaseWebhookEnv,
+} from './github-release-webhook';
 
-type AppEnv = Env & LoggerEnv & IdentityRuntimeEnv;
+type AppEnv = Env & LoggerEnv & IdentityRuntimeEnv & GitHubReleaseWebhookEnv;
 
 /**
  * Thin Workers slice that proves pegma.dev's Pegma Logger wiring:
@@ -56,10 +62,54 @@ export default {
               String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
               Boolean(env.RESEND_API_KEY),
           }),
+          createDetailCheck('githubReleaseWebhook', {
+            configured: Boolean(readGitHubReleaseWebhookConfig(env)),
+          }),
         ],
       });
       const { status, body } = toHealthResponse(result);
       return Response.json(body, { status });
+    }
+
+    if (path === '/api/webhooks/github/releases') {
+      const config = readGitHubReleaseWebhookConfig(env);
+      if (config === null) {
+        logger.log('error', 'github_release_webhook.not_configured', {});
+        return Response.json(
+          { error: 'webhook_not_configured' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
+      try {
+        return await handleGitHubReleaseWebhook({
+          request,
+          store: createProductionStore(env),
+          logger,
+          config,
+        });
+      } catch (error) {
+        logger.log('error', 'github_release_webhook.unavailable', {
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+        return Response.json(
+          { error: 'webhook_unavailable' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
     }
 
     if (path === '/api/secure' || path.startsWith('/api/identity/')) {

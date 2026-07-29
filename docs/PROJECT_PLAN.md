@@ -267,4 +267,6 @@ with a source link where not. Decide in Phase 3.
    content commit or Pages deploy per release — see
    `docs/GITHUB_RELEASE_WEBHOOK_PLAN.md`. **Phase A (2026-07-28):** vendored
    `@pegma/webhooks` artifact aligned to Storage Core `0.4.0` and proven over
-   memory + D1; handler, read API, UI, reconciliation, and activation remain.
+   memory + D1. **Phase B (2026-07-28):** signed GitHub release webhook
+   handler + current-release projection. Read API, UI, reconciliation, and
+   activation remain.
