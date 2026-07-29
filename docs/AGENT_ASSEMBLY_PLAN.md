@@ -2,13 +2,12 @@
 
 ## Status
 
-**Stage:** Phase 2 complete for required fixtures (P1 + P2 under `recipes/`).
-No hosted skill or MCP surface yet. This document is the working plan for
-closing the gap between what AI coding agents tend to do (regenerate common
-backend functions as bespoke code) and what the Pegma stack already packages
-(typed, tested, pin-able components).
+**Stage:** Phase 3 complete (hosted assembly skill). No MCP surface yet.
+This document is the working plan for closing the gap between what AI coding
+agents tend to do (regenerate common backend functions as bespoke code) and
+what the Pegma stack already packages (typed, tested, pin-able components).
 
-**Phase 0–2 artifacts:**
+**Phase 0–3 artifacts:**
 
 | Artifact | Path |
 | --- | --- |
@@ -21,6 +20,8 @@ backend functions as bespoke code) and what the Pegma stack already packages
 | Published catalog | `https://pegma.dev/catalog.json` (build emit) |
 | P1 fixture (Northshelf accounts) | `recipes/cf-passkey-accounts/` |
 | P2 fixture (Yard Loan outbox) | `recipes/storage-audit-mail-outbox/` |
+| Hosted assembly skill (raw) | `https://pegma.dev/skill.md` (`public/skill.md`) |
+| Skill install notes | `https://pegma.dev/skill` (`src/pages/skill.astro`) |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -291,12 +292,23 @@ P3–P6 remain pending. Deferred D1–D2 still wait on package publication.
 `/examples` indexes those recipes and quotes only fixture (or package
 README) sources.
 
-### Phase 3 — Hosted skill
+### Phase 3 — Hosted skill ✓
 
 Publish a stable skill document (URL + raw markdown) that encodes assembly
 judgment and the lookup workflow. Provide short install notes for common
 tools (project rules / skills directories / plugin snippets) without
 pretending one universal skill registry exists.
+
+Shipped:
+
+| Surface | Path / URL |
+| --- | --- |
+| Skill markdown | `public/skill.md` → `https://pegma.dev/skill.md` |
+| Install notes | `src/pages/skill.astro` → `https://pegma.dev/skill` |
+| Index links | `public/llms.txt`, site nav |
+
+The skill teaches judgment only; versions and package sets stay in
+`catalog.json`.
 
 **Exit:** a human can add the Pegma skill to a major coding agent in one
 sitting; the skill does not hardcode package versions.

@@ -1,0 +1,77 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Agent skill — Pegma"
+  description="Install the Pegma assembly skill in common coding agents. Judgment only — package facts live in catalog.json."
+>
+  <section class="hero">
+    <h1>Agent skill</h1>
+    <p class="lede">
+      A short, stable skill that teaches agents to <strong>assemble</strong> Pegma
+      packages instead of regenerating sessions, identity, rate limits, mail, and
+      audit. Package inventories and versions live in
+      <a href="/catalog.json"><code>catalog.json</code></a> — not in the skill.
+    </p>
+    <p class="notice">
+      Canonical raw markdown (copy or fetch):
+      <a href="/skill.md"><code>https://pegma.dev/skill.md</code></a>
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>Install notes</h2>
+    <p>
+      There is no single universal skill registry. Use whichever path your tool
+      supports; the document is plain markdown.
+    </p>
+
+    <h3>Project rules / skills directory</h3>
+    <p>
+      Copy the skill into the project agent directory under a name your tool
+      expects (examples: <code>.grok/skills/pegma/SKILL.md</code>,
+      <code>.claude/skills/pegma/SKILL.md</code>, <code>.agents/skills/pegma/SKILL.md</code>,
+      or a project <code>AGENTS.md</code> / rules file that points at the same text).
+    </p>
+    <pre><code>curl -fsSL https://pegma.dev/skill.md -o .grok/skills/pegma/SKILL.md
+# or
+curl -fsSL https://pegma.dev/skill.md -o .claude/skills/pegma/SKILL.md</code></pre>
+    <p>
+      Many tools treat a directory containing <code>SKILL.md</code> (with YAML
+      frontmatter) as an installable skill. Keep the frontmatter; do not strip it.
+    </p>
+
+    <h3>Paste into system / custom instructions</h3>
+    <p>
+      Open <a href="/skill.md">skill.md</a>, copy the body into the agent’s
+      custom instructions or project rules. Prefer linking the catalog URL so the
+      agent re-fetches facts instead of caching versions in the prompt.
+    </p>
+
+    <h3>Plugin / marketplace wrappers</h3>
+    <p>
+      If your environment uses a plugin that only differs by install path, wrap
+      this same markdown. Do not fork package facts into the wrapper — point at
+      <code>https://pegma.dev/catalog.json</code>.
+    </p>
+  </section>
+
+  <section class="example">
+    <h2>What the skill teaches</h2>
+    <ul>
+      <li>Assembly over generation</li>
+      <li>Explicit composition root; pin exact 0.x versions from the catalog</li>
+      <li>Refusals as hard constraints</li>
+      <li>Lookup: catalog → component → green recipe → fixture source</li>
+      <li>Prove with types and tests</li>
+    </ul>
+    <p>
+      Related:
+      <a href="/catalog.json">catalog.json</a> ·
+      <a href="/examples">examples</a> ·
+      <a href="/llms.txt">llms.txt</a> ·
+      <a href="/stack">stack</a>
+    </p>
+  </section>
+</Base>
