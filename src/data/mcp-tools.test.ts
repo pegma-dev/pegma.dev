@@ -187,4 +187,77 @@ describe('plan_composition', () => {
       expect.arrayContaining(['@example/store', '@example/contracts']),
     );
   });
+
+  it('keeps tag-matched components alongside a primary recipe', () => {
+    const catalog: CompositionCatalog = {
+      ...exampleCatalog,
+      components: [
+        ...exampleCatalog.components,
+        {
+          id: 'example-health',
+          title: 'Example Health',
+          repo: 'example-health',
+          packages: [
+            {
+              name: '@example/health',
+              version: '0.0.1',
+              published: true,
+            },
+          ],
+          status: 'published',
+          publishUsability: 'usable',
+          summary: 'Synthetic health probe for planner tests.',
+          owns: ['Liveness probes'],
+          refuses: ['APM'],
+          dependencies: [],
+          adapters: [],
+          hostMustProvide: ['HTTP route'],
+          capabilityTags: ['health'],
+          recipeIds: [],
+          links: { githubRepo: 'https://github.com/example/example-health' },
+        },
+      ],
+      recipes: exampleCatalog.recipes.map((r) =>
+        r.id === 'example-accounts'
+          ? { ...r, fixture: { ...r.fixture, status: 'green' as const } }
+          : r,
+      ),
+    };
+    const plan = planComposition(catalog, {
+      capabilityTags: ['accounts', 'passkeys', 'cloudflare', 'health'],
+      productionOnly: true,
+    });
+    expect(plan.recipes[0]?.id).toBe('example-accounts');
+    expect(plan.components.some((c) => c.id === 'example-health')).toBe(true);
+    expect(plan.packages.map((p) => p.name)).toContain('@example/health');
+  });
+
+  it('does not re-add host-mismatched recipe adapter pins', () => {
+    const catalog: CompositionCatalog = {
+      ...exampleCatalog,
+      recipes: exampleCatalog.recipes.map((r) =>
+        r.id === 'example-accounts'
+          ? {
+              ...r,
+              fixture: { ...r.fixture, status: 'green' as const },
+              // cloud-sql package is a cloudflare adapter on example-store
+              packages: [
+                '@example/contracts',
+                '@example/store',
+                '@example/store-cloud',
+              ],
+            }
+          : r,
+      ),
+    };
+    const plan = planComposition(catalog, {
+      capabilityTags: ['accounts', 'passkeys', 'cloudflare'],
+      host: 'azure',
+      productionOnly: true,
+    });
+    expect(plan.packages.map((p) => p.name)).not.toContain('@example/store-cloud');
+    expect(
+      plan.notes.some((n) => n.includes('skipped recipe pin @example/store-cloud')),
+    ).toBe(true);
+  });
 });

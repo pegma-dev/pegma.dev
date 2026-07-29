@@ -374,10 +374,12 @@ export function planComposition(
       if (!owner) continue;
       admitComponent(owner, `package owner for recipe ${primaryRecipe.id}`);
     }
-  } else {
-    for (const s of scoredComponents) {
-      admitComponent(s.component, 'tag match');
-    }
+  }
+
+  // Always include tag-matched components (and their requires) so requests like
+  // accounts+health keep @pegma/health even when a primary recipe is selected.
+  for (const s of scoredComponents) {
+    admitComponent(s.component, 'tag match');
   }
 
   while (queue.length > 0) {
@@ -455,6 +457,15 @@ export function planComposition(
       if (!owner) continue;
       const pkg = owner.packages.find((p) => p.name === name);
       if (!pkg) continue;
+      // Do not re-introduce host-mismatched adapter packages named by the
+      // recipe when the caller requested a different host.
+      const allowed = packagesForComponent(owner).some((p) => p.name === name);
+      if (!allowed) {
+        notes.push(
+          `skipped recipe pin ${name} for host=${input.host ?? 'any'} (adapter host mismatch)`,
+        );
+        continue;
+      }
       pushPkg(
         pkg.name,
         pinned && pinned.length > 0 ? pinned : pkg.version,
