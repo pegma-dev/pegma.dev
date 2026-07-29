@@ -268,5 +268,5 @@ with a source link where not. Decide in Phase 3.
    `docs/GITHUB_RELEASE_WEBHOOK_PLAN.md`. **Phases A–D (2026-07-28):** vendored
    `@pegma/webhooks`, signed release webhook + projection, public
    `GET /api/releases` + Stack UI, six-hour reconciliation/backfill, health
-   detail, and operator docs. **Phase E remains:** Worker secret, deploy,
-   backfill verify, organization webhook, and production smoke.
+   details, and operator docs. **Phase E remains:** Worker secret, deploy,
+   backfill verification, organization webhook, and production smoke.

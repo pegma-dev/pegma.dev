@@ -36,8 +36,9 @@ populated, stale, and unavailable states; repository links remain usable
 without JS or when the API fails.
 
 **Phase D reconciliation (2026-07-28):** Six-hour cron `0 */6 * * *` runs
-GitHub reconciliation by numeric repository ID (independent of minute
-Identity maintenance). Backfill is the same path; no Webhooks receipt rows.
+GitHub reconciliation by numeric repository ID, separately from the
+per-minute Identity maintenance job. Backfill is the same path; no Webhooks
+receipt rows.
 Authoritative apply converges missed delete/unpublish to GitHub's current
 stable. Health detail `githubReleases` exposes configuration, last webhook
 and recon times, staleness, and current count. Operator docs cover secret
