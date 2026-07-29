@@ -18,8 +18,8 @@ reference environment.
 
 ## Get started
 
-- [Get started](https://pegma.dev/start): put Pegma in a coding agent in three
-  steps — install the skill (skill.md), fetch catalog.json for facts and pins,
+- [Get started](https://pegma.dev/start): put Pegma in a coding agent —
+  install the skill (skill.md), fetch catalog.json for facts and pins,
   optionally wire the MCP endpoint — then assemble from the scaffold or a green
   recipe.
 
