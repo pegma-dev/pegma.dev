@@ -851,11 +851,13 @@ export function createSupportApi(
         const ticketId = adminMatch[1]!;
         const authenticated = await requireAuthentication(request, options);
         await requireCsrf(request, authenticated);
+        // Authorize before debiting the shared customer/staff reply limiter so
+        // non-staff sessions fail closed without mutating quota state.
+        const access = requireStaffAccess(authenticated, staffAllowlist);
         await enforceRateLimit(
           options.replyLimiter,
           authenticated.link.subject,
         );
-        const access = requireStaffAccess(authenticated, staffAllowlist);
 
         const body = exactObject(await readJson(request), ['body']);
         const messageBody = boundedString(body.body, 1, 20_000, {
@@ -886,11 +888,12 @@ export function createSupportApi(
         const ticketId = adminMatch[1]!;
         const authenticated = await requireAuthentication(request, options);
         await requireCsrf(request, authenticated);
+        // Same order as messages: staff check before shared limiter debit.
+        const access = requireStaffAccess(authenticated, staffAllowlist);
         await enforceRateLimit(
           options.replyLimiter,
           authenticated.link.subject,
         );
-        const access = requireStaffAccess(authenticated, staffAllowlist);
 
         const body = exactObject(await readJson(request), ['body']);
         const messageBody = boundedString(body.body, 1, 20_000, {
