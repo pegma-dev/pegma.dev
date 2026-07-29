@@ -64,6 +64,16 @@ reference environment.
 Each repository's docs/PROJECT_PLAN.md is the source of truth for its
 status, design decisions, and non-goals.
 
+## Composition catalog (agents)
+
+- [catalog.json](https://pegma.dev/catalog.json): machine-readable composition
+  catalog — components, exact npm pins when known, owns/refuses, dependencies,
+  adapters, and synthetic recipe intents. Compiled at site build. Unpublished
+  packages are flagged (`published: false`, `publishUsability: unpublished`).
+  Do not invent package versions; fetch this document.
+- Schema and recipe backlog (source docs):
+  https://github.com/pegma-dev/pegma.dev/tree/main/docs/catalog
+
 ## Site
 
 - [The stack](https://pegma.dev/stack): every component — owns, refuses,
