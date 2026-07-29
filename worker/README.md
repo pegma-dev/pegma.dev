@@ -195,6 +195,48 @@ public acknowledgement endpoint.
   `componentReleases` collection through `@pegma/webhooks`. Do not configure
   the GitHub organization webhook until Phase E activation.
 
+### GitHub release ingestion (operators)
+
+**Secret (never in git, Actions, Pages, health, or logs):**
+
+```sh
+npx wrangler secret put GITHUB_WEBHOOK_SECRET -c worker/wrangler.jsonc
+```
+
+Use a high-entropy random value. GitHub organization webhooks expose one active
+secret at a time — rotate by updating the Worker secret and the organization
+webhook secret in the same maintenance window.
+
+**Vars (already in `wrangler.jsonc`):** `GITHUB_ORGANIZATION_ID` (numeric) and
+`GITHUB_ALLOWED_REPOSITORY_IDS` (comma-separated numeric IDs). Names are display
+data only; IDs are the allowlist authority.
+
+**Schedules:** `* * * * *` runs Identity maintenance only. `0 */6 * * *` runs
+GitHub release reconciliation only (public `/repos/{owner}/{repo}/releases/latest`
+with conditional ETags, bounded timeouts/bodies). Reconciliation is also the
+initial backfill path; it never fabricates `@pegma/webhooks` receipt rows.
+
+**Organization webhook (Phase E):** create one org webhook subscribed only to
+`release` events, payload URL `https://pegma.dev/api/webhooks/github/releases`,
+content type `application/json`, secret matching the Worker secret. Verify
+authenticated `ping` (204) before relying on publish/redeliver.
+
+**Redelivery:** GitHub does not auto-retry failed deliveries. Use the GitHub
+webhook delivery UI/API to redeliver; the ledger acknowledges duplicates
+without re-applying a processed projection. Missed or deleted events converge
+via six-hour reconciliation without operator D1 edits.
+
+**Rollback:** disable the organization webhook first. Keep `GET /api/releases`
+serving last-known public records while investigating unless integrity is in
+doubt — then disable release rendering (Stack still shows repository links).
+Roll back the Worker version with the normal operator process; do not touch
+Identity collections to remove this feature.
+
+**Health detail `githubReleases`:** `ingestionConfigured`, `readConfigured`,
+`lastSuccessfulWebhookAt`, `lastSuccessfulReconciliationAt`,
+`reconciliationStale` (true when last success is older than seven hours or
+missing), and `currentReleaseCount`. No secrets, delivery IDs, or payloads.
+
 Example body:
 
 ```json

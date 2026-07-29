@@ -16,6 +16,11 @@ import {
   readGitHubReleaseWebhookConfig,
   type GitHubReleaseWebhookEnv,
 } from './github-release-webhook';
+import { loadReleaseHealthDetail } from './release-health';
+import {
+  RELEASE_RECONCILIATION_CRON,
+  runReleaseReconciliation,
+} from './release-reconciliation';
 import { handleGetReleases, readReleasesConfig } from './releases-api';
 
 type AppEnv = Env & LoggerEnv & IdentityRuntimeEnv & GitHubReleaseWebhookEnv;
@@ -45,6 +50,24 @@ export default {
       request.method === 'GET' &&
       (path === '/' || path === '/health' || path === '/api/health')
     ) {
+      let releaseDetail: Awaited<ReturnType<typeof loadReleaseHealthDetail>> = {
+        ingestionConfigured: Boolean(readGitHubReleaseWebhookConfig(env)),
+        readConfigured: Boolean(readReleasesConfig(env)),
+        lastSuccessfulWebhookAt: null,
+        lastSuccessfulReconciliationAt: null,
+        reconciliationStale: true,
+        currentReleaseCount: 0,
+      };
+      try {
+        releaseDetail = await loadReleaseHealthDetail(
+          createProductionStore(env),
+          env,
+        );
+      } catch (error) {
+        logger.log('error', 'releases_health.unavailable', {
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+      }
       const result = await runHealthChecks({
         service: 'pegma-dev-api',
         logger,
@@ -63,8 +86,14 @@ export default {
               String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
               Boolean(env.RESEND_API_KEY),
           }),
-          createDetailCheck('githubReleaseWebhook', {
-            configured: Boolean(readGitHubReleaseWebhookConfig(env)),
+          createDetailCheck('githubReleases', {
+            ingestionConfigured: releaseDetail.ingestionConfigured,
+            readConfigured: releaseDetail.readConfigured,
+            lastSuccessfulWebhookAt: releaseDetail.lastSuccessfulWebhookAt,
+            lastSuccessfulReconciliationAt:
+              releaseDetail.lastSuccessfulReconciliationAt,
+            reconciliationStale: releaseDetail.reconciliationStale,
+            currentReleaseCount: releaseDetail.currentReleaseCount,
           }),
         ],
       });
@@ -179,11 +208,37 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
   scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: AppEnv,
     ctx: ExecutionContext,
   ): void {
     const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
+    // Dispatch by cron expression so six-hour release reconciliation stays
+    // independent of one-minute Identity maintenance.
+    if (controller.cron === RELEASE_RECONCILIATION_CRON) {
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const releasesConfig = readReleasesConfig(env);
+            if (releasesConfig === null) {
+              logger.log('error', 'release_reconciliation.not_configured', {});
+              return;
+            }
+            await runReleaseReconciliation({
+              store: createProductionStore(env),
+              logger,
+              config: releasesConfig,
+            });
+          } catch (error) {
+            logger.log('error', 'release_reconciliation.unavailable', {
+              error: error instanceof Error ? error.name : 'unknown',
+            });
+          }
+        })(),
+      );
+      return;
+    }
+
     ctx.waitUntil(
       (async () => {
         try {
