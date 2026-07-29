@@ -773,6 +773,10 @@ export function createSupportApi(
           ['priority'],
         );
         const action = parseStaffPatchAction(body.action);
+        // priority is only meaningful for change_priority — reject silent ignore.
+        if (action !== 'change_priority' && Object.hasOwn(body, 'priority')) {
+          throw new ApiError(400, 'invalid_request');
+        }
         const commandId = mintSupportId();
         const correlationId = mintSupportId();
 
