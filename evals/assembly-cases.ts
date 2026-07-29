@@ -6,9 +6,10 @@
  * catalog.json). This measures package selection and refusal compliance
  * without hosting an LLM in Pegma.
  *
- * Baseline models an agent that never consults the catalog: empty package
- * set and no catalog refuse notes. Assertions are scored honestly against
- * that empty plan (must-include fails; pure must-not-include may pass).
+ * Offline “no-catalog” baseline: empty package set and no refuse notes
+ * (agent never fetched catalog facts). Same assertions as catalog mode.
+ * This is not a full web-search LLM A/B — it measures the planner gate
+ * against a no-catalog agent. Live multi-agent eval remains out of band.
  */
 
 import type { CapabilityTag } from '../src/data/catalog-schema';

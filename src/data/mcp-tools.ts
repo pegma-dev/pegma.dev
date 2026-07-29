@@ -132,6 +132,10 @@ function meaningfulCoverage(
   const itemCore = coreTags(itemTags);
   const reqCore = coreTags(requested);
   if (itemCore.length === 0) {
+    // Ambient-only items (e.g. static scaffold): match only ambient-only
+    // requests. Do not let `cloudflare` alone steal primary when the agent
+    // also asked for storage/accounts/etc.
+    if (reqCore.length > 0) return false;
     return tagOverlap(itemTags, requested) > 0;
   }
   const overlap = tagOverlap(itemCore, reqCore.length > 0 ? reqCore : requested);

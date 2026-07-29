@@ -364,16 +364,17 @@ Shipped:
 | CI coverage | `evals/assembly-eval.test.ts` via `npm test` / `npm run eval:assembly` |
 
 The offline harness scores `plan_composition` over the **compiled** catalog
-against the prompt set. Baseline is an empty plan (agent never fetches the
-catalog): same package/refusal assertions, scored honestly — not forced to
-zero. Catalog mode must beat baseline pass rate. Full multi-agent LLM A/B
-(web search vs skill+catalog+MCP) remains optional outside CI.
+against the prompt set. Offline baseline is a **no-catalog** empty plan
+(agent never fetches catalog facts): same package/refusal assertions, scored
+honestly. Catalog mode must beat that pass rate. That is the automated gate;
+full multi-agent LLM A/B (web search vs skill+catalog+MCP) remains optional
+outside CI and is not claimed by the unit harness alone.
 
 **Exit:** measured improvement when skill + catalog (+ MCP if present) are
 enabled vs. baseline agent with only web search.
 
-**Done:** compiled-catalog planner pass rate > baseline on the four Phase 5
-prompts; scaffold fixture is green and cited from the catalog.
+**Done:** compiled-catalog planner pass rate > offline no-catalog baseline on
+the four Phase 5 prompts; scaffold fixture is green and cited from the catalog.
 
 ## Non-goals
 

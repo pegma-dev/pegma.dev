@@ -2,25 +2,19 @@
  * Recipe / scaffold: scaffold-cf-minimal
  *
  * Synthetic starter: “Glass Wing” — a fictional static museum site Worker
- * with an explicit composition root and optional public health probe.
- * Empty-ish on purpose: agents modify this skeleton instead of inventing
- * composition from scratch.
+ * with an explicit composition root. Empty-ish on purpose: agents modify
+ * this skeleton instead of inventing composition from scratch.
  *
- * Known-good pins (align with catalog.json at scaffold time):
+ * Known-good pins (align with catalog.json / recipe packages):
  *   @pegma/spine@0.1.1
- *   @pegma/health@0.1.1
+ *
+ * Optional health: host may add @pegma/health later; this fixture does not
+ * import it so the catalog package list (spine only) stays honest.
  *
  * Not a branded product clone. No accounts, storage, or mail unless the
  * agent deliberately adds them from the catalog.
  */
 
-import {
-  createDetailCheck,
-  createProcessCheck,
-  runHealthChecks,
-  toHealthResponse,
-  type HealthResult,
-} from '@pegma/health';
 import {
   systemClock,
   type Clock,
@@ -36,7 +30,11 @@ export const GLASS_WING = {
 export interface GlassWingCompositionOptions {
   readonly clock?: Clock;
   readonly logger?: Logger;
-  /** When true, include a process health check only (no storage ping). */
+  /**
+   * When true, expose a minimal host-owned liveness handler that does **not**
+   * depend on @pegma/health — teaches the composition-root shape only.
+   * For production probes, prefer composing @pegma/health at the host.
+   */
   readonly withHealth?: boolean;
 }
 
@@ -54,12 +52,6 @@ export interface GlassWingComposition {
   }>;
 }
 
-const silentLogger: Logger = {
-  log() {
-    /* scaffold: host replaces Logger at the composition root */
-  },
-};
-
 /**
  * Explicit composition root for a minimal Cloudflare-shaped Worker host.
  * Wire packages here — do not autodiscover.
@@ -75,26 +67,23 @@ export function createGlassWingComposition(
     return { clock, logger, withHealth: false };
   }
 
-  const healthLogger = logger ?? silentLogger;
-
   return {
     clock,
     logger,
     withHealth: true,
     health: async () => {
-      const result: HealthResult = await runHealthChecks({
-        service: GLASS_WING.service,
-        logger: healthLogger,
-        checks: [
-          createProcessCheck(),
-          createDetailCheck('scaffold', {
-            synthetic: true,
-            site: GLASS_WING.siteOrigin,
-          }),
-        ],
-      });
-      const { status, body } = toHealthResponse(result);
-      return { status, body };
+      // Minimal host-owned probe — not @pegma/health. Agents that want
+      // composable probes should install and wire @pegma/health from the catalog.
+      return {
+        status: 200,
+        body: {
+          service: GLASS_WING.service,
+          status: 'ok',
+          scaffold: true,
+          site: GLASS_WING.siteOrigin,
+          now: clock.now(),
+        },
+      };
     },
   };
 }

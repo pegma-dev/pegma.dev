@@ -2,8 +2,9 @@
  * Offline eval runner: score plan_composition against ASSEMBLY_EVAL_CASES.
  *
  * - catalog mode: planComposition over a CompositionCatalog
- * - baseline mode: empty package set + no refuse notes (agent never fetched
- *   the catalog). Same assertions as catalog mode — not a forced all-fail.
+ * - baseline mode (“no-catalog”): empty package set + no refuse notes.
+ *   Same assertions as catalog mode — not a forced all-fail, and not a
+ *   simulated web-search LLM. Live multi-agent A/B remains out of band.
  */
 
 import type { CompositionCatalog } from '../src/data/catalog-schema';

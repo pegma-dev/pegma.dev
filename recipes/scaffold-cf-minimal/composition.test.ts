@@ -12,7 +12,7 @@ describe('scaffold-cf-minimal (Glass Wing)', () => {
     expect(composition.clock.now()).toBe('2026-07-29T00:00:00.000Z');
   });
 
-  it('optionally exposes a public health probe at the composition root', async () => {
+  it('optionally exposes a host-owned liveness handler without @pegma/health', async () => {
     const composition = createGlassWingComposition({
       clock: fixedClock('2026-07-29T00:00:00.000Z'),
       withHealth: true,
@@ -20,10 +20,11 @@ describe('scaffold-cf-minimal (Glass Wing)', () => {
     expect(composition.withHealth).toBe(true);
     expect(composition.health).toBeTypeOf('function');
     const res = await composition.health!();
-    expect(res.status).toBeGreaterThanOrEqual(200);
-    expect(res.status).toBeLessThan(600);
+    expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       service: GLASS_WING.service,
+      status: 'ok',
+      scaffold: true,
     });
   });
 
