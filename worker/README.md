@@ -165,6 +165,27 @@ must remain disabled until the host also has an authenticated, audited
 operator acknowledgement workflow; this Worker intentionally exposes no
 public acknowledgement endpoint.
 
+## Support Desk composition
+
+Authenticated product feedback uses exact `@pegma/support-desk-*@0.1.0` over
+the same `IDENTITY_DB` D1 binding. Support Desk collections
+(`support-desk.*.v1`) and host cursor collection
+`pegma-dev-support-maintenance` are isolated from Identity mail cursors and
+session rows. Customer permissions are granted to any authenticated account
+via AccessContext defaults (not a paid entitlement). Categories:
+`feedback`, `bug`, `feature_request`, `documentation`, `question`. Subject
+marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/{ticketId}`.
+
+Create and reply use durable rate limits `pegma.support.ticket.create` and
+`pegma.support.ticket.reply`. Minute maintenance runs queue repair and
+inactive projection sweep with independent cursors. Notifications on
+create/reply are omitted in this slice; Pegma templates are composed for a
+later mail activation. Health lists Support Desk package detail without
+message content; set `SUPPORT_HEALTH_PROBE=true` only when an explicit store
+probe is wanted.
+
+See `docs/SUPPORT_COMPOSITION.md`.
+
 ## Endpoints
 
 - `GET /`, `GET /health`, or `GET /api/health` — JSON from `@pegma/health`
@@ -183,6 +204,12 @@ public acknowledgement endpoint.
 - `POST /api/identity/email-code/sign-in/options|verify` — enumeration-safe
   fallback sign-in.
 - `POST /api/identity/logout` — server-side revocation and cookie expiry.
+- `GET /api/support/categories` — authenticated category allowlist.
+- `GET /api/support/tickets` — list the caller's tickets.
+- `POST /api/support/tickets` — create a ticket (CSRF + durable rate limit).
+- `GET /api/support/tickets/:id` — read an owned ticket; missing and non-owned
+  tickets share one content-free `404`.
+- `POST /api/support/tickets/:id/replies` — customer reply (CSRF + rate limit).
 - `GET /api/releases` — public current-stable release summaries for allowlisted
   Pegma repositories, in component-registry order. JSON schema
   `pegma.releases.v1`; short public cache (`max-age=300`) and `ETag`; no

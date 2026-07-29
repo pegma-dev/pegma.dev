@@ -1,0 +1,92 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Feedback — Pegma"
+  description="Submit private product feedback for pegma.dev. Authenticated accounts only."
+>
+  <section class="account-hero">
+    <p class="eyebrow">Authenticated product feedback</p>
+    <h1>Feedback</h1>
+    <p class="lede">
+      Signed-in accounts can open private tickets for product feedback, bugs,
+      feature requests, documentation issues, and questions. Tickets stay private
+      to you and authorized operators — they are not published to the roadmap or
+      GitHub Issues.
+    </p>
+  </section>
+
+  <div id="feedback-status" class="notice" role="status" aria-live="polite">
+    Checking your session…
+  </div>
+
+  <section id="feedback-signed-out" class="account-panel" hidden>
+    <h2>Sign in required</h2>
+    <p>
+      Product feedback uses your pegma.dev account session. Sign in with a passkey
+      or email code first.
+    </p>
+    <p>
+      <a href="/account">Go to account sign-in</a>
+    </p>
+  </section>
+
+  <section id="feedback-signed-in" class="account-panel" hidden>
+    <div class="account-heading">
+      <div>
+        <p class="eyebrow">Signed in</p>
+        <h2 id="feedback-email"></h2>
+      </div>
+      <a class="secondary-button" href="/account">Account</a>
+    </div>
+
+    <h3>New ticket</h3>
+    <form id="create-ticket" class="account-form">
+      <label for="ticket-category">Category</label>
+      <select id="ticket-category" name="category" required>
+        <option value="feedback">Feedback</option>
+        <option value="bug">Bug</option>
+        <option value="feature_request">Feature request</option>
+        <option value="documentation">Documentation</option>
+        <option value="question">Question</option>
+      </select>
+
+      <label for="ticket-subject">Subject</label>
+      <input
+        id="ticket-subject"
+        name="subject"
+        type="text"
+        maxlength="200"
+        required
+        autocomplete="off"
+      />
+
+      <label for="ticket-body">Details</label>
+      <textarea
+        id="ticket-body"
+        name="body"
+        rows="8"
+        maxlength="20000"
+        required
+      ></textarea>
+
+      <div class="account-inline">
+        <button type="submit">Submit ticket</button>
+      </div>
+      <p class="form-note">
+        Ticket numbers use a <code>[PEG-…]</code> marker. Content is retained for
+        operational support and is not made public automatically.
+      </p>
+    </form>
+
+    <h3>Your tickets</h3>
+    <ul id="ticket-list" class="ticket-list"></ul>
+  </section>
+
+  <noscript>
+    <p class="notice">Feedback requires JavaScript and a signed-in account session.</p>
+  </noscript>
+
+  <script is:inline type="module" src="/feedback.js"></script>
+</Base>

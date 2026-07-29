@@ -1,0 +1,51 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+
+<Base
+  title="Ticket — Pegma"
+  description="View and reply to your private pegma.dev feedback ticket."
+>
+  <section class="account-hero">
+    <p class="eyebrow">Your ticket</p>
+    <h1 id="ticket-heading">Loading…</h1>
+    <p class="lede">
+      Private conversation for ticket
+      <code id="ticket-id-display">…</code>. Only you and authorized operators can
+      read this thread.
+    </p>
+  </section>
+
+  <div id="ticket-status" class="notice" role="status" aria-live="polite">
+    Loading ticket…
+  </div>
+
+  <section id="ticket-signed-out" class="account-panel" hidden>
+    <h2>Sign in required</h2>
+    <p>
+      <a href="/account">Sign in</a> to view tickets you own. Missing or non-owned
+      tickets return the same not-found response.
+    </p>
+  </section>
+
+  <section id="ticket-detail" class="account-panel" hidden>
+    <p class="form-note">
+      <a href="/feedback">← All feedback</a>
+      ·
+      <span id="ticket-meta"></span>
+    </p>
+    <ul id="message-list" class="message-list"></ul>
+
+    <h3>Reply</h3>
+    <form id="reply-form" class="account-form">
+      <label for="reply-body">Message</label>
+      <textarea id="reply-body" name="body" rows="5" maxlength="20000" required
+      ></textarea>
+      <div class="account-inline">
+        <button type="submit">Send reply</button>
+      </div>
+    </form>
+  </section>
+
+  <script is:inline type="module" src="/feedback-ticket.js"></script>
+</Base>
