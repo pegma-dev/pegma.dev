@@ -4,6 +4,7 @@ import {
   runHealthChecks,
   toHealthResponse,
 } from '@pegma/health';
+import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { runIdentityMaintenance } from './identity-maintenance';
 import { createAppLogger, type LoggerEnv } from './logger';
 import {
@@ -22,8 +23,40 @@ import {
   runReleaseReconciliation,
 } from './release-reconciliation';
 import { handleGetReleases, readReleasesConfig } from './releases-api';
+import { createSupportApi } from './support-api';
+import {
+  createProductionSupportRuntime,
+  probeSupportStore,
+  supportHealthProbeEnabled,
+  type SupportRuntimeEnv,
+} from './support-desk';
+import { runSupportMaintenance } from './support-maintenance';
 
-type AppEnv = Env & LoggerEnv & IdentityRuntimeEnv & GitHubReleaseWebhookEnv;
+type AppEnv = Env &
+  LoggerEnv &
+  IdentityRuntimeEnv &
+  GitHubReleaseWebhookEnv &
+  SupportRuntimeEnv;
+
+function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>) {
+  const identityRuntime = createProductionIdentityRuntime(env, logger);
+  const supportRuntime = createProductionSupportRuntime(env, {
+    sessions: identityRuntime.sessions,
+    identity: identityRuntime.identity,
+    identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+    logger,
+  });
+  const api = createSupportApi({
+    application: supportRuntime.application,
+    sessions: supportRuntime.sessions,
+    identity: supportRuntime.identity,
+    identityLinkFromClaims: supportRuntime.identityLinkFromClaims,
+    createLimiter: supportRuntime.createLimiter,
+    replyLimiter: supportRuntime.replyLimiter,
+    logger,
+  });
+  return { supportRuntime, api };
+}
 
 /**
  * Thin Workers slice that proves pegma.dev's Pegma Logger wiring:
@@ -68,6 +101,35 @@ export default {
           error: error instanceof Error ? error.name : 'unknown',
         });
       }
+
+      let supportDetail: {
+        storage: 'cloudflare-d1';
+        packages: string;
+        probe: 'disabled' | 'ok' | 'fail';
+      } = {
+        storage: 'cloudflare-d1',
+        packages: '@pegma/support-desk-application@0.1.0',
+        probe: 'disabled',
+      };
+      if (supportHealthProbeEnabled(env)) {
+        try {
+          const identityRuntime = createProductionIdentityRuntime(env, logger);
+          const supportRuntime = createProductionSupportRuntime(env, {
+            sessions: identityRuntime.sessions,
+            identity: identityRuntime.identity,
+            identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+            logger,
+          });
+          const probe = await probeSupportStore(supportRuntime.store);
+          supportDetail = {
+            ...supportDetail,
+            probe: probe.ok ? 'ok' : 'fail',
+          };
+        } catch {
+          supportDetail = { ...supportDetail, probe: 'fail' };
+        }
+      }
+
       const result = await runHealthChecks({
         service: 'pegma-dev-api',
         logger,
@@ -86,6 +148,7 @@ export default {
               String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
               Boolean(env.RESEND_API_KEY),
           }),
+          createDetailCheck('supportDesk', supportDetail),
           createDetailCheck('githubReleases', {
             ingestionConfigured: releaseDetail.ingestionConfigured,
             readConfigured: releaseDetail.readConfigured,
@@ -204,6 +267,27 @@ export default {
       }
     }
 
+    if (path.startsWith('/api/support/')) {
+      try {
+        return await createSupportHandler(env, logger).api(request);
+      } catch (error) {
+        logger.log('error', 'support.runtime_unavailable', {
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+        return Response.json(
+          { error: 'support_unavailable' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
+    }
+
     logger.log('warn', 'request.not_found', { method: request.method, path });
     return new Response('Not Found', { status: 404 });
   },
@@ -248,6 +332,34 @@ export default {
           );
         } catch (error) {
           logger.log('error', 'identity.maintenance_unavailable', {
+            error: error instanceof Error ? error.name : 'unknown',
+          });
+        }
+      })(),
+    );
+
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const identityRuntime = createProductionIdentityRuntime(env, logger);
+          const supportRuntime = createProductionSupportRuntime(env, {
+            sessions: identityRuntime.sessions,
+            identity: identityRuntime.identity,
+            identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+            logger,
+          });
+          await runSupportMaintenance(
+            {
+              store: supportRuntime.store,
+              clock: supportRuntime.clock,
+              limiters: supportRuntime.limiters,
+              terminalRetentionMilliseconds:
+                supportRuntime.terminalRetentionMilliseconds,
+            },
+            logger,
+          );
+        } catch (error) {
+          logger.log('error', 'support.maintenance_unavailable', {
             error: error instanceof Error ? error.name : 'unknown',
           });
         }

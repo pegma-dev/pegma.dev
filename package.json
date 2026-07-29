@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@pegma/audit": "0.1.0",
+    "@pegma/authorization-core": "0.1.2",
     "@pegma/authorization-identity": "0.1.2",
     "@pegma/health": "^0.1.1",
     "@pegma/identity": "0.1.0",
@@ -30,6 +31,10 @@
     "@pegma/spine": "^0.1.1",
     "@pegma/storage-cloudflare-d1": "0.4.0",
     "@pegma/storage-core": "0.4.0",
+    "@pegma/support-desk-application": "0.1.0",
+    "@pegma/support-desk-contracts": "0.1.0",
+    "@pegma/support-desk-core": "0.1.0",
+    "@pegma/support-desk-templates": "0.1.0",
     "@pegma/webhooks": "file:vendor/@pegma/webhooks/pegma-webhooks-0.0.0.tgz"
   },
   "devDependencies": {
