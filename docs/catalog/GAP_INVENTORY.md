@@ -49,25 +49,23 @@ surfaces against the composition catalog schema
 | `worker/src/release-catalog.ts` | Release webhook allowlist / display order | Repo id map only — reuse order, not package facts |
 | Component READMEs + conformance | Canonical package truth | Scattered; catalog must summarize and link, not fork |
 
-## Published vs assembly-usable (registry prose, 2026-07-28)
+## Publish / assembly-usable gate (compiled, not hand-copied)
 
-Agents must treat **npm publication** as the production gate. Hand status alone
-is insufficient when packages remain unpublished.
+Do **not** maintain a per-component “usable today?” table in this document.
+That would duplicate lifecycle facts that AGENTS.md requires to be **compiled**
+from component plans (and package-version authority), the same discipline as
+the roadmap.
 
-| Component | Registry status | Assembly-usable today? | Notes |
-| --- | --- | --- | --- |
-| spine | published | yes | Pin from registry/npm (e.g. 0.1.1) |
-| storage-core | published | yes | Core + azure-tables + cloudflare-d1 |
-| authorization-core | published | yes | Multiple `@pegma/authorization-*` packages |
-| audit | published | yes | 0.1.0; needs caller storage transaction |
-| health | published | yes | |
-| sessions | published | yes | |
-| mail | published | yes | |
-| identity | published | yes | |
-| rate-limit | published | yes | |
-| logger-adapters | published | yes | |
-| support-desk | in development | **no** | Packages unpublished |
-| webhooks | in development | **no** | Unpublished (local vendor tarball on this site only) |
+Phase 1 must set each catalog component’s `status`, `publishUsability`, and
+`packages[].published` / `packages[].version` from:
+
+1. Each repo’s `PROJECT_PLAN.md` stage (status / stage prose)
+2. Version authority precedence (release-projection Store → npm at compile time)
+3. Never from parsing `now` prose in `components.ts`
+
+Until that compile exists, agents should treat only **npm-published** packages
+with exact pins as production-assembly candidates, and treat anything still
+unpublished on npm (including local vendor tarballs) as unusable.
 
 ## Decisions locked for Phase 1 compile (from open questions)
 

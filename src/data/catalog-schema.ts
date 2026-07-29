@@ -202,13 +202,45 @@ export interface CompositionCatalog {
   readonly recipes: readonly CatalogRecipe[];
 }
 
-/** Boolean helpers for compile and MCP validation (Phase 1+). Not type predicates. */
+/**
+ * Boolean helpers for compile and MCP validation (Phase 1+). Not type predicates.
+ *
+ * Component-level `publishUsability === 'partial'` means *some* packages are
+ * published. Production gates must still check the specific packages a recipe
+ * names — use `isPackagePublished` / `recipePackagesReady`.
+ */
 export function isPublishUsable(component: CatalogComponent): boolean {
-  return component.publishUsability === 'usable' || component.publishUsability === 'partial';
+  return component.publishUsability === 'usable';
+}
+
+export function isPackagePublished(
+  component: CatalogComponent,
+  packageName: string,
+): boolean {
+  const pkg = component.packages.find((p) => p.name === packageName);
+  return Boolean(pkg?.published && pkg.version);
 }
 
 export function publishedPackageNames(
   component: CatalogComponent,
 ): readonly string[] {
   return component.packages.filter((p) => p.published && p.version).map((p) => p.name);
+}
+
+/**
+ * True when every package named by the recipe is published with a version pin
+ * somewhere in the catalog. Empty `recipe.packages` is ready (brochure / no-op).
+ */
+export function recipePackagesReady(
+  catalog: CompositionCatalog,
+  recipe: CatalogRecipe,
+): boolean {
+  if (recipe.packages.length === 0) return true;
+  for (const name of recipe.packages) {
+    const owner = catalog.components.find((c) =>
+      c.packages.some((p) => p.name === name),
+    );
+    if (!owner || !isPackagePublished(owner, name)) return false;
+  }
+  return true;
 }
