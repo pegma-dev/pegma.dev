@@ -92,20 +92,21 @@ async function resolvePackages(
   names: readonly string[],
   lookup: NpmVersionLookup,
 ): Promise<CatalogPackage[]> {
-  const out: CatalogPackage[] = [];
-  for (const name of names) {
-    const version = await lookup(name);
-    const published = version !== null;
-    out.push({
-      name,
-      version,
-      published,
-      ...(published
-        ? { npmUrl: `https://www.npmjs.com/package/${name}` }
-        : {}),
-    });
-  }
-  return out;
+  // Parallel lookups: independent packages must not serialize 10s timeouts.
+  return Promise.all(
+    names.map(async (name) => {
+      const version = await lookup(name);
+      const published = version !== null;
+      return {
+        name,
+        version,
+        published,
+        ...(published
+          ? { npmUrl: `https://www.npmjs.com/package/${name}` }
+          : {}),
+      };
+    }),
+  );
 }
 
 export interface CompileCatalogOptions {
@@ -138,9 +139,16 @@ export async function compileCompositionCatalog(
       : await Promise.all(components.map(compileComponentStatus));
   const catalogComponents: CatalogComponent[] = [];
 
-  for (const component of compiled) {
+  // Resolve every component’s packages concurrently (npm lookups are independent).
+  const resolved = await Promise.all(
+    compiled.map(async (component) => {
+      const packages = await resolvePackages(component.packages, npmLookup);
+      return { component, packages };
+    }),
+  );
+
+  for (const { component, packages } of resolved) {
     const id = component.repo;
-    const packages = await resolvePackages(component.packages, npmLookup);
     const enrichment = enrichmentFor(id);
     const usability = publishUsability(packages);
     const recipeIds = RECIPE_BACKLOG.filter(

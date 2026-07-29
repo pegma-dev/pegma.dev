@@ -15,8 +15,11 @@ const NO_STAGES: Record<string, string | null> = Object.fromEntries(
 
 /** Deterministic npm map for tests — never hits the network. */
 function fakeNpm(versions: Record<string, string | null>) {
-  return async (name: string): Promise<string | null> =>
-    Object.prototype.hasOwnProperty.call(versions, name) ? versions[name]! : null;
+  return async (name: string): Promise<string | null> => {
+    if (!Object.prototype.hasOwnProperty.call(versions, name)) return null;
+    const version = versions[name];
+    return version === undefined ? null : version;
+  };
 }
 
 function compile(npm: Record<string, string | null>) {
