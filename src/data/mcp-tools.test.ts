@@ -60,17 +60,22 @@ describe('plan_composition', () => {
   });
 
   it('scores storage recipes and omits non-overlapping deferred recipes', () => {
+    // Example catalog fixtures are pending — inspect with productionOnly=false.
     const plan = planComposition(exampleCatalog, {
       capabilityTags: ['storage', 'audit', 'mail_transactional'],
       host: 'cloudflare',
+      productionOnly: false,
     });
     expect(plan.schema).toBe('pegma.plan_composition.v1');
     expect(plan.recipes.map((r) => r.id)).toContain('example-outbox');
     // Deferred webhook recipe has no overlapping tags → not a candidate.
     expect(plan.recipes.map((r) => r.id)).not.toContain('example-deferred');
     expect(plan.components.some((c) => c.id === 'example-store')).toBe(true);
-    expect(plan.components.some((c) => c.id === 'example-inbox')).toBe(false);
-    expect(plan.packages.every((p) => p.published)).toBe(true);
+    // Dependency closure pulls example-contracts for example-store.
+    expect(plan.components.some((c) => c.id === 'example-contracts')).toBe(true);
+    expect(plan.packages.map((p) => p.name)).toEqual(
+      expect.arrayContaining(['@example/store', '@example/contracts']),
+    );
   });
 
   it('skips unpublished webhook recipe under productionOnly', () => {
@@ -82,6 +87,20 @@ describe('plan_composition', () => {
     expect(plan.skipped.some((s) => s.id === 'example-deferred')).toBe(true);
     expect(plan.components.some((c) => c.id === 'example-inbox')).toBe(false);
     expect(plan.skipped.some((s) => s.id === 'example-inbox')).toBe(true);
+  });
+
+  it('skips pending fixtures when productionOnly', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['storage', 'audit', 'mail_transactional'],
+      productionOnly: true,
+    });
+    expect(plan.recipes).toEqual([]);
+    expect(
+      plan.skipped.some(
+        (s) =>
+          s.id === 'example-outbox' && s.reason.includes('fixture.status'),
+      ),
+    ).toBe(true);
   });
 
   it('includes unpublished when productionOnly=false', () => {
@@ -103,11 +122,42 @@ describe('plan_composition', () => {
     expect(plan.notes.some((n) => n.includes('static_host'))).toBe(true);
   });
 
-  it('accounts tags surface account-shaped recipe', () => {
+  it('accounts tags surface account-shaped recipe when fixtures may be pending', () => {
     const plan = planComposition(exampleCatalog, {
       capabilityTags: ['accounts', 'passkeys', 'cloudflare'],
       host: 'cloudflare',
+      productionOnly: false,
     });
     expect(plan.recipes[0]?.id).toBe('example-accounts');
+    // Closure + recipe packages include store deps, not only tag-matched roots.
+    expect(plan.packages.map((p) => p.name)).toEqual(
+      expect.arrayContaining([
+        '@example/contracts',
+        '@example/store',
+        '@example/store-cloud',
+      ]),
+    );
+  });
+
+  it('production plans accept green fixtures and close deps', () => {
+    const greenCatalog: CompositionCatalog = {
+      ...exampleCatalog,
+      recipes: exampleCatalog.recipes.map((r) =>
+        r.id === 'example-outbox'
+          ? {
+              ...r,
+              fixture: { ...r.fixture, status: 'green' as const },
+            }
+          : r,
+      ),
+    };
+    const plan = planComposition(greenCatalog, {
+      capabilityTags: ['storage', 'audit', 'mail_transactional'],
+      productionOnly: true,
+    });
+    expect(plan.recipes.map((r) => r.id)).toEqual(['example-outbox']);
+    expect(plan.packages.map((p) => p.name)).toEqual(
+      expect.arrayContaining(['@example/store', '@example/contracts']),
+    );
   });
 });

@@ -91,6 +91,7 @@ export default {
       } catch (error) {
         logger.log('error', 'mcp.unavailable', {
           error: error instanceof Error ? error.name : 'unknown',
+          message: error instanceof Error ? error.message : String(error),
         });
         return Response.json(
           { error: 'mcp_unavailable' },

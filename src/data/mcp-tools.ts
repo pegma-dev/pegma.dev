@@ -7,6 +7,7 @@
 
 import {
   isPublishUsable,
+  parsePackageSpecifier,
   recipePackagesReady,
   type CapabilityTag,
   type CatalogComponent,
@@ -211,12 +212,9 @@ export function planComposition(
       score += 0.25;
     }
 
-    if (onlyStatic && score === 1 && c.capabilityTags.includes('static_host')) {
-      scoredComponents.push({ component: c, score });
-      continue;
-    }
     if (onlyStatic) {
-      // Only components that are purely static_host / nothing-heavy.
+      // static_host intent: never recommend heavy stacks, even if a component
+      // also carries the static_host tag alongside accounts/storage/etc.
       const heavy = c.capabilityTags.some((t) =>
         (
           [
@@ -257,6 +255,14 @@ export function planComposition(
     if (score === 0) continue;
 
     if (productionOnly) {
+      if (r.fixture.status !== 'green') {
+        skipped.push({
+          id: r.id,
+          kind: 'recipe',
+          reason: `fixture.status=${r.fixture.status} (production plans require green fixtures)`,
+        });
+        continue;
+      }
       const missingReq = r.requiresPublished.filter((id) => {
         const comp = catalog.components.find((c) => c.id === id);
         return !comp || !isPublishUsable(comp);
@@ -313,20 +319,132 @@ export function planComposition(
     return a.recipe.id.localeCompare(b.recipe.id);
   });
 
-  const selectedComponents = scoredComponents.map((s) => s.component);
   const selectedRecipes = scoredRecipes.map((s) => s.recipe);
 
-  // Prefer packages from selected components (published first).
+  // Close the plan over required component dependencies and recipe package
+  // owners so agents get a buildable package set, not only tag-matched roots.
+  const componentById = new Map(
+    catalog.components.map((c) => [c.id, c] as const),
+  );
+  const closed = new Map<string, CatalogComponent>();
+  for (const s of scoredComponents) {
+    closed.set(s.component.id, s.component);
+  }
+
+  const queue: string[] = [...closed.keys()];
+  while (queue.length > 0) {
+    const id = queue.pop()!;
+    const comp = componentById.get(id);
+    if (!comp) continue;
+    for (const dep of comp.dependencies) {
+      if (dep.kind !== 'requires') continue;
+      if (closed.has(dep.componentId)) continue;
+      const depComp = componentById.get(dep.componentId);
+      if (!depComp) {
+        notes.push(
+          `missing required dependency ${dep.componentId} referenced by ${id}`,
+        );
+        continue;
+      }
+      if (productionOnly && depComp.publishUsability === 'unpublished') {
+        skipped.push({
+          id: depComp.id,
+          kind: 'component',
+          reason: `required by ${id} but publishUsability=unpublished`,
+        });
+        continue;
+      }
+      closed.set(depComp.id, depComp);
+      queue.push(depComp.id);
+    }
+  }
+
+  // Recipe package owners and requiresPublished also enter the closure.
+  for (const r of selectedRecipes) {
+    for (const reqId of r.requiresPublished) {
+      if (closed.has(reqId)) continue;
+      const depComp = componentById.get(reqId);
+      if (!depComp) continue;
+      if (productionOnly && depComp.publishUsability === 'unpublished') continue;
+      closed.set(depComp.id, depComp);
+      queue.push(depComp.id);
+    }
+    for (const spec of r.packages) {
+      const { name } = parsePackageSpecifier(spec);
+      const owner = catalog.components.find((c) =>
+        c.packages.some((p) => p.name === name),
+      );
+      if (!owner || closed.has(owner.id)) continue;
+      if (productionOnly && owner.publishUsability === 'unpublished') continue;
+      closed.set(owner.id, owner);
+      queue.push(owner.id);
+    }
+  }
+
+  // Drain any deps discovered from recipe expansion.
+  while (queue.length > 0) {
+    const id = queue.pop()!;
+    const comp = componentById.get(id);
+    if (!comp) continue;
+    for (const dep of comp.dependencies) {
+      if (dep.kind !== 'requires') continue;
+      if (closed.has(dep.componentId)) continue;
+      const depComp = componentById.get(dep.componentId);
+      if (!depComp) continue;
+      if (productionOnly && depComp.publishUsability === 'unpublished') {
+        skipped.push({
+          id: depComp.id,
+          kind: 'component',
+          reason: `required by ${id} but publishUsability=unpublished`,
+        });
+        continue;
+      }
+      closed.set(depComp.id, depComp);
+      queue.push(depComp.id);
+    }
+  }
+
+  const selectedComponents = [...closed.values()].sort((a, b) =>
+    a.id.localeCompare(b.id),
+  );
+
+  // Packages from closed components plus explicit recipe package pins.
   const packages: PlanCompositionResult['packages'][number][] = [];
+  const seenPkg = new Set<string>();
+  const pushPkg = (
+    name: string,
+    version: string | null,
+    published: boolean,
+    componentId: string,
+  ) => {
+    if (productionOnly && !published) return;
+    const key = `${componentId}::${name}`;
+    if (seenPkg.has(key)) return;
+    seenPkg.add(key);
+    packages.push({ name, version, published, componentId });
+  };
+
   for (const c of selectedComponents) {
     for (const p of c.packages) {
-      if (productionOnly && !p.published) continue;
-      packages.push({
-        name: p.name,
-        version: p.version,
-        published: p.published,
-        componentId: c.id,
-      });
+      pushPkg(p.name, p.version, p.published, c.id);
+    }
+  }
+
+  for (const r of selectedRecipes) {
+    for (const spec of r.packages) {
+      const { name, version: pinned } = parsePackageSpecifier(spec);
+      const owner = catalog.components.find((c) =>
+        c.packages.some((p) => p.name === name),
+      );
+      if (!owner) continue;
+      const pkg = owner.packages.find((p) => p.name === name);
+      if (!pkg) continue;
+      pushPkg(
+        pkg.name,
+        pinned && pinned.length > 0 ? pinned : pkg.version,
+        pkg.published,
+        owner.id,
+      );
     }
   }
 
