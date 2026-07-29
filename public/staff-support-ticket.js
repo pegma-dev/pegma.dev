@@ -267,8 +267,11 @@ function bindLifecycle() {
 composeForm.addEventListener('change', updateComposeEnabled);
 composeForm.addEventListener('input', updateComposeEnabled);
 
+let composeInFlight = false;
+
 composeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (composeInFlight) return;
   const mode = selectedComposeMode();
   const body = composeBody.value.trim();
   if (mode === '' || body === '') {
@@ -281,6 +284,8 @@ composeForm.addEventListener('submit', async (event) => {
       ? `/api/support/admin/tickets/${encodeURIComponent(ticketId)}/messages`
       : `/api/support/admin/tickets/${encodeURIComponent(ticketId)}/notes`;
 
+  composeInFlight = true;
+  composeSubmit.disabled = true;
   try {
     showStatus(mode === 'public' ? 'Sending public reply…' : 'Saving note…');
     const view = await api(path, {
@@ -288,11 +293,13 @@ composeForm.addEventListener('submit', async (event) => {
       body: JSON.stringify({ body }),
     });
     composeForm.reset();
-    updateComposeEnabled();
     renderTicket(view);
     showStatus(mode === 'public' ? 'Public reply sent.' : 'Internal note saved.');
   } catch (error) {
     showStatus(`Compose failed: ${error.message}`, true);
+  } finally {
+    composeInFlight = false;
+    updateComposeEnabled();
   }
 });
 
