@@ -89,6 +89,41 @@ function tagOverlap(
   return n;
 }
 
+/** Host / ambient tags that do not alone justify a heavy composition. */
+const AMBIENT_TAGS = new Set<CapabilityTag>([
+  'cloudflare',
+  'azure',
+  'static_host',
+  'logging',
+  'events_in_process',
+]);
+
+/**
+ * Core (non-ambient) tags on a recipe/component. Used to reject selections
+ * that only share an incidental tag (e.g. accounts recipe via `storage`).
+ */
+function coreTags(tags: readonly CapabilityTag[]): CapabilityTag[] {
+  return tags.filter((t) => !AMBIENT_TAGS.has(t));
+}
+
+/**
+ * True when the request covers enough of the item's core tags that selecting
+ * it is not an incidental single-tag hit.
+ */
+function meaningfulCoverage(
+  itemTags: readonly CapabilityTag[],
+  requested: readonly CapabilityTag[],
+): boolean {
+  const core = coreTags(itemTags);
+  if (core.length === 0) {
+    // Ambient-only items: require at least one requested ambient match.
+    return tagOverlap(itemTags, requested) > 0;
+  }
+  const covered = tagOverlap(core, requested);
+  // At least half of the item's core tags must be requested.
+  return covered * 2 >= core.length;
+}
+
 function toComponentListItem(c: CatalogComponent): ComponentListItem {
   return {
     id: c.id,
@@ -194,6 +229,14 @@ export function planComposition(
   for (const c of catalog.components) {
     let score = tagOverlap(c.capabilityTags, requestedTags);
     if (score === 0) continue;
+    if (!meaningfulCoverage(c.capabilityTags, requestedTags)) {
+      skipped.push({
+        id: c.id,
+        kind: 'component',
+        reason: 'incidental tag overlap only (insufficient core-tag coverage)',
+      });
+      continue;
+    }
 
     if (productionOnly && c.publishUsability === 'unpublished') {
       skipped.push({
@@ -223,6 +266,7 @@ export function planComposition(
             'email_codes',
             'sessions',
             'storage',
+            'storage_blobs',
             'mail_transactional',
             'webhooks_inbound',
             'support_queue',
@@ -244,6 +288,10 @@ export function planComposition(
 
   scoredComponents.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    // Prefer more specific components when scores tie.
+    const sa = a.score / Math.max(1, a.component.capabilityTags.length);
+    const sb = b.score / Math.max(1, b.component.capabilityTags.length);
+    if (sb !== sa) return sb - sa;
     return a.component.id.localeCompare(b.component.id);
   });
 
@@ -253,6 +301,14 @@ export function planComposition(
   for (const r of catalog.recipes) {
     const score = tagOverlap(r.capabilityTags, requestedTags);
     if (score === 0) continue;
+    if (!meaningfulCoverage(r.capabilityTags, requestedTags)) {
+      skipped.push({
+        id: r.id,
+        kind: 'recipe',
+        reason: 'incidental tag overlap only (insufficient core-tag coverage)',
+      });
+      continue;
+    }
 
     if (productionOnly) {
       if (r.fixture.status !== 'green') {
@@ -285,6 +341,7 @@ export function planComposition(
       }
     }
 
+    let finalScore = score;
     if (input.host) {
       const adapterHosts = r.adapters
         .map((ref) => {
@@ -298,16 +355,19 @@ export function planComposition(
         !adapterHosts.includes('memory')
       ) {
         // Soft demote: still include but lower score for host mismatch.
-        scoredRecipes.push({ recipe: r, score: score - 0.5 });
-        continue;
+        finalScore = score - 0.5;
       }
     }
 
-    scoredRecipes.push({ recipe: r, score });
+    scoredRecipes.push({ recipe: r, score: finalScore });
   }
 
   scoredRecipes.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    // Prefer more specific recipes when raw overlap ties.
+    const sa = a.score / Math.max(1, a.recipe.capabilityTags.length);
+    const sb = b.score / Math.max(1, b.recipe.capabilityTags.length);
+    if (sb !== sa) return sb - sa;
     // Prefer green fixtures, then backlog priority (lower = first).
     const fixtureRank = (s: CatalogRecipe['fixture']['status']) =>
       s === 'green' ? 0 : s === 'pending' ? 1 : 2;
@@ -426,8 +486,15 @@ export function planComposition(
     });
   };
 
-  // Packages from closed components (host-filtered) plus primary recipe pins.
-  const packages: PlanCompositionResult['packages'][number][] = [];
+  // Install set: when a primary recipe exists, start from its pins (fixture-
+  // tested). Do not dump every package on multi-package components (Auth0,
+  // Stripe, …) that happen to be in the requires-closure.
+  const packages: {
+    name: string;
+    version: string | null;
+    published: boolean;
+    componentId: string;
+  }[] = [];
   const seenPkg = new Set<string>();
   const pushPkg = (
     name: string,
@@ -442,13 +509,31 @@ export function planComposition(
     packages.push({ name, version, published, componentId });
   };
 
-  for (const c of selectedComponents) {
-    for (const p of packagesForComponent(c)) {
+  const emitComponentPackages = (c: CatalogComponent) => {
+    const filtered = packagesForComponent(c);
+    // Multi-package components without adapter metadata: only the first
+    // published package unless a recipe pin named more (handled separately).
+    if (c.packages.length > 2 && c.adapters.length === 0) {
+      const firstPublished = filtered.find((p) => p.published) ?? filtered[0];
+      if (firstPublished) {
+        pushPkg(
+          firstPublished.name,
+          firstPublished.version,
+          firstPublished.published,
+          c.id,
+        );
+      }
+      return;
+    }
+    for (const p of filtered) {
       pushPkg(p.name, p.version, p.published, c.id);
     }
-  }
+  };
 
   if (primaryRecipe) {
+    const recipeNamedPackages = new Set(
+      primaryRecipe.packages.map((spec) => parsePackageSpecifier(spec).name),
+    );
     for (const spec of primaryRecipe.packages) {
       const { name, version: pinned } = parsePackageSpecifier(spec);
       const owner = catalog.components.find((c) =>
@@ -457,8 +542,6 @@ export function planComposition(
       if (!owner) continue;
       const pkg = owner.packages.find((p) => p.name === name);
       if (!pkg) continue;
-      // Do not re-introduce host-mismatched adapter packages named by the
-      // recipe when the caller requested a different host.
       const allowed = packagesForComponent(owner).some((p) => p.name === name);
       if (!allowed) {
         notes.push(
@@ -472,6 +555,17 @@ export function planComposition(
         pkg.published,
         owner.id,
       );
+    }
+    // Tag-matched add-ons not named by the recipe (e.g. health with accounts).
+    for (const s of scoredComponents) {
+      const c = s.component;
+      const namedByRecipe = c.packages.some((p) => recipeNamedPackages.has(p.name));
+      if (namedByRecipe) continue;
+      emitComponentPackages(c);
+    }
+  } else {
+    for (const c of selectedComponents) {
+      emitComponentPackages(c);
     }
   }
 

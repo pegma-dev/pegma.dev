@@ -78,11 +78,32 @@ describe('fetchCompositionCatalog', () => {
     );
   });
 
-  it('rejects invalid shapes', async () => {
+  it('rejects invalid shapes when cold', async () => {
     const fetchImpl = async () =>
       new Response(JSON.stringify({ nope: true }), { status: 200 });
     await expect(
       fetchCompositionCatalog({}, { fetchImpl, now: 0 }),
     ).rejects.toThrow(/invalid_shape/);
+  });
+
+  it('serves stale cache when revalidation fails', async () => {
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify(sample), {
+          status: 200,
+          headers: { ETag: '"v1"' },
+        });
+      }
+      return new Response('down', { status: 503 });
+    };
+    await fetchCompositionCatalog({}, { fetchImpl, now: 0 });
+    const stale = await fetchCompositionCatalog(
+      {},
+      { fetchImpl, now: CATALOG_CACHE_TTL_MS + 1 },
+    );
+    expect(stale.generatedAt).toBe(sample.generatedAt);
+    expect(calls).toBe(2);
   });
 });

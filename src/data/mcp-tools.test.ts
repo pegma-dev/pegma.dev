@@ -80,15 +80,35 @@ describe('plan_composition', () => {
   });
 
   it('does not merge alternative recipes into the package plan', () => {
+    // Broad request that meaningfully covers both accounts and outbox recipes.
     const plan = planComposition(exampleCatalog, {
-      capabilityTags: ['storage', 'cloudflare'],
+      capabilityTags: [
+        'accounts',
+        'passkeys',
+        'storage',
+        'audit',
+        'mail_transactional',
+        'cloudflare',
+      ],
       productionOnly: false,
     });
-    // Both accounts and outbox may match storage+cloudflare; packages come
-    // only from the primary recipe closure.
     expect(plan.recipes.length).toBeGreaterThan(1);
     expect(plan.notes.some((n) => n.startsWith('primary recipe:'))).toBe(true);
     expect(plan.notes.some((n) => n.includes('alternatives'))).toBe(true);
+  });
+
+  it('rejects incidental single-tag recipe selection', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['storage'],
+      productionOnly: false,
+    });
+    // Accounts recipe shares storage only as an incidental tag — skip it.
+    expect(plan.recipes.map((r) => r.id)).not.toContain('example-accounts');
+    expect(
+      plan.skipped.some(
+        (s) => s.id === 'example-accounts' && s.reason.includes('incidental'),
+      ),
+    ).toBe(true);
   });
 
   it('filters adapter packages by host', () => {

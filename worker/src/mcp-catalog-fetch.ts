@@ -67,30 +67,42 @@ export async function fetchCompositionCatalog(
     headers['If-None-Match'] = cache.etag;
   }
 
-  const res = await fetchImpl(url, {
-    headers,
-    signal: AbortSignal.timeout(10_000),
-  });
+  try {
+    const res = await fetchImpl(url, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
 
-  if (res.status === 304 && cache) {
-    cache = { ...cache, fetchedAt: now };
-    return cache.catalog;
+    if (res.status === 304 && cache) {
+      cache = { ...cache, fetchedAt: now };
+      return cache.catalog;
+    }
+
+    if (!res.ok) {
+      if (cache) {
+        // Public fact surface already accepts short staleness; keep serving.
+        return cache.catalog;
+      }
+      throw new Error(`catalog_fetch_failed:${res.status}`);
+    }
+
+    const body: unknown = await res.json();
+    if (!isCompositionCatalog(body)) {
+      if (cache) return cache.catalog;
+      throw new Error('catalog_fetch_invalid_shape');
+    }
+
+    const etag = res.headers.get('ETag');
+    cache = {
+      catalog: body,
+      fetchedAt: now,
+      etag,
+    };
+    return body;
+  } catch (error) {
+    if (cache) {
+      return cache.catalog;
+    }
+    throw error;
   }
-
-  if (!res.ok) {
-    throw new Error(`catalog_fetch_failed:${res.status}`);
-  }
-
-  const body: unknown = await res.json();
-  if (!isCompositionCatalog(body)) {
-    throw new Error('catalog_fetch_invalid_shape');
-  }
-
-  const etag = res.headers.get('ETag');
-  cache = {
-    catalog: body,
-    fetchedAt: now,
-    etag,
-  };
-  return body;
 }
