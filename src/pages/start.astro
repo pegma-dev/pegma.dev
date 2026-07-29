@@ -38,10 +38,39 @@ import Base from '../layouts/Base.astro';
       containing <code>SKILL.md</code> (with YAML frontmatter — keep it) as an
       installable skill. From your project root:
     </p>
-    <pre><code>mkdir -p .claude/skills/pegma
+    <div class="shell-tabs">
+      <input type="radio" name="skill-shell" id="skill-shell-bash" checked />
+      <input type="radio" name="skill-shell" id="skill-shell-cmd" />
+      <input type="radio" name="skill-shell" id="skill-shell-powershell" />
+      <div class="shell-tab-labels">
+        <label for="skill-shell-bash">bash</label>
+        <label for="skill-shell-cmd">cmd</label>
+        <label for="skill-shell-powershell">PowerShell</label>
+      </div>
+      <div class="shell-panel" data-shell="bash">
+        <pre><code>mkdir -p .claude/skills/pegma
 curl -fsSL https://pegma.dev/skill.md -o .claude/skills/pegma/SKILL.md</code></pre>
-    <pre><code>mkdir -p .grok/skills/pegma
+        <pre><code>mkdir -p .grok/skills/pegma
 curl -fsSL https://pegma.dev/skill.md -o .grok/skills/pegma/SKILL.md</code></pre>
+      </div>
+      <div class="shell-panel" data-shell="cmd">
+        <pre><code>mkdir .claude\skills\pegma
+curl -fsSL https://pegma.dev/skill.md -o .claude\skills\pegma\SKILL.md</code></pre>
+        <pre><code>mkdir .grok\skills\pegma
+curl -fsSL https://pegma.dev/skill.md -o .grok\skills\pegma\SKILL.md</code></pre>
+      </div>
+      <div class="shell-panel" data-shell="powershell">
+        <pre><code>New-Item -ItemType Directory -Force .claude\skills\pegma
+curl.exe -fsSL https://pegma.dev/skill.md -o .claude\skills\pegma\SKILL.md</code></pre>
+        <pre><code>New-Item -ItemType Directory -Force .grok\skills\pegma
+curl.exe -fsSL https://pegma.dev/skill.md -o .grok\skills\pegma\SKILL.md</code></pre>
+        <p class="form-note">
+          <code>curl.exe</code> on purpose: in Windows PowerShell 5.1,
+          plain <code>curl</code> is an alias for <code>Invoke-WebRequest</code>
+          and rejects these flags.
+        </p>
+      </div>
+    </div>
     <p>
       Tools that use a generic agent directory follow the same shape, for
       example <code>.agents/skills/pegma/SKILL.md</code>.
@@ -133,3 +162,68 @@ Do not invent passwords.</code></pre>
     </p>
   </section>
 </Base>
+
+<style>
+  /* CSS-only shell picker: radios drive which panel shows, so the tabs work
+     without JavaScript and stay keyboard-operable (arrow keys switch). */
+  .shell-tabs {
+    margin: 1rem 0 1.5rem;
+  }
+
+  .shell-tabs > input[type='radio'] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    clip-path: inset(50%);
+    overflow: hidden;
+  }
+
+  .shell-tab-labels {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .shell-tab-labels label {
+    padding: 0.35rem 0.9rem;
+    font-size: 0.9rem;
+    font-weight: 650;
+    color: var(--slate);
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 0.4rem 0.4rem 0 0;
+    margin-bottom: -1px;
+  }
+
+  #skill-shell-bash:checked ~ .shell-tab-labels label[for='skill-shell-bash'],
+  #skill-shell-cmd:checked ~ .shell-tab-labels label[for='skill-shell-cmd'],
+  #skill-shell-powershell:checked
+    ~ .shell-tab-labels
+    label[for='skill-shell-powershell'] {
+    color: var(--ink);
+    background: var(--paper);
+    border-color: var(--line);
+    border-bottom: 1px solid var(--paper);
+  }
+
+  #skill-shell-bash:focus-visible ~ .shell-tab-labels label[for='skill-shell-bash'],
+  #skill-shell-cmd:focus-visible ~ .shell-tab-labels label[for='skill-shell-cmd'],
+  #skill-shell-powershell:focus-visible
+    ~ .shell-tab-labels
+    label[for='skill-shell-powershell'] {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+  }
+
+  .shell-panel {
+    display: none;
+  }
+
+  #skill-shell-bash:checked ~ .shell-panel[data-shell='bash'],
+  #skill-shell-cmd:checked ~ .shell-panel[data-shell='cmd'],
+  #skill-shell-powershell:checked ~ .shell-panel[data-shell='powershell'] {
+    display: block;
+  }
+</style>
