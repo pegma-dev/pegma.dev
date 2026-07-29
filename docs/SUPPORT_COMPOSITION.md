@@ -52,7 +52,7 @@ Allowlist: `feedback`, `bug`, `feature_request`, `documentation`, `question`.
 
 Display marker: `[PEG-{number}]`. Public tracking URL:
 
-`https://pegma.dev/feedback/{ticketId}`
+`https://pegma.dev/feedback/ticket/?id={ticketId}`
 
 ## HTTP boundary
 
@@ -71,7 +71,7 @@ Durable rate-limit policies (separate from Identity):
 - `pegma.support.ticket.create`
 - `pegma.support.ticket.reply`
 
-Site pages: `/feedback` (create + list), `/feedback/[ticketId]` (read + reply).
+Site pages: `/feedback` (create + list), `/feedback/ticket/?id=…` (read + reply; static shell).
 
 ## Maintenance and health
 

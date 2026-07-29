@@ -47,7 +47,7 @@ function renderTickets(tickets) {
   for (const ticket of tickets) {
     const item = document.createElement('li');
     const link = document.createElement('a');
-    link.href = `/feedback/${encodeURIComponent(ticket.id)}`;
+    link.href = `/feedback/ticket/?id=${encodeURIComponent(ticket.id)}`;
     link.textContent = `${ticket.marker} ${ticket.subject}`;
     const meta = document.createElement('span');
     meta.className = 'form-note';

@@ -50,7 +50,7 @@ export const SUPPORT_TERMINAL_RETENTION_MS =
 
 /** Public ticket URL on pegma.dev (own-ticket tracking page). */
 export function publicTicketUrl(ticketId: string): string {
-  return `https://pegma.dev/feedback/${encodeURIComponent(ticketId)}`;
+  return `https://pegma.dev/feedback/ticket/?id=${encodeURIComponent(ticketId)}`;
 }
 
 /** Subject marker helpers: `[PEG-1042]`. */

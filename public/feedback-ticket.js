@@ -5,13 +5,7 @@ const heading = document.querySelector('#ticket-heading');
 const meta = document.querySelector('#ticket-meta');
 const messageList = document.querySelector('#message-list');
 const replyForm = document.querySelector('#reply-form');
-const ticketId =
-  typeof window.__PEGMA_TICKET_ID__ === 'string' &&
-  window.__PEGMA_TICKET_ID__.length > 0
-    ? window.__PEGMA_TICKET_ID__
-    : decodeURIComponent(
-        window.location.pathname.replace(/^\/feedback\//u, '').replace(/\/$/u, ''),
-      );
+const ticketId = new URL(window.location.href).searchParams.get('id') ?? '';
 
 let csrfToken = '';
 
@@ -76,6 +70,8 @@ async function loadTicket() {
     showStatus('Missing ticket id.', true);
     return;
   }
+  const idDisplay = document.querySelector('#ticket-id-display');
+  if (idDisplay) idDisplay.textContent = ticketId;
   try {
     await api('/api/identity/account');
   } catch (error) {

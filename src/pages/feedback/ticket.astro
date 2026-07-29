@@ -1,8 +1,5 @@
 ---
 import Base from '../../layouts/Base.astro';
-
-const { ticketId } = Astro.params;
-const safeTicketId = typeof ticketId === 'string' ? ticketId : '';
 ---
 
 <Base
@@ -14,8 +11,8 @@ const safeTicketId = typeof ticketId === 'string' ? ticketId : '';
     <h1 id="ticket-heading">Loading…</h1>
     <p class="lede">
       Private conversation for ticket
-      <code id="ticket-id-display">{safeTicketId}</code>. Only you and authorized
-      operators can read this thread.
+      <code id="ticket-id-display">…</code>. Only you and authorized operators can
+      read this thread.
     </p>
   </section>
 
@@ -26,8 +23,8 @@ const safeTicketId = typeof ticketId === 'string' ? ticketId : '';
   <section id="ticket-signed-out" class="account-panel" hidden>
     <h2>Sign in required</h2>
     <p>
-      <a href="/account">Sign in</a> to view tickets you own. Missing or
-      non-owned tickets return the same not-found response.
+      <a href="/account">Sign in</a> to view tickets you own. Missing or non-owned
+      tickets return the same not-found response.
     </p>
   </section>
 
@@ -50,6 +47,5 @@ const safeTicketId = typeof ticketId === 'string' ? ticketId : '';
     </form>
   </section>
 
-  <script is:inline set:html={`window.__PEGMA_TICKET_ID__ = ${JSON.stringify(safeTicketId)};`} />
   <script is:inline type="module" src="/feedback-ticket.js"></script>
 </Base>
