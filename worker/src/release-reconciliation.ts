@@ -9,9 +9,9 @@ import {
   type ReleaseCatalogEntry,
 } from './release-catalog';
 import {
-  markReleaseReconciliationSuccess,
+  mergeReleaseRepositoryEtagUpdates,
   readReleaseOpsState,
-  saveReleaseRepositoryEtags,
+  type ConditionalEtagUpdate,
 } from './release-ops-state';
 import {
   applyAuthoritativeCurrentRelease,
@@ -284,8 +284,8 @@ export async function runReleaseReconciliation(
   const observedAt = options.now ?? new Date().toISOString();
   const fetchImpl = options.fetchImpl ?? fetch;
   const catalog = allowedReleaseCatalog(config.allowedRepositoryIds);
-  const prior = await readReleaseOpsState(store);
-  const nextEtags: Record<string, string> = { ...prior.repositoryEtags };
+  // Epoch-conditioned ETag updates so a concurrent webhook invalidation wins.
+  const etagUpdates: ConditionalEtagUpdate[] = [];
 
   let examined = 0;
   let upserted = 0;
@@ -295,6 +295,9 @@ export async function runReleaseReconciliation(
 
   for (const entry of catalog) {
     examined += 1;
+    // Re-read live ETags/epochs each repo so mid-run invalidations apply.
+    const live = await readReleaseOpsState(store);
+    const expectedEpoch = live.repositoryEtagEpochs[entry.repositoryId] ?? 0;
     let result: {
       readonly outcome:
         | 'upserted'
@@ -308,37 +311,36 @@ export async function runReleaseReconciliation(
       result = await reconcileOneRepository({
         store,
         entry,
-        etag: nextEtags[entry.repositoryId],
+        etag: live.repositoryEtags[entry.repositoryId],
         observedAt,
         fetchImpl,
       });
     } catch {
       // Version conflicts and unexpected store errors stay per-repository so
       // one hot key cannot abort the catalog pass or skip etag persistence.
-      result = { outcome: 'failed', etag: nextEtags[entry.repositoryId] };
+      result = { outcome: 'failed', etag: undefined };
     }
 
-    if (result.etag === undefined) {
-      delete nextEtags[entry.repositoryId];
+    if (result.outcome === 'failed') {
+      failed += 1;
+    } else if (result.outcome === 'cleared') {
+      cleared += 1;
+      etagUpdates.push({
+        repositoryId: entry.repositoryId,
+        etag: null,
+        expectedEpoch,
+      });
+    } else if (result.outcome === 'not_modified') {
+      notModified += 1;
     } else {
-      nextEtags[entry.repositoryId] = result.etag;
-    }
-
-    switch (result.outcome) {
-      case 'upserted':
+      if (result.outcome === 'upserted') {
         upserted += 1;
-        break;
-      case 'cleared':
-        cleared += 1;
-        break;
-      case 'not_modified':
-        notModified += 1;
-        break;
-      case 'failed':
-        failed += 1;
-        break;
-      default:
-        break;
+      }
+      etagUpdates.push({
+        repositoryId: entry.repositoryId,
+        etag: result.etag ?? null,
+        expectedEpoch,
+      });
     }
   }
 
@@ -351,9 +353,9 @@ export async function runReleaseReconciliation(
   };
 
   // Persist success only when every repository completed without failure so
-  // health "stale" stays honest. Always advance etags for successful repos.
+  // health "stale" stays honest. Merge ETag updates for successful repos.
   if (summary.failed === 0) {
-    await markReleaseReconciliationSuccess(store, observedAt, nextEtags);
+    await mergeReleaseRepositoryEtagUpdates(store, etagUpdates, observedAt);
     logger.log('info', 'release_reconciliation.completed', {
       examined: summary.examined,
       upserted: summary.upserted,
@@ -361,7 +363,7 @@ export async function runReleaseReconciliation(
       notModified: summary.notModified,
     });
   } else {
-    await saveReleaseRepositoryEtags(store, nextEtags);
+    await mergeReleaseRepositoryEtagUpdates(store, etagUpdates, null);
     logger.log('error', 'release_reconciliation.partial_failure', {
       examined: summary.examined,
       upserted: summary.upserted,

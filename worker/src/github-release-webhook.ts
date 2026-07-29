@@ -8,7 +8,10 @@ import {
   decideReleaseProjection,
   type ReleaseEventFacts,
 } from './release-projection';
-import { markReleaseWebhookSuccess } from './release-ops-state';
+import {
+  invalidateReleaseRepositoryEtag,
+  markReleaseWebhookSuccess,
+} from './release-ops-state';
 
 export const GITHUB_RELEASE_EVENT_TYPE = 'github.release.published';
 export const MAX_GITHUB_WEBHOOK_BODY_BYTES = 1024 * 1024;
@@ -340,12 +343,17 @@ export async function handleGitHubReleaseWebhook(
     const observedAt = options.now ?? new Date().toISOString();
     const decision = decideReleaseProjection(facts, observedAt);
     await applyReleaseProjection(store, decision);
+    // ETag invalidation is correctness-critical (not best-effort): a later
+    // 304 must not mask a missed delete after this projection change.
+    if (decision.kind === 'upsert' || decision.kind === 'delete') {
+      await invalidateReleaseRepositoryEtag(store, facts.repositoryId);
+    }
     await ledger.markProcessed(deliveryId);
     try {
       await markReleaseWebhookSuccess(store, observedAt);
     } catch (markerError) {
-      // Projection and ledger are already final; health-marker failure must
-      // not re-enter markFailed or flip the delivery outcome.
+      // Projection, ETag invalidation, and ledger are already final; health
+      // marker failure must not re-enter markFailed or flip the delivery.
       logger.log('error', 'github_release_webhook.ops_marker_failed', {
         deliveryId,
         error:
