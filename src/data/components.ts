@@ -72,6 +72,32 @@ export const components: readonly PegmaComponent[] = [
     now: '0.4.0 on npm with Azure Tables and Cloudflare D1 adapters; both adapters pass the same conformance suite.',
   },
   {
+    repo: 'storage-blobs',
+    title: 'Storage Blobs',
+    packages: [
+      '@pegma/storage-blobs',
+      '@pegma/storage-azure-blob',
+      '@pegma/storage-cloudflare-r2',
+      '@pegma/storage-s3',
+    ],
+    status: 'published',
+    summary:
+      'Opaque object bytes through a narrow port — the counterpart to storage-core records.',
+    owns: [
+      'Streaming put/get, head, delete, and etag-conditioned writes for one container/bucket',
+      'Bounded prefix listing for retention and GC',
+      'A conformance suite every adapter must pass against a real empty backend',
+      'Thin adapters for Azure Blob, Cloudflare R2, and S3-compatible endpoints',
+    ],
+    refuses: [
+      'Client-facing signed URLs as the default path — hosts authorize on the API',
+      'Authorization, rate limits, malware scanning, or attachment lifecycle inside the store',
+      'Cross-object transactions or server-side query by metadata',
+    ],
+    now: '0.1.0 on npm with Azure Blob, R2, and S3 adapters; first consumer planned is Support Desk attachments.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
+  {
     repo: 'authorization-core',
     title: 'Authorization Core',
     packages: [
