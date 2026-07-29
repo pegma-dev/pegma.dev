@@ -2,8 +2,8 @@
 
 ## Status
 
-**Stage:** Phase 4 complete (public catalog MCP). Phase 5 (scaffold + eval)
-remains open.
+**Stage:** Phase 5 complete (scaffold + offline assembly eval). Implementable
+agent-assembly plan work is done.
 
 This document is the working plan for closing the gap between what AI coding
 agents tend to do (regenerate common backend functions as bespoke code) and
@@ -26,6 +26,8 @@ what the Pegma stack already packages (typed, tested, pin-able components).
 | Skill install notes | `https://pegma.dev/skill` (`src/pages/skill.astro`) |
 | Catalog tool logic | `src/data/mcp-tools.ts` |
 | MCP Worker surface | `worker/src/mcp-server.ts` → `https://pegma.dev/api/mcp` |
+| Minimal CF scaffold | `recipes/scaffold-cf-minimal/` |
+| Offline assembly eval | `evals/assembly-eval.ts` (`npm run eval:assembly`) |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -343,7 +345,7 @@ no private data plane.
 and `llms.txt`; `plan_composition` is rule-based over structured
 `capabilityTags`.
 
-### Phase 5 — Scaffold and eval harness
+### Phase 5 — Scaffold and eval harness ✓
 
 Public synthetic starter template with pinned known-good versions and an
 empty-ish composition root. Small offline or CI eval set of prompts
@@ -351,8 +353,25 @@ empty-ish composition root. Small offline or CI eval set of prompts
 only”, “do not use passwords”) scored on package selection and refusal
 compliance — not on UI polish.
 
+Shipped:
+
+| Surface | Path |
+| --- | --- |
+| Scaffold fixture | `recipes/scaffold-cf-minimal/` (Glass Wing) |
+| Catalog recipe | `static-brochure-minimal` (green scaffold citation) |
+| Eval cases | `evals/assembly-cases.ts` |
+| Eval runner | `evals/assembly-eval.ts` |
+| CI coverage | `evals/assembly-eval.test.ts` via `npm test` / `npm run eval:assembly` |
+
+The offline harness scores `plan_composition` (catalog planner) against the
+prompt set and compares pass rate to a baseline with no catalog (always 0).
+Full multi-agent LLM A/B remains optional outside CI.
+
 **Exit:** measured improvement when skill + catalog (+ MCP if present) are
 enabled vs. baseline agent with only web search.
+
+**Done:** catalog planner pass rate > baseline on the four Phase 5 prompts;
+scaffold fixture is green and cited from the catalog.
 
 ## Non-goals
 
