@@ -204,8 +204,12 @@ export async function handleGetReleases(
     );
   }
 
+  // ETag fingerprints stored release facts only. Request-time observedAt must
+  // not participate or every revalidation would force a full 200.
+  const etag = await weakEtagForBody(
+    JSON.stringify({ schema: body.schema, releases: body.releases }),
+  );
   const payload = JSON.stringify(body);
-  const etag = await weakEtagForBody(payload);
   const headers = new Headers({
     'Cache-Control': `public, max-age=${RELEASES_MAX_AGE_SECONDS}`,
     'Content-Type': 'application/json; charset=utf-8',

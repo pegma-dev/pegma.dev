@@ -198,6 +198,7 @@ describe('handleGetReleases', () => {
     const etag = first.headers.get('ETag');
     expect(etag).toBeTruthy();
 
+    // Different request-time observedAt must not change the ETag.
     const second = await handleGetReleases({
       request: new Request('https://pegma.dev/api/releases', {
         method: 'GET',
@@ -206,10 +207,11 @@ describe('handleGetReleases', () => {
       store,
       logger,
       config,
-      now: NOW,
+      now: '2026-07-28T20:05:00.000Z',
     });
     expect(second.status).toBe(304);
     expect(await second.text()).toBe('');
+    expect(second.headers.get('ETag')).toBe(etag);
   });
 
   it('returns 304 when If-None-Match is *', async () => {
