@@ -154,7 +154,7 @@ describe('support subject markers and URLs', () => {
       '[PEG-7] Docs typo',
     );
     expect(publicTicketUrl('ticket-1')).toBe(
-      'https://pegma.dev/feedback/ticket-1',
+      'https://pegma.dev/feedback/ticket/?id=ticket-1',
     );
   });
 });
