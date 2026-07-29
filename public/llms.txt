@@ -74,6 +74,14 @@ status, design decisions, and non-goals.
 - Schema and recipe backlog (source docs):
   https://github.com/pegma-dev/pegma.dev/tree/main/docs/catalog
 
+## Assembly skill (agents)
+
+- [skill.md](https://pegma.dev/skill.md): short judgment skill — assemble over
+  generate, explicit composition root, treat refuses as hard constraints,
+  lookup catalog → component → green recipe → fixture. Does **not** hardcode
+  package versions; re-fetch the catalog. Install notes:
+  [https://pegma.dev/skill](https://pegma.dev/skill).
+
 ## Site
 
 - [The stack](https://pegma.dev/stack): every component — owns, refuses,
@@ -83,6 +91,7 @@ status, design decisions, and non-goals.
 - [Examples](https://pegma.dev/examples): composition recipes with CI-tested
   fixtures under recipes/ (P1 accounts, P2 audit/mail outbox) plus snippets
   lifted from package READMEs; each block cites its source.
+- [Skill](https://pegma.dev/skill): install notes for the assembly skill.
 - [Account](https://pegma.dev/account): the static shell for pegma.dev's
   D1-backed first-party Identity reference consumer. The Worker pins the exact
   Identity, Authorization adapter, Sessions, Mail, rate-limit, and storage
