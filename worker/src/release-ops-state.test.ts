@@ -15,7 +15,13 @@ describe('release ops state', () => {
     await markReleaseWebhookSuccess(store, '2026-07-28T10:00:00.000Z');
     await mergeReleaseRepositoryEtagUpdates(
       store,
-      { '1313911960': '"etag"' },
+      [
+        {
+          repositoryId: '1313911960',
+          etag: '"etag"',
+          expectedEpoch: 0,
+        },
+      ],
       '2026-07-28T12:00:00.000Z',
     );
 
@@ -27,34 +33,50 @@ describe('release ops state', () => {
     expect(ops.repositoryEtags).toEqual({ '1313911960': '"etag"' });
   });
 
-  it('invalidates a repository ETag without clobbering siblings', async () => {
+  it('invalidates a repository ETag and bumps its epoch', async () => {
     const store = createMemoryStore();
     await mergeReleaseRepositoryEtagUpdates(
       store,
-      { '1313911960': '"etag-a"', '1312512520': '"keep"' },
+      [
+        {
+          repositoryId: '1313911960',
+          etag: '"etag-a"',
+          expectedEpoch: 0,
+        },
+        {
+          repositoryId: '1312512520',
+          etag: '"keep"',
+          expectedEpoch: 0,
+        },
+      ],
       '2026-07-28T12:00:00.000Z',
     );
     await invalidateReleaseRepositoryEtag(store, '1313911960');
     const ops = await readReleaseOpsState(store);
     expect(ops.repositoryEtags).toEqual({ '1312512520': '"keep"' });
+    expect(ops.repositoryEtagEpochs['1313911960']).toBe(1);
     expect(ops.lastSuccessfulReconciliationAt).toBe(
       '2026-07-28T12:00:00.000Z',
     );
   });
 
-  it('merges etag updates without restoring concurrent invalidations', async () => {
+  it('does not restore ETags after concurrent invalidation', async () => {
     const store = createMemoryStore();
     await mergeReleaseRepositoryEtagUpdates(
       store,
-      { a: '1', b: '2' },
+      [{ repositoryId: 'a', etag: '1', expectedEpoch: 0 }],
       null,
     );
+    // Recon observed epoch 0 for a, then webhook invalidates.
     await invalidateReleaseRepositoryEtag(store, 'a');
-    // Partial recon only updates b — must not restore a.
-    await mergeReleaseRepositoryEtagUpdates(store, { b: '2b' }, null);
+    await mergeReleaseRepositoryEtagUpdates(
+      store,
+      [{ repositoryId: 'a', etag: 'stale', expectedEpoch: 0 }],
+      null,
+    );
     const ops = await readReleaseOpsState(store);
-    expect(ops.repositoryEtags).toEqual({ b: '2b' });
-    expect(ops.lastSuccessfulReconciliationAt).toBeNull();
+    expect(ops.repositoryEtags).toEqual({});
+    expect(ops.repositoryEtagEpochs['a']).toBe(1);
   });
 
   it('classifies reconciliation staleness', () => {

@@ -11,6 +11,7 @@ import {
 import {
   mergeReleaseRepositoryEtagUpdates,
   readReleaseOpsState,
+  type ConditionalEtagUpdate,
 } from './release-ops-state';
 import {
   applyAuthoritativeCurrentRelease,
@@ -283,9 +284,8 @@ export async function runReleaseReconciliation(
   const observedAt = options.now ?? new Date().toISOString();
   const fetchImpl = options.fetchImpl ?? fetch;
   const catalog = allowedReleaseCatalog(config.allowedRepositoryIds);
-  // Per-repo ETag merges only (never full-map replace) so a concurrent webhook
-  // invalidation is not restored by this run's end write.
-  const etagUpdates: Record<string, string | null> = {};
+  // Epoch-conditioned ETag updates so a concurrent webhook invalidation wins.
+  const etagUpdates: ConditionalEtagUpdate[] = [];
 
   let examined = 0;
   let upserted = 0;
@@ -295,8 +295,9 @@ export async function runReleaseReconciliation(
 
   for (const entry of catalog) {
     examined += 1;
-    // Re-read live ETags each repo so mid-run webhook invalidations apply.
+    // Re-read live ETags/epochs each repo so mid-run invalidations apply.
     const live = await readReleaseOpsState(store);
+    const expectedEpoch = live.repositoryEtagEpochs[entry.repositoryId] ?? 0;
     let result: {
       readonly outcome:
         | 'upserted'
@@ -322,22 +323,24 @@ export async function runReleaseReconciliation(
 
     if (result.outcome === 'failed') {
       failed += 1;
-      // Leave this repository's ETag untouched in the merge map.
     } else if (result.outcome === 'cleared') {
       cleared += 1;
-      etagUpdates[entry.repositoryId] = null;
+      etagUpdates.push({
+        repositoryId: entry.repositoryId,
+        etag: null,
+        expectedEpoch,
+      });
     } else if (result.outcome === 'not_modified') {
       notModified += 1;
-      // No ETag map change; live entry already correct.
     } else {
       if (result.outcome === 'upserted') {
         upserted += 1;
       }
-      if (result.etag !== undefined) {
-        etagUpdates[entry.repositoryId] = result.etag;
-      } else {
-        etagUpdates[entry.repositoryId] = null;
-      }
+      etagUpdates.push({
+        repositoryId: entry.repositoryId,
+        etag: result.etag ?? null,
+        expectedEpoch,
+      });
     }
   }
 

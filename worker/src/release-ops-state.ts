@@ -15,23 +15,29 @@ export interface ReleaseOpsState {
   readonly lastSuccessfulReconciliationAt: string | null;
   /** Per-repository ETag for GitHub conditional requests (repoId → etag). */
   readonly repositoryEtags: Readonly<Record<string, string>>;
+  /**
+   * Per-repository generation bumped on every ETag invalidation so recon
+   * cannot restore a stale ETag after a concurrent webhook projection.
+   */
+  readonly repositoryEtagEpochs: Readonly<Record<string, number>>;
 }
 
 type EncodedReleaseOpsState = {
   readonly lastSuccessfulWebhookAt: StoredValue;
   readonly lastSuccessfulReconciliationAt: StoredValue;
   readonly repositoryEtagsJson: StoredValue;
+  readonly repositoryEtagEpochsJson: StoredValue;
 };
 
 function opsKey(): EntityKey {
   return { partition: OPS_PARTITION, id: OPS_ID };
 }
 
-function encodeEtags(etags: Readonly<Record<string, string>>): string {
-  return JSON.stringify(etags);
+function encodeStringMap(map: Readonly<Record<string, string>>): string {
+  return JSON.stringify(map);
 }
 
-function decodeEtags(value: StoredValue): Record<string, string> {
+function decodeStringMap(value: StoredValue): Record<string, string> {
   if (typeof value !== 'string' || value.length === 0 || value.length > 32_768) {
     return {};
   }
@@ -52,11 +58,37 @@ function decodeEtags(value: StoredValue): Record<string, string> {
   }
 }
 
+function encodeEpochMap(map: Readonly<Record<string, number>>): string {
+  return JSON.stringify(map);
+}
+
+function decodeEpochMap(value: StoredValue): Record<string, number> {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 32_768) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    const result: Record<string, number> = {};
+    for (const [key, entry] of Object.entries(parsed)) {
+      if (typeof entry === 'number' && Number.isSafeInteger(entry) && entry >= 0) {
+        result[key] = entry;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 function encode(value: ReleaseOpsState): EncodedReleaseOpsState {
   return {
     lastSuccessfulWebhookAt: value.lastSuccessfulWebhookAt,
     lastSuccessfulReconciliationAt: value.lastSuccessfulReconciliationAt,
-    repositoryEtagsJson: encodeEtags(value.repositoryEtags),
+    repositoryEtagsJson: encodeStringMap(value.repositoryEtags),
+    repositoryEtagEpochsJson: encodeEpochMap(value.repositoryEtagEpochs),
   };
 }
 
@@ -70,7 +102,10 @@ function decode(record: StoredRecord): ReleaseOpsState {
       typeof record['lastSuccessfulReconciliationAt'] === 'string'
         ? record['lastSuccessfulReconciliationAt']
         : null,
-    repositoryEtags: decodeEtags(record['repositoryEtagsJson'] ?? null),
+    repositoryEtags: decodeStringMap(record['repositoryEtagsJson'] ?? null),
+    repositoryEtagEpochs: decodeEpochMap(
+      record['repositoryEtagEpochsJson'] ?? null,
+    ),
   };
 }
 
@@ -86,6 +121,7 @@ const EMPTY: ReleaseOpsState = {
   lastSuccessfulWebhookAt: null,
   lastSuccessfulReconciliationAt: null,
   repositoryEtags: {},
+  repositoryEtagEpochs: {},
 };
 
 export async function readReleaseOpsState(store: Store): Promise<ReleaseOpsState> {
@@ -94,8 +130,8 @@ export async function readReleaseOpsState(store: Store): Promise<ReleaseOpsState
 }
 
 /**
- * Drop the recon ETag for one repository. Critical for correctness after a
- * webhook changes the local projection — must not be best-effort.
+ * Drop the recon ETag for one repository and bump its epoch. Critical for
+ * correctness after a webhook changes the local projection.
  */
 export async function invalidateReleaseRepositoryEtag(
   store: Store,
@@ -103,16 +139,16 @@ export async function invalidateReleaseRepositoryEtag(
 ): Promise<void> {
   await store.collection(releaseOpsCollection()).update(opsKey(), (current) => {
     const base = current ?? EMPTY;
-    if (!(repositoryId in base.repositoryEtags)) {
-      return { action: 'keep' };
-    }
     const etags = { ...base.repositoryEtags };
+    const epochs = { ...base.repositoryEtagEpochs };
     delete etags[repositoryId];
+    epochs[repositoryId] = (epochs[repositoryId] ?? 0) + 1;
     return {
       action: 'write',
       value: {
         ...base,
         repositoryEtags: etags,
+        repositoryEtagEpochs: epochs,
       },
     };
   });
@@ -132,24 +168,37 @@ export async function markReleaseWebhookSuccess(
   }));
 }
 
+/** One repository ETag update conditioned on the epoch observed at fetch time. */
+export interface ConditionalEtagUpdate {
+  readonly repositoryId: string;
+  /** ETag to store, or null to clear. */
+  readonly etag: string | null;
+  /** Epoch value read when reconciliation began this repository. */
+  readonly expectedEpoch: number;
+}
+
 /**
- * Merge per-repository ETag updates into the live ops map. `null` deletes a
- * key; omitted keys are left untouched so concurrent webhook invalidations
- * are not restored by a full-map replace.
+ * Merge conditional ETag updates. An update applies only when the live epoch
+ * still matches `expectedEpoch`, so a concurrent invalidation wins.
  */
 export async function mergeReleaseRepositoryEtagUpdates(
   store: Store,
-  updates: Readonly<Record<string, string | null>>,
+  updates: readonly ConditionalEtagUpdate[],
   markSuccessAt: string | null,
 ): Promise<void> {
   await store.collection(releaseOpsCollection()).update(opsKey(), (current) => {
     const base = current ?? EMPTY;
     const etags = { ...base.repositoryEtags };
-    for (const [repositoryId, value] of Object.entries(updates)) {
-      if (value === null) {
-        delete etags[repositoryId];
+    const epochs = { ...base.repositoryEtagEpochs };
+    for (const update of updates) {
+      const liveEpoch = epochs[update.repositoryId] ?? 0;
+      if (liveEpoch !== update.expectedEpoch) {
+        continue;
+      }
+      if (update.etag === null) {
+        delete etags[update.repositoryId];
       } else {
-        etags[repositoryId] = value;
+        etags[update.repositoryId] = update.etag;
       }
     }
     return {
@@ -157,6 +206,7 @@ export async function mergeReleaseRepositoryEtagUpdates(
       value: {
         ...base,
         repositoryEtags: etags,
+        repositoryEtagEpochs: epochs,
         lastSuccessfulReconciliationAt:
           markSuccessAt ?? base.lastSuccessfulReconciliationAt,
       },
