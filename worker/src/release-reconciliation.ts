@@ -90,6 +90,14 @@ export function githubLatestToFacts(
   if (root['draft'] || root['prerelease']) {
     return null;
   }
+  // Prefer nested repository.id when GitHub includes it; otherwise trust the
+  // ID-addressed request URL and stamp the catalog id.
+  const nestedRepository = asRecord(root['repository']);
+  const nestedId =
+    nestedRepository === null ? null : asId(nestedRepository['id']);
+  if (nestedId !== null && nestedId !== entry.repositoryId) {
+    return null;
+  }
   return {
     action: 'published',
     repositoryId: entry.repositoryId,
@@ -183,7 +191,9 @@ async function reconcileOneRepository(
   readonly etag: string | undefined;
 }> {
   const { store, entry, observedAt, fetchImpl } = options;
-  const url = `${GITHUB_API}/repos/pegma-dev/${entry.repositoryName}/releases/latest`;
+  // Fetch by stable numeric repository ID so a rename/recreate cannot attach
+  // another repo's release under this catalog slot.
+  const url = `${GITHUB_API}/repositories/${entry.repositoryId}/releases/latest`;
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     'User-Agent': USER_AGENT,
@@ -232,6 +242,10 @@ async function reconcileOneRepository(
   if (facts === null) {
     // 2xx with an unusable body is not proof that no stable release exists
     // (unlike 404). Fail closed so we do not clear good local state.
+    return { outcome: 'failed', etag: options.etag };
+  }
+  // Catalog repositoryId is the authority; name is display-only.
+  if (facts.repositoryId !== entry.repositoryId) {
     return { outcome: 'failed', etag: options.etag };
   }
 

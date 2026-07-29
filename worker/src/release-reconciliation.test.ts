@@ -63,7 +63,7 @@ describe('runReleaseReconciliation', () => {
     const store = createMemoryStore();
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/webhooks/releases/latest')) {
+      if (url.includes(`/repositories/${WEBHOOKS_ID}/releases/latest`)) {
         return new Response(JSON.stringify(webhooksLatest), {
           status: 200,
           headers: {
@@ -72,7 +72,7 @@ describe('runReleaseReconciliation', () => {
           },
         });
       }
-      if (url.includes('/spine/releases/latest')) {
+      if (url.includes(`/repositories/${SPINE_ID}/releases/latest`)) {
         return new Response('Not Found', { status: 404 });
       }
       return new Response('unexpected', { status: 500 });
@@ -163,7 +163,7 @@ describe('runReleaseReconciliation', () => {
     const store = createMemoryStore();
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/webhooks/')) {
+      if (url.includes(`/repositories/${WEBHOOKS_ID}/`)) {
         return new Response(JSON.stringify(webhooksLatest), {
           status: 200,
           headers: { ETag: '"ok"' },
