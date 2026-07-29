@@ -4,11 +4,10 @@ import { defineConfig } from 'astro/config';
 export default defineConfig({
   site: 'https://pegma.dev',
   trailingSlash: 'never',
-  // compressHTML eats the newline+indent at text↔inline-tag boundaries, so
-  // source like "lives in\n  <a …>catalog.json</a>" rendered as
-  // "lives incatalog.json". Serving uncompressed HTML (Cloudflare applies
-  // gzip/brotli anyway) fixes the whole class instead of policing every
-  // line break next to an <a>/<code>/<strong>.
+  // compressHTML removes boundary whitespace around inline elements (e.g. newline+indent between text and <a>), so
+  // source like "lives in\n  <a …>catalog.json</a>" can render as "lives incatalog.json".
+  // Disabling HTML minification here avoids having to police line breaks next to inline tags;
+  // Cloudflare still applies gzip/brotli at the edge.
   compressHTML: false,
   build: {
     // Emit /stack.html rather than /stack/index.html so Pages serves
