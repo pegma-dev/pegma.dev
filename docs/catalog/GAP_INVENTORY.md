@@ -45,7 +45,7 @@ surfaces against the composition catalog schema
 | `public/llms.txt` | Short agent index | No deps, pins, recipes, or refuses detail; Phase 1 should link to catalog URL only |
 | `/stack` | Human component pages | Renders registry + stage; not machine-oriented |
 | `/roadmap` | Compiled stage view | Stage only; not composition |
-| `/examples` | Skeleton snippets from READMEs | Not recipe-index shaped; no fixture status |
+| `/examples` | Recipe index + README snippets | P1–P2 quote `recipes/` fixtures; P3+ still pending |
 | `worker/src/release-catalog.ts` | Release webhook allowlist / display order | Repo id map only — reuse order, not package facts |
 | Component READMEs + conformance | Canonical package truth | Scattered; catalog must summarize and link, not fork |
 
@@ -78,15 +78,14 @@ These are Phase 0 recommendations so Phase 1 does not re-litigate shape:
    present → else npm at compile time → else registry `now` parse is
    **forbidden**; leave `version: null` and `published: false` rather than
    guess from prose.
-3. **Recipe layout:** backlog lives in `docs/catalog/`; fixtures decide their
-   home in Phase 2 (dedicated examples repo vs in-package). Catalog only
-   stores citations.
+3. **Recipe layout:** backlog lives in `docs/catalog/` + `src/data/recipe-backlog.ts`;
+   fixtures live under `recipes/` in this repo (Phase 2). Catalog stores citations.
 4. **`plan_composition` inputs:** structured `capabilityTags` + host
    constraints — not free-text LLM classification inside Pegma.
 
-## What Phase 0 deliberately does not do
+## What Phase 0 deliberately did not do
 
-- Emit `catalog.json` or change the site build (Phase 1)
-- Add recipe fixture code (Phase 2)
+- Emit `catalog.json` or change the site build (done in Phase 1)
+- Add recipe fixture code (done in Phase 2 for P1–P2 under `recipes/`)
 - Publish a skill or MCP tools (Phases 3–4)
 - Document commercial host route maps or data models

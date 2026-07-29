@@ -80,8 +80,9 @@ status, design decisions, and non-goals.
   status, links.
 - [Roadmap](https://pegma.dev/roadmap): the aggregate view; status compiled
   at build time from the repos' plans.
-- [Examples](https://pegma.dev/examples): snippets lifted from real code
-  only, each citing its source.
+- [Examples](https://pegma.dev/examples): composition recipes with CI-tested
+  fixtures under recipes/ (P1 accounts, P2 audit/mail outbox) plus snippets
+  lifted from package READMEs; each block cites its source.
 - [Account](https://pegma.dev/account): the static shell for pegma.dev's
   D1-backed first-party Identity reference consumer. The Worker pins the exact
   Identity, Authorization adapter, Sessions, Mail, rate-limit, and storage

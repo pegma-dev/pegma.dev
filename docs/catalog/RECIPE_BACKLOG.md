@@ -25,7 +25,7 @@ deferred).
 | **Non-goals** | Social login, OIDC server for third parties, passwords, multi-tenant orgs |
 | **Anti-patterns** | Password table “just for admin”; durable events on Spine’s in-process bus; mail package owning its own outbox store; inventing sessions without `@pegma/sessions` |
 | **requiresPublished** | identity, sessions, mail, rate-limit, authorization-core, storage-core, spine |
-| **Fixture** | pending — Phase 2 synthetic fixture (not pegma.dev production account routes) |
+| **Fixture** | green — [`recipes/cf-passkey-accounts/`](../../recipes/cf-passkey-accounts/) (not pegma.dev production account routes) |
 | **Phase plan exit** | One of two required Phase 2 recipes (“accounts on Cloudflare-shaped host”) |
 
 ### P2 — `storage-audit-mail-outbox` (storage + audit/mail pattern)
@@ -39,7 +39,7 @@ deferred).
 | **Non-goals** | Mail package owning storage; audit owning a store; cross-partition transactions |
 | **Anti-patterns** | Separate “send email” after commit without an outbox job; audit write outside the caller’s `transact`; fake global ordering |
 | **requiresPublished** | storage-core, audit, mail, spine |
-| **Fixture** | pending — Phase 2; may cite package README/conformance excerpts until a dedicated fixture app exists |
+| **Fixture** | green — [`recipes/storage-audit-mail-outbox/`](../../recipes/storage-audit-mail-outbox/) |
 | **Phase plan exit** | Second required Phase 2 recipe (“storage + audit/mail outbox pattern”) |
 
 ### P3 — `durable-auth-rate-limits`

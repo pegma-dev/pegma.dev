@@ -2,12 +2,13 @@
  * Prioritized synthetic recipe intents for the compiled catalog.
  * Source narrative: docs/catalog/RECIPE_BACKLOG.md
  *
- * Fixtures are pending until Phase 2; wiring code must not be invented here.
+ * Wiring code may only be quoted when fixture.status is `green` and the
+ * citation points at a CI-tested path under recipes/.
  */
 
 import type { CatalogRecipe } from './catalog-schema';
 
-/** Recipes included in catalog.json (intent metadata; fixtures still pending). */
+/** Recipes included in catalog.json. */
 export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
   {
     id: 'cf-passkey-accounts',
@@ -42,10 +43,10 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       'Mail package owning its own outbox store',
     ],
     fixture: {
-      kind: 'pending',
+      kind: 'recipe_package',
       citation:
-        'docs/catalog/RECIPE_BACKLOG.md#p1--cf-passkey-accounts-first-end-to-end-accounts-recipe',
-      status: 'pending',
+        'https://github.com/pegma-dev/pegma.dev/tree/main/recipes/cf-passkey-accounts',
+      status: 'green',
     },
     capabilityTags: [
       'accounts',
@@ -94,10 +95,10 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       'Audit write outside the caller transact',
     ],
     fixture: {
-      kind: 'pending',
+      kind: 'recipe_package',
       citation:
-        'docs/catalog/RECIPE_BACKLOG.md#p2--storage-audit-mail-outbox-storage--auditmail-pattern',
-      status: 'pending',
+        'https://github.com/pegma-dev/pegma.dev/tree/main/recipes/storage-audit-mail-outbox',
+      status: 'green',
     },
     capabilityTags: ['storage', 'audit', 'mail_transactional'],
     requiresPublished: ['storage-core', 'audit', 'mail', 'spine'],
