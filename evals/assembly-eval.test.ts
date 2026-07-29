@@ -1,225 +1,76 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeAll } from 'vitest';
+import {
+  clearNpmVersionCache,
+  compileCompositionCatalog,
+} from '../src/data/compile-catalog';
+import { components } from '../src/data/components';
 import type { CompositionCatalog } from '../src/data/catalog-schema';
 import { runAssemblyEval } from './assembly-eval';
 import { ASSEMBLY_EVAL_CASES } from './assembly-cases';
 
-/**
- * Prefer the live compiled shape when available; fall back to example catalog
- * enriched enough for identity/health tags via the real compile path is heavy
- * offline — tests use a minimal synthetic catalog that mirrors Pegma tags.
- */
-function loadEvalCatalog(): CompositionCatalog {
-  const here = dirname(fileURLToPath(import.meta.url));
-  // Use the site's example only for schema shape; build a minimal Pegma-like set.
-  const base = JSON.parse(
-    readFileSync(
-      join(here, '../docs/catalog/example-catalog.json'),
-      'utf8',
-    ),
-  ) as CompositionCatalog;
+const FIXED_AT = '2026-07-29T12:00:00.000Z';
+const NO_STAGES: Record<string, string | null> = Object.fromEntries(
+  components.map((c) => [c.repo, null]),
+);
 
-  return {
-    schemaVersion: '0.1.0',
-    generatedAt: '2026-07-29T00:00:00.000Z',
-    components: [
-      {
-        id: 'spine',
-        title: 'Spine',
-        repo: 'spine',
-        packages: [
-          { name: '@pegma/spine', version: '0.1.1', published: true },
-        ],
-        status: 'published',
-        publishUsability: 'usable',
-        summary: 'Shared contracts',
-        owns: ['Logger', 'Clock'],
-        refuses: ['Durable cross-process events on an in-process bus'],
-        dependencies: [],
-        adapters: [],
-        hostMustProvide: ['Composition root'],
-        capabilityTags: ['logging', 'events_in_process'],
-        recipeIds: [],
-        links: { githubRepo: 'https://github.com/pegma-dev/spine' },
-      },
-      {
-        id: 'identity',
-        title: 'Identity',
-        repo: 'identity',
-        packages: [
-          { name: '@pegma/identity', version: '0.1.0', published: true },
-        ],
-        status: 'published',
-        publishUsability: 'usable',
-        summary: 'Passkeys-first identity',
-        owns: ['Passkeys', 'Email codes'],
-        refuses: ['Passwords — a refusal, not a phase'],
-        dependencies: [
-          { componentId: 'spine', kind: 'requires' },
-        ],
-        adapters: [],
-        hostMustProvide: ['HTTP', 'WebAuthn'],
-        capabilityTags: [
-          'accounts',
-          'passkeys',
-          'email_codes',
-          'sessions',
-          'authorization',
-          'mail_transactional',
-        ],
-        recipeIds: ['cf-passkey-accounts'],
-        links: { githubRepo: 'https://github.com/pegma-dev/identity' },
-      },
-      {
-        id: 'health',
-        title: 'Health',
-        repo: 'health',
-        packages: [
-          { name: '@pegma/health', version: '0.1.1', published: true },
-        ],
-        status: 'published',
-        publishUsability: 'usable',
-        summary: 'Liveness probes',
-        owns: ['Health checks'],
-        refuses: ['APM and traces'],
-        dependencies: [{ componentId: 'spine', kind: 'requires' }],
-        adapters: [],
-        hostMustProvide: ['HTTP route'],
-        capabilityTags: ['health'],
-        recipeIds: [],
-        links: { githubRepo: 'https://github.com/pegma-dev/health' },
-      },
-      {
-        id: 'storage-core',
-        title: 'Storage Core',
-        repo: 'storage-core',
-        packages: [
-          { name: '@pegma/storage-core', version: '0.4.0', published: true },
-          {
-            name: '@pegma/storage-cloudflare-d1',
-            version: '0.4.0',
-            published: true,
-          },
-        ],
-        status: 'published',
-        publishUsability: 'usable',
-        summary: 'Declared collections',
-        owns: ['Transactions'],
-        refuses: ['Cross-partition transactions'],
-        dependencies: [{ componentId: 'spine', kind: 'requires' }],
-        adapters: [
-          {
-            id: 'cloudflare-d1',
-            packageName: '@pegma/storage-cloudflare-d1',
-            host: 'cloudflare',
-            when: 'Workers D1',
-          },
-        ],
-        hostMustProvide: ['Adapter binding'],
-        capabilityTags: ['storage', 'cloudflare'],
-        recipeIds: [],
-        links: { githubRepo: 'https://github.com/pegma-dev/storage-core' },
-      },
-      {
-        id: 'sessions',
-        title: 'Sessions',
-        repo: 'sessions',
-        packages: [
-          { name: '@pegma/sessions', version: '0.1.0', published: true },
-        ],
-        status: 'published',
-        publishUsability: 'usable',
-        summary: 'Server sessions',
-        owns: ['Session records'],
-        refuses: ['Browser session storage as the server session'],
-        dependencies: [
-          { componentId: 'spine', kind: 'requires' },
-          { componentId: 'storage-core', kind: 'requires' },
-        ],
-        adapters: [],
-        hostMustProvide: ['Cookie boundary'],
-        capabilityTags: ['sessions'],
-        recipeIds: [],
-        links: { githubRepo: 'https://github.com/pegma-dev/sessions' },
-      },
-      {
-        id: 'mail',
-        title: 'Mail',
-        repo: 'mail',
-        packages: [
-          { name: '@pegma/mail', version: '0.1.0', published: true },
-        ],
-        status: 'published',
-        publishUsability: 'usable',
-        summary: 'Transactional mail outbox',
-        owns: ['Outbox jobs'],
-        refuses: ['Owning its own store'],
-        dependencies: [
-          { componentId: 'spine', kind: 'requires' },
-          { componentId: 'storage-core', kind: 'requires' },
-        ],
-        adapters: [],
-        hostMustProvide: ['Provider'],
-        capabilityTags: ['mail_transactional'],
-        recipeIds: [],
-        links: { githubRepo: 'https://github.com/pegma-dev/mail' },
-      },
-    ],
-    recipes: [
-      {
-        id: 'cf-passkey-accounts',
-        intent: base.recipes[0]?.intent ?? 'accounts',
-        packages: [
-          '@pegma/identity@0.1.0',
-          '@pegma/sessions@0.1.0',
-          '@pegma/mail@0.1.0',
-          '@pegma/spine@0.1.1',
-        ],
-        adapters: [],
-        hostResponsibilities: ['HTTP'],
-        nonGoals: ['Passwords'],
-        antiPatterns: ['Password table'],
-        fixture: {
-          kind: 'recipe_package',
-          citation: 'recipes/cf-passkey-accounts',
-          status: 'green',
-        },
-        capabilityTags: [
-          'accounts',
-          'passkeys',
-          'email_codes',
-          'sessions',
-          'authorization',
-          'mail_transactional',
-          'cloudflare',
-        ],
-        requiresPublished: ['identity', 'sessions', 'mail', 'spine'],
-        backlogPriority: 1,
-      },
-      {
-        id: 'scaffold-cf-minimal',
-        intent: 'Glass Wing static scaffold',
-        packages: ['@pegma/spine@0.1.1', '@pegma/health@0.1.1'],
-        adapters: [],
-        hostResponsibilities: ['Worker fetch'],
-        nonGoals: ['Accounts'],
-        antiPatterns: ['Pulling identity for later'],
-        fixture: {
-          kind: 'scaffold',
-          citation: 'recipes/scaffold-cf-minimal',
-          status: 'green',
-        },
-        capabilityTags: ['static_host', 'health', 'cloudflare'],
-        requiresPublished: ['spine', 'health'],
-        backlogPriority: 6,
-      },
-    ],
-  };
+/**
+ * Deterministic npm pins matching known-good published versions used by
+ * recipe backlog pins and the site worker. Never hits the network.
+ */
+const EVAL_NPM: Record<string, string | null> = {
+  '@pegma/spine': '0.1.1',
+  '@pegma/storage-core': '0.4.0',
+  '@pegma/storage-azure-tables': '0.4.0',
+  '@pegma/storage-cloudflare-d1': '0.4.0',
+  '@pegma/storage-blobs': '0.1.0',
+  '@pegma/storage-azure-blob': '0.1.0',
+  '@pegma/storage-cloudflare-r2': '0.1.0',
+  '@pegma/storage-s3': '0.1.0',
+  '@pegma/authorization-contracts': '0.1.2',
+  '@pegma/authorization-core': '0.1.2',
+  '@pegma/authorization-policy': '0.1.2',
+  '@pegma/authorization-auth0': '0.1.2',
+  '@pegma/authorization-stripe': '0.1.2',
+  '@pegma/authorization-storage': '0.1.2',
+  '@pegma/authorization-tokens': '0.1.2',
+  '@pegma/authorization-identity': '0.1.2',
+  '@pegma/audit': '0.1.0',
+  '@pegma/support-desk-contracts': '0.1.0',
+  '@pegma/support-desk-core': '0.1.0',
+  '@pegma/support-desk-application': '0.1.0',
+  '@pegma/support-desk-templates': '0.1.0',
+  '@pegma/webhooks': null, // unpublished for production assembly
+  '@pegma/sessions': '0.1.0',
+  '@pegma/mail': '0.1.0',
+  '@pegma/billing-core': null,
+  '@pegma/identity': '0.1.0',
+  '@pegma/rate-limit': '0.1.0',
+  '@pegma/logger-tee': '0.1.1',
+  '@pegma/logger-applicationinsights': '0.1.1',
+  '@pegma/logger-cloudflare': '0.1.1',
+  '@pegma/logger-datadog': '0.1.1',
+  '@pegma/health': '0.1.1',
+};
+
+async function compileEvalCatalog(): Promise<CompositionCatalog> {
+  clearNpmVersionCache();
+  return compileCompositionCatalog({
+    generatedAt: FIXED_AT,
+    stageByRepo: NO_STAGES,
+    npmLookup: async (name) =>
+      Object.prototype.hasOwnProperty.call(EVAL_NPM, name)
+        ? EVAL_NPM[name]!
+        : null,
+  });
 }
 
 describe('assembly eval harness (Phase 5)', () => {
+  let catalog: CompositionCatalog;
+
+  beforeAll(async () => {
+    catalog = await compileEvalCatalog();
+  });
+
   it('defines the plan prompt set', () => {
     expect(ASSEMBLY_EVAL_CASES.map((c) => c.id).sort()).toEqual(
       [
@@ -231,23 +82,44 @@ describe('assembly eval harness (Phase 5)', () => {
     );
   });
 
-  it('baseline (no catalog) scores 0', () => {
-    const report = runAssemblyEval(null, 'baseline');
-    expect(report.passRate).toBe(0);
-    expect(report.passed).toBe(0);
-    expect(report.total).toBe(ASSEMBLY_EVAL_CASES.length);
+  it('compiles the real catalog artifact (not a hand-built twin)', () => {
+    expect(catalog.schemaVersion).toBe('0.1.0');
+    expect(catalog.components.length).toBe(components.length);
+    const scaffold = catalog.recipes.find((r) => r.id === 'static-brochure-minimal');
+    expect(scaffold?.fixture.status).toBe('green');
+    expect(scaffold?.fixture.citation).toContain('scaffold-cf-minimal');
+    expect(scaffold?.capabilityTags).toEqual(['static_host', 'cloudflare']);
+    expect(scaffold?.capabilityTags).not.toContain('health');
   });
 
-  it('catalog planner improves pass rate over baseline', () => {
-    const catalog = loadEvalCatalog();
+  it('baseline scores assertions against an empty plan (not forced all-fail)', () => {
+    const report = runAssemblyEval(null, 'baseline');
+    // Static brochure may pass (must-not-include only); include cases fail.
+    const byId = Object.fromEntries(report.cases.map((c) => [c.id, c]));
+    expect(byId['static-brochure']?.pass).toBe(true);
+    expect(byId['passkey-accounts-workers']?.pass).toBe(false);
+    expect(byId['health-endpoint-only']?.pass).toBe(false);
+    expect(byId['no-passwords']?.pass).toBe(false);
+    expect(report.passRate).toBeGreaterThan(0);
+    expect(report.passRate).toBeLessThan(1);
+  });
+
+  it('catalog planner improves pass rate over baseline on compiled catalog', () => {
     const baseline = runAssemblyEval(null, 'baseline');
     const withCatalog = runAssemblyEval(catalog, 'catalog');
     expect(withCatalog.passRate).toBeGreaterThan(baseline.passRate);
-    expect(withCatalog.passed).toBeGreaterThan(0);
-    // All four cases should pass on the synthetic Pegma-shaped catalog.
-    expect(withCatalog.passRate).toBe(1);
     for (const c of withCatalog.cases) {
       expect(c.pass, `${c.id}: ${JSON.stringify(c.checks)}`).toBe(true);
     }
+    expect(withCatalog.passRate).toBe(1);
+
+    const staticCase = withCatalog.cases.find((c) => c.id === 'static-brochure')!;
+    expect(staticCase.primaryRecipeId).toBe('static-brochure-minimal');
+
+    const healthCase = withCatalog.cases.find((c) => c.id === 'health-endpoint-only')!;
+    expect(healthCase.primaryRecipeId).not.toBe('static-brochure-minimal');
+    expect(healthCase.packageNames.some((p) => p.includes('@pegma/health'))).toBe(
+      true,
+    );
   });
 });

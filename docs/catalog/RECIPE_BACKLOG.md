@@ -72,15 +72,17 @@ deferred).
 | **requiresPublished** | spine, logger-adapters |
 | **Fixture** | pending |
 
-### P6 — `static-brochure-minimal`
+### P6 — `static-brochure-minimal` (scaffold)
 
 | | |
 | --- | --- |
-| **Intent** | A fictional static museum site (“Glass Wing”) needs no accounts, no durable storage, and no mail — only honest stack awareness (and optional health if a Worker exists). Teaches agents to **select nothing extra**. |
-| **Packages** | none required; optional `@pegma/health` if a Worker liveness route exists |
+| **Intent** | A fictional static museum site (“Glass Wing”) needs no accounts, no durable storage, and no mail — only honest stack awareness. Teaches agents to **select nothing extra**. Optional Worker health is host-owned (`withHealth`), not a required catalog capability. |
+| **Packages (pinned)** | `@pegma/spine@0.1.1` (optional `@pegma/health` only if the host enables a liveness route) |
+| **Host must provide** | Static hosting / optional Worker fetch; explicit empty-ish composition root |
 | **Anti-patterns** | Pulling identity/sessions “for later”; inventing a database for a static site |
-| **requiresPublished** | (none) |
-| **Fixture** | pending — may be skill/eval only with empty composition root |
+| **requiresPublished** | spine |
+| **capabilityTags** | `static_host`, `cloudflare` (no `health` — leave pure health planning to health-public-liveness) |
+| **Fixture** | green — [`recipes/scaffold-cf-minimal/`](../../recipes/scaffold-cf-minimal/) |
 
 ## Deferred (unpublished packages)
 

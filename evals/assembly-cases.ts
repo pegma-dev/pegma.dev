@@ -2,11 +2,13 @@
  * Offline assembly eval cases for Phase 5.
  *
  * Prompts are scored by mapping them to structured capabilityTags and
- * running plan_composition (catalog facts). This measures package selection
- * and refusal compliance without hosting an LLM in Pegma.
+ * running plan_composition over the **compiled** catalog (same path as
+ * catalog.json). This measures package selection and refusal compliance
+ * without hosting an LLM in Pegma.
  *
- * “Baseline” (web-search only) is modeled as no catalog planner: score 0 on
- * every package assertion. “With catalog” uses planComposition.
+ * Baseline models an agent that never consults the catalog: empty package
+ * set and no catalog refuse notes. Assertions are scored honestly against
+ * that empty plan (must-include fails; pure must-not-include may pass).
  */
 
 import type { CapabilityTag } from '../src/data/catalog-schema';
@@ -26,6 +28,10 @@ export interface AssemblyEvalCase {
   readonly mustSurfaceRefusalSubstrings?: readonly string[];
   /** Substrings that must not appear in recommended package names. */
   readonly mustNotRecommendSubstrings?: readonly string[];
+  /** Primary recipe id that must be selected (catalog mode). */
+  readonly mustPrimaryRecipeId?: string;
+  /** Primary recipe id that must not be selected (catalog mode). */
+  readonly mustNotPrimaryRecipeId?: string;
 }
 
 /**
@@ -38,6 +44,7 @@ export const ASSEMBLY_EVAL_CASES: readonly AssemblyEvalCase[] = [
     prompt:
       'Static brochure museum site (Glass Wing). No accounts, no durable storage, no mail.',
     capabilityTags: ['static_host'],
+    mustPrimaryRecipeId: 'static-brochure-minimal',
     mustNotIncludePackageNames: [
       '@pegma/identity',
       '@pegma/sessions',
@@ -61,6 +68,8 @@ export const ASSEMBLY_EVAL_CASES: readonly AssemblyEvalCase[] = [
     capabilityTags: ['health'],
     mustIncludePackageNames: ['@pegma/health'],
     mustNotIncludePackageNames: ['@pegma/identity', '@pegma/mail'],
+    // Do not send agents to the static museum scaffold for a health-only plan.
+    mustNotPrimaryRecipeId: 'static-brochure-minimal',
   },
   {
     id: 'no-passwords',

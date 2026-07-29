@@ -185,12 +185,13 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
   {
     id: 'static-brochure-minimal',
     intent:
-      'A fictional static museum site (Glass Wing) needs no accounts, no durable storage, and no mail — teaching agents to select nothing extra. Optional Worker health probe only.',
-    packages: ['@pegma/spine@0.1.1', '@pegma/health@0.1.1'],
+      'A fictional static museum site (Glass Wing) needs no accounts, no durable storage, and no mail — teaching agents to select nothing extra. Optional Worker health probe is host-owned (withHealth), not a required composition capability.',
+    packages: ['@pegma/spine@0.1.1'],
     adapters: [],
     hostResponsibilities: [
       'Static hosting and optional Worker fetch route',
       'Explicit composition root (empty-ish until features are added)',
+      'Optional @pegma/health probe when a public liveness route is desired',
     ],
     nonGoals: ['Accounts, sessions, databases'],
     antiPatterns: [
@@ -203,8 +204,10 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
         'https://github.com/pegma-dev/pegma.dev/tree/main/recipes/scaffold-cf-minimal',
       status: 'green',
     },
-    capabilityTags: ['static_host', 'health', 'cloudflare'],
-    requiresPublished: ['spine', 'health'],
+    // Ambient-only tags so pure static_host plans match; do not attach `health`
+    // here (that belongs to health-public-liveness once green).
+    capabilityTags: ['static_host', 'cloudflare'],
+    requiresPublished: ['spine'],
     backlogPriority: 6,
   },
   {

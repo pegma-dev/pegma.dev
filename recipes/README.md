@@ -7,7 +7,7 @@ CI-tested composition sketches for agents. Product names and domains are
 | --- | --- | --- |
 | `cf-passkey-accounts` | Northshelf Branch — passkey + email-code accounts on a Cloudflare-shaped host | [`cf-passkey-accounts/`](./cf-passkey-accounts/) |
 | `storage-audit-mail-outbox` | Yard Loan — inventory mutation + audit + mail job in one transaction | [`storage-audit-mail-outbox/`](./storage-audit-mail-outbox/) |
-| `static-brochure-minimal` (scaffold) | Glass Wing — empty-ish CF composition root + optional health | [`scaffold-cf-minimal/`](./scaffold-cf-minimal/) |
+| `static-brochure-minimal` (scaffold) | Glass Wing — empty-ish CF composition root; optional health is host-owned | [`scaffold-cf-minimal/`](./scaffold-cf-minimal/) |
 
 ## Rules
 

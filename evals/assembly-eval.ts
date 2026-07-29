@@ -1,5 +1,9 @@
 /**
  * Offline eval runner: score plan_composition against ASSEMBLY_EVAL_CASES.
+ *
+ * - catalog mode: planComposition over a CompositionCatalog
+ * - baseline mode: empty package set + no refuse notes (agent never fetched
+ *   the catalog). Same assertions as catalog mode — not a forced all-fail.
  */
 
 import type { CompositionCatalog } from '../src/data/catalog-schema';
@@ -12,8 +16,13 @@ import {
 export interface CaseScore {
   readonly id: string;
   readonly pass: boolean;
-  readonly checks: readonly { readonly name: string; readonly pass: boolean; readonly detail?: string }[];
+  readonly checks: readonly {
+    readonly name: string;
+    readonly pass: boolean;
+    readonly detail?: string;
+  }[];
   readonly packageNames: readonly string[];
+  readonly primaryRecipeId: string | null;
 }
 
 export interface EvalReport {
@@ -25,43 +34,22 @@ export interface EvalReport {
   readonly cases: readonly CaseScore[];
 }
 
-function scoreCase(
-  catalog: CompositionCatalog | null,
-  c: AssemblyEvalCase,
-  mode: 'baseline' | 'catalog',
-): CaseScore {
-  if (mode === 'baseline' || !catalog) {
-    // No catalog planner → cannot satisfy package selection assertions.
-    const checks = [
-      {
-        name: 'catalog_available',
-        pass: false,
-        detail: 'baseline has no plan_composition',
-      },
-    ];
-    return {
-      id: c.id,
-      pass: false,
-      checks,
-      packageNames: [],
-    };
+function primaryRecipeIdFromNotes(notes: readonly string[]): string | null {
+  for (const n of notes) {
+    const m = /^primary recipe:\s*([^\s;]+)/.exec(n);
+    if (m) return m[1] ?? null;
   }
+  return null;
+}
 
-  const plan = planComposition(catalog, {
-    capabilityTags: c.capabilityTags,
-    host: c.host,
-    productionOnly: true,
-  });
-  const packageNames = plan.packages.map((p) => p.name);
-  const refuseBlob = [
-    ...plan.notes,
-    ...plan.components.flatMap((comp) => {
-      const full = catalog.components.find((x) => x.id === comp.id);
-      return full?.refuses ?? [];
-    }),
-  ].join(' | ');
-
-  const checks: { name: string; pass: boolean; detail?: string }[] = [];
+function scoreAssertions(
+  c: AssemblyEvalCase,
+  packageNames: readonly string[],
+  refuseBlob: string,
+  primaryRecipeId: string | null,
+  mode: 'baseline' | 'catalog',
+): CaseScore['checks'][number][] {
+  const checks: CaseScore['checks'][number][] = [];
 
   for (const name of c.mustIncludePackageNames ?? []) {
     const pass = packageNames.some((p) => p.includes(name) || p === name);
@@ -99,16 +87,88 @@ function scoreCase(
     });
   }
 
-  // Empty checks (static site with only must-not): still require no failures.
+  // Recipe identity checks only apply when a catalog plan exists.
+  if (mode === 'catalog' && c.mustPrimaryRecipeId) {
+    const pass = primaryRecipeId === c.mustPrimaryRecipeId;
+    checks.push({
+      name: `must_primary_recipe:${c.mustPrimaryRecipeId}`,
+      pass,
+      detail: pass ? undefined : `primary=${primaryRecipeId ?? 'none'}`,
+    });
+  }
+
+  if (mode === 'catalog' && c.mustNotPrimaryRecipeId) {
+    const pass = primaryRecipeId !== c.mustNotPrimaryRecipeId;
+    checks.push({
+      name: `must_not_primary_recipe:${c.mustNotPrimaryRecipeId}`,
+      pass,
+      detail: pass ? undefined : `primary=${primaryRecipeId}`,
+    });
+  }
+
   if (checks.length === 0) {
     checks.push({ name: 'no_assertions', pass: true });
   }
+
+  return checks;
+}
+
+function scoreCase(
+  catalog: CompositionCatalog | null,
+  c: AssemblyEvalCase,
+  mode: 'baseline' | 'catalog',
+): CaseScore {
+  if (mode === 'baseline' || !catalog) {
+    // Agent never fetched catalog facts: empty install set, no refuse notes.
+    const packageNames: string[] = [];
+    const refuseBlob = '';
+    const primaryRecipeId = null;
+    const checks = scoreAssertions(
+      c,
+      packageNames,
+      refuseBlob,
+      primaryRecipeId,
+      'baseline',
+    );
+    return {
+      id: c.id,
+      pass: checks.every((x) => x.pass),
+      checks,
+      packageNames,
+      primaryRecipeId,
+    };
+  }
+
+  const plan = planComposition(catalog, {
+    capabilityTags: c.capabilityTags,
+    host: c.host,
+    productionOnly: true,
+  });
+  const packageNames = plan.packages.map((p) => p.name);
+  const refuseBlob = [
+    ...plan.notes,
+    ...plan.components.flatMap((comp) => {
+      const full = catalog.components.find((x) => x.id === comp.id);
+      return full?.refuses ?? [];
+    }),
+  ].join(' | ');
+  const primaryRecipeId =
+    plan.recipes[0]?.id ?? primaryRecipeIdFromNotes(plan.notes);
+
+  const checks = scoreAssertions(
+    c,
+    packageNames,
+    refuseBlob,
+    primaryRecipeId,
+    'catalog',
+  );
 
   return {
     id: c.id,
     pass: checks.every((x) => x.pass),
     checks,
     packageNames,
+    primaryRecipeId,
   };
 }
 
