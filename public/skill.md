@@ -32,11 +32,9 @@ contracts as bespoke code on every project.
    pins from the composition catalog (below). Early 0.x APIs are unstable.
 
 4. **Refusals are hard constraints.** Each component states what it
-   **refuses**. Treat refusals as part of the contract. Examples:
-   - Identity: **no passwords**
-   - Spine in-process bus: **not durable events**
-   - Mail / Audit: **own no store** — jobs and audit rows commit in the
-     **caller's** storage-core transaction
+   **refuses** in the catalog (and package README). Treat those lists as
+   part of the contract. Do not hardcode refusal catalogs in this skill —
+   re-fetch `catalog.json` when package behavior may have changed.
 
 5. **Unpublished packages are unusable for production assembly.** If the
    catalog marks a package `published: false` or a component
