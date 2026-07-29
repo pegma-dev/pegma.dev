@@ -17,6 +17,7 @@
     "worker:types": "wrangler types worker/worker-configuration.d.ts -c worker/wrangler.jsonc"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
     "@pegma/audit": "0.1.0",
     "@pegma/authorization-core": "0.1.2",
     "@pegma/authorization-identity": "0.1.2",
@@ -35,7 +36,9 @@
     "@pegma/support-desk-contracts": "0.1.0",
     "@pegma/support-desk-core": "0.1.0",
     "@pegma/support-desk-templates": "0.1.0",
-    "@pegma/webhooks": "file:vendor/@pegma/webhooks/pegma-webhooks-0.0.0.tgz"
+    "@pegma/webhooks": "file:vendor/@pegma/webhooks/pegma-webhooks-0.0.0.tgz",
+    "agents": "^0.20.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",

@@ -71,7 +71,38 @@ decision:
 Index (short): `https://pegma.dev/llms.txt`  
 Human stack pages: `https://pegma.dev/stack`  
 Recipe index: `https://pegma.dev/examples`  
-This skill (judgment only): `https://pegma.dev/skill.md`
+This skill (judgment only): `https://pegma.dev/skill.md`  
+Optional MCP (same catalog facts): `https://pegma.dev/api/mcp`
+
+### Optional MCP transport
+
+When the agent supports remote MCP (Streamable HTTP), point it at the public
+catalog server. Tools return catalog facts only — no private data plane and
+no authentication for reads:
+
+| Tool | Returns |
+| --- | --- |
+| `list_components` | id, summary, status, packages |
+| `get_component` | owns, refuses, deps, adapters, versions, links |
+| `list_recipes` | id, intent, package set, fixture status |
+| `get_recipe` | full recipe + fixture citation |
+| `plan_composition` | deterministic recommendation from `capabilityTags` + host |
+
+Config snippet (remote URL; adapt to your client’s MCP schema):
+
+```json
+{
+  "mcpServers": {
+    "pegma": {
+      "url": "https://pegma.dev/api/mcp"
+    }
+  }
+}
+```
+
+Some clients still need a local proxy (`npx mcp-remote https://pegma.dev/api/mcp`).
+The MCP is never the system of record — re-fetch or call tools rather than
+caching package versions in this skill.
 
 ## How to assemble
 

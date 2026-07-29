@@ -1,0 +1,113 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import type { CompositionCatalog } from './catalog-schema';
+import {
+  getComponent,
+  getRecipe,
+  listComponents,
+  listRecipes,
+  planComposition,
+} from './mcp-tools';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const exampleCatalog = JSON.parse(
+  readFileSync(join(here, '../../docs/catalog/example-catalog.json'), 'utf8'),
+) as CompositionCatalog;
+
+describe('mcp catalog tools (progressive disclosure)', () => {
+  it('list_components returns compact rows only', () => {
+    const rows = listComponents(exampleCatalog);
+    expect(rows.length).toBe(exampleCatalog.components.length);
+    expect(rows[0]).toMatchObject({
+      id: 'example-contracts',
+      title: 'Example Contracts',
+      publishUsability: 'usable',
+    });
+    expect(rows[0]).not.toHaveProperty('owns');
+    expect(rows[0]).not.toHaveProperty('refuses');
+    expect(rows[0]).not.toHaveProperty('dependencies');
+  });
+
+  it('get_component returns full entry or null', () => {
+    const full = getComponent(exampleCatalog, 'example-store');
+    expect(full?.owns).toContain('Declared collections and single-partition transactions');
+    expect(full?.adapters.length).toBeGreaterThan(0);
+    expect(getComponent(exampleCatalog, 'missing')).toBeNull();
+  });
+
+  it('list_recipes and get_recipe', () => {
+    const rows = listRecipes(exampleCatalog);
+    expect(rows.map((r) => r.id)).toEqual([
+      'example-accounts',
+      'example-outbox',
+      'example-deferred',
+    ]);
+    expect(rows[0]).not.toHaveProperty('antiPatterns');
+    const full = getRecipe(exampleCatalog, 'example-outbox');
+    expect(full?.antiPatterns.length).toBeGreaterThan(0);
+    expect(getRecipe(exampleCatalog, 'nope')).toBeNull();
+  });
+});
+
+describe('plan_composition', () => {
+  it('returns empty when no tags', () => {
+    const plan = planComposition(exampleCatalog, { capabilityTags: [] });
+    expect(plan.components).toEqual([]);
+    expect(plan.recipes).toEqual([]);
+    expect(plan.notes[0]).toMatch(/No capabilityTags/);
+  });
+
+  it('scores storage recipes and omits non-overlapping deferred recipes', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['storage', 'audit', 'mail_transactional'],
+      host: 'cloudflare',
+    });
+    expect(plan.schema).toBe('pegma.plan_composition.v1');
+    expect(plan.recipes.map((r) => r.id)).toContain('example-outbox');
+    // Deferred webhook recipe has no overlapping tags → not a candidate.
+    expect(plan.recipes.map((r) => r.id)).not.toContain('example-deferred');
+    expect(plan.components.some((c) => c.id === 'example-store')).toBe(true);
+    expect(plan.components.some((c) => c.id === 'example-inbox')).toBe(false);
+    expect(plan.packages.every((p) => p.published)).toBe(true);
+  });
+
+  it('skips unpublished webhook recipe under productionOnly', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['webhooks_inbound'],
+      productionOnly: true,
+    });
+    expect(plan.recipes.map((r) => r.id)).not.toContain('example-deferred');
+    expect(plan.skipped.some((s) => s.id === 'example-deferred')).toBe(true);
+    expect(plan.components.some((c) => c.id === 'example-inbox')).toBe(false);
+    expect(plan.skipped.some((s) => s.id === 'example-inbox')).toBe(true);
+  });
+
+  it('includes unpublished when productionOnly=false', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['webhooks_inbound'],
+      productionOnly: false,
+    });
+    expect(plan.components.some((c) => c.id === 'example-inbox')).toBe(true);
+    expect(plan.recipes.some((r) => r.id === 'example-deferred')).toBe(true);
+  });
+
+  it('static_host prefers not recommending heavy stacks', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['static_host'],
+    });
+    // Example catalog has no static_host-tagged components; result may be empty
+    // but must not recommend webhooks/inbox as the primary story.
+    expect(plan.components.every((c) => c.id !== 'example-inbox')).toBe(true);
+    expect(plan.notes.some((n) => n.includes('static_host'))).toBe(true);
+  });
+
+  it('accounts tags surface account-shaped recipe', () => {
+    const plan = planComposition(exampleCatalog, {
+      capabilityTags: ['accounts', 'passkeys', 'cloudflare'],
+      host: 'cloudflare',
+    });
+    expect(plan.recipes[0]?.id).toBe('example-accounts');
+  });
+});

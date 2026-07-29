@@ -4,5 +4,10 @@
     "lib": ["ES2023", "WebWorker"],
     "types": ["@types/node", "./worker-configuration.d.ts"]
   },
-  "include": ["src/**/*.ts", "worker-configuration.d.ts"]
+  "include": [
+    "src/**/*.ts",
+    "worker-configuration.d.ts",
+    "../src/data/catalog-schema.ts",
+    "../src/data/mcp-tools.ts"
+  ]
 }

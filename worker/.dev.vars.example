@@ -12,3 +12,6 @@
 
 # Optional: set to "true" to probe Support Desk storage from /health.
 # SUPPORT_HEALTH_PROBE=true
+
+# Optional: override catalog URL for local MCP (default https://pegma.dev/catalog.json)
+# CATALOG_URL=http://127.0.0.1:4321/catalog.json

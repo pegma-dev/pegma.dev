@@ -90,6 +90,13 @@ status, design decisions, and non-goals.
   package versions; re-fetch the catalog. Install notes:
   [https://pegma.dev/skill](https://pegma.dev/skill).
 
+## Composition MCP (agents)
+
+- [MCP endpoint](https://pegma.dev/api/mcp): Streamable HTTP MCP over the same
+  catalog. Tools: `list_components`, `get_component`, `list_recipes`,
+  `get_recipe`, `plan_composition`. Public catalog facts only; no private data
+  plane; no auth for reads. Config notes: https://pegma.dev/skill
+
 ## Site
 
 - [The stack](https://pegma.dev/stack): every component — owns, refuses,

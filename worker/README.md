@@ -1,7 +1,9 @@
 # pegma-dev-api Worker
 
 Cloudflare Worker composition root for pegma.dev. It preserves the existing
-Pegma logging composition and public health endpoint:
+Pegma logging composition and public health endpoint, and hosts the public
+composition catalog MCP at `POST/GET https://pegma.dev/api/mcp` (Streamable
+HTTP; catalog facts only — fetches `https://pegma.dev/catalog.json`).
 
 ```ts
 createTeeLogger(createCloudflareLogger(), createDatadogLogger(submit));
