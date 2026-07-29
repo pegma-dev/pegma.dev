@@ -88,8 +88,9 @@ describe('assembly eval harness (Phase 5)', () => {
     const scaffold = catalog.recipes.find((r) => r.id === 'static-brochure-minimal');
     expect(scaffold?.fixture.status).toBe('green');
     expect(scaffold?.fixture.citation).toContain('scaffold-cf-minimal');
-    expect(scaffold?.capabilityTags).toEqual(['static_host', 'cloudflare']);
+    expect(scaffold?.capabilityTags).toEqual(['static_host']);
     expect(scaffold?.capabilityTags).not.toContain('health');
+    expect(scaffold?.capabilityTags).not.toContain('cloudflare');
   });
 
   it('baseline scores assertions against an empty plan (not forced all-fail)', () => {

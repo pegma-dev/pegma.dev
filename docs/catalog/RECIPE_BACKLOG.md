@@ -81,7 +81,7 @@ deferred).
 | **Host must provide** | Static hosting / optional Worker fetch; explicit empty-ish composition root |
 | **Anti-patterns** | Pulling identity/sessions “for later”; inventing a database for a static site |
 | **requiresPublished** | spine |
-| **capabilityTags** | `static_host`, `cloudflare` (ambient-only; pure health planning stays on the health component / health-public-liveness) |
+| **capabilityTags** | `static_host` only (not bare `cloudflare` — host-tag alone must not select this scaffold) |
 | **Fixture** | green — [`recipes/scaffold-cf-minimal/`](../../recipes/scaffold-cf-minimal/) |
 
 ## Deferred (unpublished packages)

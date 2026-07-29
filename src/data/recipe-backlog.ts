@@ -204,9 +204,9 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
         'https://github.com/pegma-dev/pegma.dev/tree/main/recipes/scaffold-cf-minimal',
       status: 'green',
     },
-    // Ambient-only tags so pure static_host plans match; do not attach `health`
-    // here (that belongs to health-public-liveness once green).
-    capabilityTags: ['static_host', 'cloudflare'],
+    // Only static_host (not bare cloudflare) so host-tag-only plans do not
+    // select the Glass Wing scaffold. Do not attach `health` here.
+    capabilityTags: ['static_host'],
     requiresPublished: ['spine'],
     backlogPriority: 6,
   },
