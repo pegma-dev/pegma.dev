@@ -80,7 +80,8 @@ export async function fetchCompositionCatalog(
 
     if (!res.ok) {
       if (cache) {
-        // Public fact surface already accepts short staleness; keep serving.
+        // Back off: keep serving stale and reset TTL so we do not hammer.
+        cache = { ...cache, fetchedAt: now };
         return cache.catalog;
       }
       throw new Error(`catalog_fetch_failed:${res.status}`);
@@ -88,7 +89,10 @@ export async function fetchCompositionCatalog(
 
     const body: unknown = await res.json();
     if (!isCompositionCatalog(body)) {
-      if (cache) return cache.catalog;
+      if (cache) {
+        cache = { ...cache, fetchedAt: now };
+        return cache.catalog;
+      }
       throw new Error('catalog_fetch_invalid_shape');
     }
 
@@ -101,6 +105,7 @@ export async function fetchCompositionCatalog(
     return body;
   } catch (error) {
     if (cache) {
+      cache = { ...cache, fetchedAt: now };
       return cache.catalog;
     }
     throw error;

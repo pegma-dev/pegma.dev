@@ -99,29 +99,50 @@ const AMBIENT_TAGS = new Set<CapabilityTag>([
 ]);
 
 /**
- * Core (non-ambient) tags on a recipe/component. Used to reject selections
- * that only share an incidental tag (e.g. accounts recipe via `storage`).
+ * Exclusive intent tags. Sharing only a non-exclusive tag (e.g. `storage`)
+ * must not select a recipe whose exclusive intents were not requested.
+ */
+const EXCLUSIVE_TAGS = new Set<CapabilityTag>([
+  'accounts',
+  'passkeys',
+  'email_codes',
+  'webhooks_inbound',
+  'support_queue',
+  'storage_blobs',
+  'rate_limit_durable',
+  'rate_limit_memory',
+]);
+
+/**
+ * Core (non-ambient) tags on a recipe/component.
  */
 function coreTags(tags: readonly CapabilityTag[]): CapabilityTag[] {
   return tags.filter((t) => !AMBIENT_TAGS.has(t));
 }
 
 /**
- * True when the request covers enough of the item's core tags that selecting
- * it is not an incidental single-tag hit.
+ * True when selecting this item for the request is not an incidental tag hit.
+ * Allows singular requests like `accounts` or `accounts`+`passkeys` to match
+ * the accounts recipe, while rejecting that recipe for a bare `storage` request.
  */
 function meaningfulCoverage(
   itemTags: readonly CapabilityTag[],
   requested: readonly CapabilityTag[],
 ): boolean {
-  const core = coreTags(itemTags);
-  if (core.length === 0) {
-    // Ambient-only items: require at least one requested ambient match.
+  const itemCore = coreTags(itemTags);
+  const reqCore = coreTags(requested);
+  if (itemCore.length === 0) {
     return tagOverlap(itemTags, requested) > 0;
   }
-  const covered = tagOverlap(core, requested);
-  // At least half of the item's core tags must be requested.
-  return covered * 2 >= core.length;
+  const overlap = tagOverlap(itemCore, reqCore.length > 0 ? reqCore : requested);
+  if (overlap === 0) return false;
+
+  const unrequestedExclusive = itemCore.filter(
+    (t) => EXCLUSIVE_TAGS.has(t) && !requested.includes(t),
+  );
+  // More unrequested exclusive intents than overlapping tags → incidental.
+  if (unrequestedExclusive.length > overlap) return false;
+  return true;
 }
 
 function toComponentListItem(c: CatalogComponent): ComponentListItem {
@@ -511,18 +532,26 @@ export function planComposition(
 
   const emitComponentPackages = (c: CatalogComponent) => {
     const filtered = packagesForComponent(c);
-    // Multi-package components without adapter metadata: only the first
-    // published package unless a recipe pin named more (handled separately).
+    // Multi-package components without adapter metadata: do not invent a
+    // "primary" package — list published packages and note the host must choose
+    // integrations. Prefer failing open on names over silently dropping deps.
     if (c.packages.length > 2 && c.adapters.length === 0) {
-      const firstPublished = filtered.find((p) => p.published) ?? filtered[0];
-      if (firstPublished) {
-        pushPkg(
-          firstPublished.name,
-          firstPublished.version,
-          firstPublished.published,
-          c.id,
-        );
+      for (const p of filtered) {
+        if (!p.published && productionOnly) continue;
+        // Skip known third-party integration package name suffixes when not
+        // requested via recipe pins (auth0/stripe/tokens-style integrations).
+        if (
+          /-(auth0|stripe|tokens)$/.test(p.name) ||
+          p.name.endsWith('-auth0') ||
+          p.name.endsWith('-stripe')
+        ) {
+          continue;
+        }
+        pushPkg(p.name, p.version, p.published, c.id);
       }
+      notes.push(
+        `${c.id}: multi-package component — install set lists published packages without third-party integrations; confirm against the component README`,
+      );
       return;
     }
     for (const p of filtered) {
@@ -534,6 +563,7 @@ export function planComposition(
     const recipeNamedPackages = new Set(
       primaryRecipe.packages.map((spec) => parsePackageSpecifier(spec).name),
     );
+    const recipeOwners = new Set<string>();
     for (const spec of primaryRecipe.packages) {
       const { name, version: pinned } = parsePackageSpecifier(spec);
       const owner = catalog.components.find((c) =>
@@ -549,12 +579,27 @@ export function planComposition(
         );
         continue;
       }
+      recipeOwners.add(owner.id);
       pushPkg(
         pkg.name,
         pinned && pinned.length > 0 ? pinned : pkg.version,
         pkg.published,
         owner.id,
       );
+    }
+    // Host adapter packages for recipe owners (e.g. D1 beside storage-core pin).
+    if (input.host) {
+      for (const ownerId of recipeOwners) {
+        const owner = componentById.get(ownerId);
+        if (!owner) continue;
+        for (const a of owner.adapters) {
+          if (a.host !== input.host && a.host !== 'memory') continue;
+          if (!a.packageName) continue;
+          const pkg = owner.packages.find((p) => p.name === a.packageName);
+          if (!pkg) continue;
+          pushPkg(pkg.name, pkg.version, pkg.published, owner.id);
+        }
+      }
     }
     // Tag-matched add-ons not named by the recipe (e.g. health with accounts).
     for (const s of scoredComponents) {
