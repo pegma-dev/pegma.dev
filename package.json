@@ -10,6 +10,7 @@
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.d1.config.ts",
     "test:node": "vitest run --config vitest.config.ts",
     "test:d1": "vitest run --config vitest.d1.config.ts",
+    "eval:assembly": "vitest run --config vitest.config.ts evals/assembly-eval.test.ts",
     "preview": "astro preview",
     "worker:dev": "wrangler dev -c worker/wrangler.jsonc",
     "worker:deploy": "wrangler deploy -c worker/wrangler.jsonc",

@@ -106,12 +106,19 @@ describe('compileCompositionCatalog', () => {
     for (const recipe of catalog.recipes) {
       expect(recipe.intent).not.toMatch(/retiregolden/i);
     }
+    const scaffold = catalog.recipes.find((r) => r.id === 'static-brochure-minimal')!;
+    expect(scaffold.fixture).toMatchObject({
+      kind: 'scaffold',
+      status: 'green',
+    });
+    expect(scaffold.fixture.citation).toContain('recipes/scaffold-cf-minimal');
     // Unshipped backlog recipes remain non-green (no invented wiring).
-    const pendingOrNone = catalog.recipes.filter(
-      (r) =>
-        r.id !== 'cf-passkey-accounts' &&
-        r.id !== 'storage-audit-mail-outbox',
-    );
+    const greenIds = new Set([
+      'cf-passkey-accounts',
+      'storage-audit-mail-outbox',
+      'static-brochure-minimal',
+    ]);
+    const pendingOrNone = catalog.recipes.filter((r) => !greenIds.has(r.id));
     for (const recipe of pendingOrNone) {
       expect(recipe.fixture.status).not.toBe('green');
     }

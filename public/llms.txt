@@ -97,6 +97,12 @@ status, design decisions, and non-goals.
   `get_recipe`, `plan_composition`. Public catalog facts only; no private data
   plane; no auth for reads. Config notes: https://pegma.dev/skill
 
+## Scaffold (agents)
+
+- Minimal Cloudflare-shaped composition root (Glass Wing synthetic scaffold):
+  https://github.com/pegma-dev/pegma.dev/tree/main/recipes/scaffold-cf-minimal
+  Empty-ish root with optional health; pin versions from catalog.json.
+
 ## Site
 
 - [The stack](https://pegma.dev/stack): every component — owns, refuses,

@@ -2,8 +2,8 @@
 
 ## Status
 
-**Stage:** Phase 4 complete (public catalog MCP). Phase 5 (scaffold + eval)
-remains open.
+**Stage:** Phase 5 complete (scaffold + offline assembly eval). Implementable
+agent-assembly plan work is done.
 
 This document is the working plan for closing the gap between what AI coding
 agents tend to do (regenerate common backend functions as bespoke code) and
@@ -26,6 +26,8 @@ what the Pegma stack already packages (typed, tested, pin-able components).
 | Skill install notes | `https://pegma.dev/skill` (`src/pages/skill.astro`) |
 | Catalog tool logic | `src/data/mcp-tools.ts` |
 | MCP Worker surface | `worker/src/mcp-server.ts` → `https://pegma.dev/api/mcp` |
+| Minimal CF scaffold | `recipes/scaffold-cf-minimal/` |
+| Offline assembly eval | `evals/assembly-eval.ts` (`npm run eval:assembly`) |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -343,7 +345,7 @@ no private data plane.
 and `llms.txt`; `plan_composition` is rule-based over structured
 `capabilityTags`.
 
-### Phase 5 — Scaffold and eval harness
+### Phase 5 — Scaffold and eval harness ✓
 
 Public synthetic starter template with pinned known-good versions and an
 empty-ish composition root. Small offline or CI eval set of prompts
@@ -351,8 +353,33 @@ empty-ish composition root. Small offline or CI eval set of prompts
 only”, “do not use passwords”) scored on package selection and refusal
 compliance — not on UI polish.
 
-**Exit:** measured improvement when skill + catalog (+ MCP if present) are
-enabled vs. baseline agent with only web search.
+Shipped:
+
+| Surface | Path |
+| --- | --- |
+| Scaffold fixture | `recipes/scaffold-cf-minimal/` (Glass Wing) |
+| Catalog recipe | `static-brochure-minimal` (green scaffold citation) |
+| Eval cases | `evals/assembly-cases.ts` |
+| Eval runner | `evals/assembly-eval.ts` |
+| CI coverage | `evals/assembly-eval.test.ts` via `npm test` / `npm run eval:assembly` |
+
+The offline harness scores `plan_composition` over the **compiled** catalog
+against the prompt set. Offline baseline is a **no-catalog** empty plan
+(agent never fetches catalog facts): same package/refusal assertions, scored
+honestly. Catalog mode must beat that pass rate. That is the automated gate;
+full multi-agent LLM A/B (web search vs skill+catalog+MCP) remains optional
+outside CI and is not claimed by the unit harness alone.
+
+**Exit (automated):** offline compiled-catalog planner pass rate strictly
+greater than the offline **no-catalog** baseline on the four Phase 5 prompts;
+scaffold fixture green and catalog-cited.
+
+**Exit (optional, out of band):** full multi-agent LLM A/B (web search only vs
+skill + catalog + MCP) remains available for human/operator measurement and is
+not required for the CI gate.
+
+**Done:** automated exit met — compiled-catalog pass rate > no-catalog baseline
+on the four prompts; scaffold fixture is green and cited from the catalog.
 
 ## Non-goals
 

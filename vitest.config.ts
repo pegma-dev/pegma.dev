@@ -6,6 +6,7 @@ export default defineConfig({
       'worker/src/**/*.test.ts',
       'src/**/*.test.ts',
       'recipes/**/*.test.ts',
+      'evals/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/*.d1.test.ts'],
     testTimeout: 30_000,

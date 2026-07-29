@@ -111,6 +111,75 @@ describe('plan_composition', () => {
     ).toBe(true);
   });
 
+  it('does not let host-ambient-only recipes win when core tags are requested', () => {
+    const catalog = {
+      ...exampleCatalog,
+      recipes: [
+        ...exampleCatalog.recipes,
+        {
+          id: 'ambient-scaffold',
+          intent: 'Ambient-only scaffold',
+          packages: ['@example/contracts'],
+          adapters: [],
+          hostResponsibilities: [],
+          nonGoals: [],
+          antiPatterns: [],
+          fixture: {
+            kind: 'scaffold' as const,
+            citation: 'recipes/x',
+            status: 'green' as const,
+          },
+          capabilityTags: ['static_host', 'cloudflare'] as const,
+          requiresPublished: ['example-contracts'],
+          backlogPriority: 1,
+        },
+      ],
+    };
+    const plan = planComposition(catalog, {
+      capabilityTags: ['storage', 'cloudflare'],
+      productionOnly: false,
+    });
+    expect(plan.recipes.map((r) => r.id)).not.toContain('ambient-scaffold');
+  });
+
+  it('keeps explicitly requested logging on mixed core+ambient plans', () => {
+    const catalog = {
+      ...exampleCatalog,
+      components: [
+        ...exampleCatalog.components,
+        {
+          id: 'logger-adapters',
+          title: 'Logger Adapters',
+          repo: 'logger-adapters',
+          packages: [
+            {
+              name: '@example/logger-tee',
+              version: '0.0.1',
+              published: true,
+            },
+          ],
+          status: 'published' as const,
+          publishUsability: 'usable' as const,
+          summary: 'Logger sinks',
+          owns: ['Logger adapters'],
+          refuses: ['APM'],
+          dependencies: [],
+          adapters: [],
+          hostMustProvide: ['Composition root Logger'],
+          capabilityTags: ['logging'] as const,
+          recipeIds: [],
+          links: { githubRepo: 'https://github.com/example/logger-adapters' },
+        },
+      ],
+    };
+    const plan = planComposition(catalog, {
+      capabilityTags: ['storage', 'logging'],
+      productionOnly: false,
+    });
+    expect(plan.components.some((c) => c.id === 'logger-adapters')).toBe(true);
+    expect(plan.packages.map((p) => p.name)).toContain('@example/logger-tee');
+  });
+
   it('filters adapter packages by host', () => {
     const plan = planComposition(exampleCatalog, {
       capabilityTags: ['storage', 'cloudflare'],
