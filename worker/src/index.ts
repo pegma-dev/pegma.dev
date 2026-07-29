@@ -16,6 +16,7 @@ import {
   readGitHubReleaseWebhookConfig,
   type GitHubReleaseWebhookEnv,
 } from './github-release-webhook';
+import { handleGetReleases, readReleasesConfig } from './releases-api';
 
 type AppEnv = Env & LoggerEnv & IdentityRuntimeEnv & GitHubReleaseWebhookEnv;
 
@@ -69,6 +70,47 @@ export default {
       });
       const { status, body } = toHealthResponse(result);
       return Response.json(body, { status });
+    }
+
+    if (path === '/api/releases') {
+      const releasesConfig = readReleasesConfig(env);
+      if (releasesConfig === null) {
+        logger.log('error', 'releases_api.not_configured', {});
+        return Response.json(
+          { error: 'releases_not_configured' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
+      try {
+        return await handleGetReleases({
+          request,
+          store: createProductionStore(env),
+          logger,
+          config: releasesConfig,
+        });
+      } catch (error) {
+        logger.log('error', 'releases_api.unavailable', {
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+        return Response.json(
+          { error: 'releases_unavailable' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
     }
 
     if (path === '/api/webhooks/github/releases') {

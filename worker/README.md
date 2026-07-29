@@ -183,6 +183,11 @@ public acknowledgement endpoint.
 - `POST /api/identity/email-code/sign-in/options|verify` — enumeration-safe
   fallback sign-in.
 - `POST /api/identity/logout` — server-side revocation and cookie expiry.
+- `GET /api/releases` — public current-stable release summaries for allowlisted
+  Pegma repositories, in component-registry order. JSON schema
+  `pegma.releases.v1`; short public cache (`max-age=300`) and `ETag`; no
+  receipt, delivery, or payload fields. Empty `current` when no stable release
+  is recorded. The Stack page loads this same-origin endpoint at runtime.
 - `POST /api/webhooks/github/releases` — authenticated GitHub organization
   release webhook. Requires managed secret `GITHUB_WEBHOOK_SECRET` plus vars
   `GITHUB_ORGANIZATION_ID` and `GITHUB_ALLOWED_REPOSITORY_IDS`. Invalid traffic
