@@ -40,10 +40,11 @@ GitHub reconciliation by numeric repository ID, separately from the
 per-minute Identity maintenance job. Backfill is the same path; no Webhooks
 receipt rows.
 Authoritative apply converges missed delete/unpublish to GitHub's current
-stable. Health detail `githubReleases` exposes configuration, last webhook
-and recon times, staleness, and current count. Operator docs cover secret
-install, org webhook, redelivery, recon, and rollback. Phase E activation
-remains.
+stable. Webhook projection invalidates the per-repository recon ETag (with
+an epoch so recon cannot restore a stale tag after a concurrent invalidation).
+Health detail `githubReleases` exposes configuration, last webhook and recon
+times, staleness, and current count. Operator docs cover secret install, org
+webhook, redelivery, recon, and rollback. Phase E activation remains.
 
 **Goal:** Keep the public release version and release date for Pegma
 components current on pegma.dev without a content commit, Pages build, or site
