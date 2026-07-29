@@ -132,10 +132,25 @@ function meaningfulCoverage(
   const itemCore = coreTags(itemTags);
   const reqCore = coreTags(requested);
   if (itemCore.length === 0) {
-    // Ambient-only items (e.g. static scaffold): match only ambient-only
-    // requests. Do not let `cloudflare` alone steal primary when the agent
-    // also asked for storage/accounts/etc.
-    if (reqCore.length > 0) return false;
+    // Ambient-only items (logger-adapters, static scaffold, spine, …).
+    const hostAmbient = new Set<CapabilityTag>([
+      'cloudflare',
+      'azure',
+      'static_host',
+    ]);
+    const requestedNonHostAmbient = requested.filter(
+      (t) => AMBIENT_TAGS.has(t) && !hostAmbient.has(t),
+    );
+    if (reqCore.length > 0) {
+      // Mixed request: admit ambient-only items only when a non-host ambient
+      // capability was explicitly requested (e.g. logging + accounts).
+      // Host tags alone (cloudflare) must not select the static scaffold.
+      return (
+        tagOverlap(itemTags, requestedNonHostAmbient) > 0 &&
+        tagOverlap(itemTags, requested) > 0
+      );
+    }
+    // Ambient-only request: any overlapping ambient tag is enough.
     return tagOverlap(itemTags, requested) > 0;
   }
   const overlap = tagOverlap(itemCore, reqCore.length > 0 ? reqCore : requested);

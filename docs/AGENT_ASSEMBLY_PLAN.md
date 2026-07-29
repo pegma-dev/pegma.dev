@@ -370,11 +370,16 @@ honestly. Catalog mode must beat that pass rate. That is the automated gate;
 full multi-agent LLM A/B (web search vs skill+catalog+MCP) remains optional
 outside CI and is not claimed by the unit harness alone.
 
-**Exit:** measured improvement when skill + catalog (+ MCP if present) are
-enabled vs. baseline agent with only web search.
+**Exit (automated):** offline compiled-catalog planner pass rate strictly
+greater than the offline **no-catalog** baseline on the four Phase 5 prompts;
+scaffold fixture green and catalog-cited.
 
-**Done:** compiled-catalog planner pass rate > offline no-catalog baseline on
-the four Phase 5 prompts; scaffold fixture is green and cited from the catalog.
+**Exit (optional, out of band):** full multi-agent LLM A/B (web search only vs
+skill + catalog + MCP) remains available for human/operator measurement and is
+not required for the CI gate.
+
+**Done:** automated exit met — compiled-catalog pass rate > no-catalog baseline
+on the four prompts; scaffold fixture is green and cited from the catalog.
 
 ## Non-goals
 

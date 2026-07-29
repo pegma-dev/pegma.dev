@@ -21,8 +21,13 @@ CI-tested composition sketches for agents. Product names and domains are
 
 ## Production vs test adapters
 
-Composition roots **require** an injected `Store`. Tests pass
+Fixtures that use Storage Core (`cf-passkey-accounts`,
+`storage-audit-mail-outbox`) **require** an injected `Store`. Tests pass
 `createMemoryStore()` explicitly so CI stays fast and free of cloud
 credentials; production hosts inject a durable adapter (for example
 Cloudflare D1 for `cf-passkey-accounts`). Memory is never a silent default
 and never a durability claim.
+
+The static scaffold (`scaffold-cf-minimal` / `static-brochure-minimal`) is
+**Store-free** by design — empty-ish until the agent adds features from the
+catalog.
