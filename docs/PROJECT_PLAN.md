@@ -268,8 +268,7 @@ with a source link where not. Decide in Phase 3.
    `docs/GITHUB_RELEASE_WEBHOOK_PLAN.md`. **Phases A–D (2026-07-28):** vendored
    `@pegma/webhooks`, signed release webhook + projection, public
    `GET /api/releases` + Stack UI, six-hour reconciliation/backfill, health
-   details, and operator docs. **Phase E partial (2026-07-29):** Worker secret
+   details, and operator docs. **Phase E activated (2026-07-29):** Worker secret
    installed, Worker version `52d03e76-b69a-42c8-9d63-bcb6316e33f3` live,
-   signed release projection + read API verified. **Remaining:** create the
-   GitHub organization release webhook and confirm GitHub-originated ping/
-   delivery (org hook API scope `admin:org_hook`).
+   release projection + read API verified, organization release webhook live
+   (GitHub authenticated `ping` → 204).

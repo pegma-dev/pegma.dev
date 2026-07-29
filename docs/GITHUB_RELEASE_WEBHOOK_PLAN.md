@@ -2,12 +2,12 @@
 
 ## Status
 
-**Stage:** Phase E partially activated (2026-07-29). Worker secret installed,
+**Stage:** Phase E activated (2026-07-29). Worker secret installed,
 `pegma-dev-api` version `52d03e76-b69a-42c8-9d63-bcb6316e33f3` deployed with
-release routes and six-hour recon cron. Controlled signed release deliveries
-project into D1; `GET /api/releases` and Stack shell are live. **Remaining:**
-create the GitHub organization webhook (API needs `admin:org_hook` scope) and
-confirm GitHub's own authenticated `ping` plus a real org delivery.
+release routes and six-hour recon cron. Organization release webhook is live;
+GitHub's authenticated `ping` returned **204**. Controlled release projections
+and `GET /api/releases` / Stack shell are live. Optional follow-up: observe a
+real stable publish and the first scheduled recon success marker.
 
 **Phase A reconciliation (2026-07-28):** `@pegma/webhooks` is pinned to
 `@pegma/storage-core@0.4.0` (commit `1e5ef0732c3595ea82cb80394cf55cd9a0442318`).
@@ -49,14 +49,14 @@ Health detail `githubReleases` exposes configuration, last webhook and recon
 times, staleness, and current count. Operator docs cover secret install, org
 webhook, redelivery, recon, and rollback.
 
-**Phase E partial activation (2026-07-29):**
+**Phase E activation (2026-07-29):**
 
 - Gates: `npm run check`, `npm test` (108 + 1 D1), `npm run build` on
   `origin/main` before deploy.
 - Secret: `GITHUB_WEBHOOK_SECRET` installed via Wrangler (not in git/Actions).
 - Deploy: Worker version `52d03e76-b69a-42c8-9d63-bcb6316e33f3` on
   `pegma.dev/api/*` with crons `* * * * *` and `0 */6 * * *`.
-- Smoke: signed `ping` → 204; unsigned POST → 401; health
+- Smoke: operator signed `ping` → 204; unsigned POST → 401; health
   `githubReleases.ingestionConfigured=true`; `GET /api/releases` schema
   `pegma.releases.v1`.
 - Controlled deliveries: signed `release` events for allowlisted repos with
@@ -64,9 +64,11 @@ webhook, redelivery, recon, and rollback.
   without change; `currentReleaseCount` 9 after seed.
 - Stack page includes same-origin `/stack-releases.js` shell (Pages already
   serving Phase C markup).
-- **Not done:** organization webhook create (operator console or
-  `gh auth refresh -h github.com -s admin:org_hook` then org hooks API);
-  first scheduled recon success marker (next `0 */6 * * *` UTC).
+- Organization webhook: subscribed to release events; **GitHub-originated
+  authenticated `ping` returned 204** (2026-07-29).
+- Optional ops: first scheduled recon success marker on next `0 */6 * * *`
+  UTC; confirm Stack updates on the next real stable publish without a
+  Pages deploy.
 
 **Goal:** Keep the public release version and release date for Pegma
 components current on pegma.dev without a content commit, Pages build, or site
