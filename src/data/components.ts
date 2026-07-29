@@ -230,6 +230,26 @@ export const components: readonly PegmaComponent[] = [
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
+    repo: 'billing-core',
+    title: 'Billing Core',
+    packages: ['@pegma/billing-core'],
+    status: 'planned',
+    summary:
+      'A provider-agnostic subscription ledger, maintained correctly under out-of-order webhook delivery.',
+    owns: [
+      'The event-arbitration guard: a per-account watermark, a snapshot freshness bound, and lifecycle-rank tie-breaking so a stale active can never resurrect a same-second canceled',
+      'Snapshot reconciliation that repairs field drift without disturbing the dedup identity of events',
+      'Declared ledger invariants (sticky, first-wins) enforced inside the write path, and an atomic single-opportunity checkout reservation',
+    ],
+    refuses: [
+      'Processing payments, checkout flows, invoicing, tax, and metering — provider products; the ledger records lifecycle outcomes',
+      'Entitlement resolution — what a subscription grants is Authorization Core’s job; this is what it is',
+      'Card data, raw payloads, line items, amounts — the ledger stores identifiers and derived state only',
+    ],
+    now: 'Plan published; extraction from the reference application’s production ledger is scheduled deliberately.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
+  {
     repo: 'identity',
     title: 'Identity',
     packages: ['@pegma/identity'],

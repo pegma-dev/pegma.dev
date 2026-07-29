@@ -1,7 +1,7 @@
 # Pegma
 
 > An MIT-licensed family of composable backend components — storage,
-> authorization, identity, audit, webhooks, sessions, rate limiting, mail,
+> authorization, identity, audit, webhooks, sessions, rate limiting, billing, mail,
 > a support desk —
 > designed to be assembled and maintained by AI agents. Early 0.x: some
 > packages published, none stable. npm scope: @pegma. GitHub: pegma-dev.
@@ -56,6 +56,14 @@ reference environment.
   first-party identity: passkeys-first, email-code fallback, NO passwords
   (a refusal, not a phase); user records in the host's own storage. Published
   as 0.1.0 and composed by this site's Cloudflare Worker.
+- [Billing Core](https://github.com/pegma-dev/billing-core):
+  @pegma/billing-core — a provider-agnostic subscription ledger maintained
+  correctly under out-of-order webhook delivery: event-arbitration guard
+  (watermark + snapshot freshness bound + lifecycle-rank tie-breaking),
+  drift-repairing reconciliation, declared sticky/first-wins invariants,
+  single-opportunity checkout reservation. Never sees card data or raw
+  payloads. Planned; extraction from the reference application scheduled
+  deliberately.
 - [Mail](https://github.com/pegma-dev/mail): @pegma/mail — transactional
   mail: provider ports and an outbox pattern that owns NO store (jobs
   commit in the caller's transaction, the audit precedent). Published as
