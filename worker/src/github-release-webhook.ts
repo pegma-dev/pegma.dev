@@ -8,6 +8,7 @@ import {
   decideReleaseProjection,
   type ReleaseEventFacts,
 } from './release-projection';
+import { markReleaseWebhookSuccess } from './release-ops-state';
 
 export const GITHUB_RELEASE_EVENT_TYPE = 'github.release.published';
 export const MAX_GITHUB_WEBHOOK_BODY_BYTES = 1024 * 1024;
@@ -340,6 +341,7 @@ export async function handleGitHubReleaseWebhook(
     const decision = decideReleaseProjection(facts, observedAt);
     await applyReleaseProjection(store, decision);
     await ledger.markProcessed(deliveryId);
+    await markReleaseWebhookSuccess(store, observedAt);
     logger.log('info', 'github_release_webhook.processed', {
       deliveryId,
       action: facts.action,

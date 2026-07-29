@@ -156,3 +156,32 @@ export async function applyReleaseProjection(
     return { action: 'keep' };
   });
 }
+
+/**
+ * Authoritative write of GitHub's current stable release (reconciliation /
+ * backfill). Unlike webhook projection, an older preceding stable release
+ * must displace a local current row after a missed delete/unpublish.
+ * Returns whether the stored row changed.
+ */
+export async function applyAuthoritativeCurrentRelease(
+  store: Store,
+  release: ComponentRelease,
+): Promise<'written' | 'unchanged'> {
+  const releases = store.collection(componentReleaseCollection());
+  let changed: 'written' | 'unchanged' = 'unchanged';
+  await releases.update(componentReleaseKey(release.repositoryId), (current) => {
+    if (
+      current !== null &&
+      current.releaseId === release.releaseId &&
+      current.tagName === release.tagName &&
+      current.publishedAt === release.publishedAt &&
+      current.releaseUrl === release.releaseUrl &&
+      current.repositoryName === release.repositoryName
+    ) {
+      return { action: 'keep' };
+    }
+    changed = 'written';
+    return { action: 'write', value: release };
+  });
+  return changed;
+}
