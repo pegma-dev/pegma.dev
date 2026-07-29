@@ -2,14 +2,13 @@
 
 ## Status
 
-**Stage:** Phase 0 complete (schema + gap inventory + recipe backlog). No
-compiled `catalog.json`, hosted skill, MCP surface, or recipe fixture package
-exists yet. This document is the working plan for closing the gap between what
-AI coding agents tend to do (regenerate common backend functions as bespoke
-code) and what the Pegma stack already packages (typed, tested, pin-able
-components).
+**Stage:** Phase 1 complete (compiled `catalog.json` at site build). No hosted
+skill, MCP surface, or recipe fixture package exists yet. This document is the
+working plan for closing the gap between what AI coding agents tend to do
+(regenerate common backend functions as bespoke code) and what the Pegma stack
+already packages (typed, tested, pin-able components).
 
-**Phase 0 artifacts:**
+**Phase 0–1 artifacts:**
 
 | Artifact | Path |
 | --- | --- |
@@ -17,7 +16,9 @@ components).
 | Schema documentation | `docs/catalog/SCHEMA.md` |
 | Registry gap inventory | `docs/catalog/GAP_INVENTORY.md` |
 | Prioritized recipe backlog | `docs/catalog/RECIPE_BACKLOG.md` |
-| Example catalog (illustrative) | `docs/catalog/example-catalog.json` |
+| Example catalog (fictional shape sample) | `docs/catalog/example-catalog.json` |
+| Catalog compiler | `src/data/compile-catalog.ts` |
+| Published catalog | `https://pegma.dev/catalog.json` (build emit) |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -242,7 +243,7 @@ architecture disclosure in any recipe intent.
 backlog prioritizes P1 `cf-passkey-accounts` and P2 `storage-audit-mail-outbox`
 (synthetic intents only); deferred recipes gated on unpublished packages.
 
-### Phase 1 — Compiled catalog artifact
+### Phase 1 — Compiled catalog artifact ✓ complete
 
 Emit `catalog.json` (and optionally generated markdown) at site build or
 from a small compile step fed by the component registry, plan aggregation,
@@ -254,6 +255,12 @@ entire catalog into the index file.
 
 **Exit:** an agent can HTTP-fetch a complete, dated composition catalog;
 unpublished packages are explicitly flagged.
+
+**Done:** `src/pages/catalog.json.ts` prerenders `/catalog.json` via
+`compileCompositionCatalog` (registry + plan stage + npm latest pins +
+enrichment + recipe backlog). `public/llms.txt` links the catalog without
+inlining it. Unpublished packages get `published: false` / `publishUsability:
+unpublished|partial`.
 
 ### Phase 2 — Synthetic recipe fixtures
 
