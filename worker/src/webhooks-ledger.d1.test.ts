@@ -58,7 +58,7 @@ beforeEach(async () => {
   await env.IDENTITY_DB.prepare('DELETE FROM PEGMA_STORAGE_D1_TX_GUARD').run();
 });
 
-describe('vendored @pegma/webhooks over Cloudflare D1 composition', () => {
+describe('published @pegma/webhooks over Cloudflare D1 composition', () => {
   it('uses createSchemaIfMissing: false like production Identity', async () => {
     const store = createCloudflareD1Store({
       database: env.IDENTITY_DB,

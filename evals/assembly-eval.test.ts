@@ -39,7 +39,7 @@ const EVAL_NPM: Record<string, string | null> = {
   '@pegma/support-desk-core': '0.1.0',
   '@pegma/support-desk-application': '0.1.0',
   '@pegma/support-desk-templates': '0.1.0',
-  '@pegma/webhooks': null, // unpublished for production assembly
+  '@pegma/webhooks': '0.1.0',
   '@pegma/sessions': '0.1.0',
   '@pegma/mail': '0.1.0',
   '@pegma/billing-core': null,

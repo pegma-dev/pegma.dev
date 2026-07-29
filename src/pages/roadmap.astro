@@ -71,10 +71,10 @@ const builtOn = new Date().toISOString().slice(0, 10);
       contracts are stable enough for <code>1.0</code>.
     </li>
     <li>
-      <strong>Webhooks is evidence-gated.</strong> The ledger and RetireGolden consumer migration
-      are implemented, but Phase 2 remains operationally open until production Stripe traffic is
-      observed through the package shape. Phase 3 waits for a second real, non-Stripe provider
-      rather than inventing a synthetic consumer.
+      <strong>Webhooks is released; evidence continues.</strong> The signed <code>0.1.0</code>
+      release follows real Stripe use in RetireGolden and GitHub release ingestion on this
+      Cloudflare/D1 host. Same-host multi-source operation and additional provider-driven
+      quarantine behavior remain post-release evidence, not stronger delivery guarantees.
     </li>
     <li>
       <strong>Consumers pull components into existence.</strong> Support Desk supplied the first

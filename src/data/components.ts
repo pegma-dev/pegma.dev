@@ -26,7 +26,7 @@ export interface PegmaComponent {
   readonly plan?: string;
 }
 
-export const SNAPSHOT_DATE = '2026-07-28';
+export const SNAPSHOT_DATE = '2026-07-29';
 
 export const components: readonly PegmaComponent[] = [
   {
@@ -174,7 +174,7 @@ export const components: readonly PegmaComponent[] = [
     repo: 'webhooks',
     title: 'Webhooks',
     packages: ['@pegma/webhooks'],
-    status: 'in development',
+    status: 'published',
     summary:
       'Inbound webhook receipts: idempotent dedup, poison quarantine, retention.',
     owns: [
@@ -187,7 +187,7 @@ export const components: readonly PegmaComponent[] = [
       'Ordering guarantees — domain logic, deliberately excluded',
       'Storing payloads — receipts hold ids and counters, never customer data',
     ],
-    now: 'Phase 2 consumer migration is merged; operational exit awaits production Stripe traffic. Phase 3 is gated on a second real provider; unpublished.',
+    now: '@pegma/webhooks@0.1.0 is published from the protected signed v0.1.0 release through trusted-publisher OIDC with provenance. RetireGolden Stripe and pegma.dev GitHub exercise two real providers, hosts, clouds, and stores; the 0.x API remains unstable.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {

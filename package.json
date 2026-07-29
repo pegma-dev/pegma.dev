@@ -37,7 +37,7 @@
     "@pegma/support-desk-contracts": "0.1.0",
     "@pegma/support-desk-core": "0.1.0",
     "@pegma/support-desk-templates": "0.1.0",
-    "@pegma/webhooks": "file:vendor/@pegma/webhooks/pegma-webhooks-0.0.0.tgz",
+    "@pegma/webhooks": "0.1.0",
     "agents": "^0.20.1",
     "zod": "^4.4.3"
   },

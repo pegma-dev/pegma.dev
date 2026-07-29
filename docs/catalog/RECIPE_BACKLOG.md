@@ -84,16 +84,17 @@ deferred).
 | **capabilityTags** | `static_host` only (not bare `cloudflare` — host-tag alone must not select this scaffold) |
 | **Fixture** | green — [`recipes/scaffold-cf-minimal/`](../../recipes/scaffold-cf-minimal/) |
 
-## Deferred (unpublished packages)
+## Deferred (missing package or fixture)
 
-Do not offer for production assembly until packages are on npm.
+Do not offer for production assembly until required packages are on npm and a
+CI-tested fixture is green.
 
-### D1 — `inbound-webhook-receipts` (when `@pegma/webhooks` is published)
+### D1 — `inbound-webhook-receipts`
 
 | | |
 | --- | --- |
 | **Intent** | A fictional donation platform (“Copper Plate”) records inbound provider webhook receipts with idempotent dedup, poison quarantine, and retention — receipts hold ids and counters, never payloads. |
-| **Blocks** | webhooks unpublished |
+| **Blocks** | CI-tested synthetic fixture not yet built |
 | **Anti-patterns** | Exactly-once claims; storing full payloads in the receipt ledger; ordering guarantees |
 
 ### D2 — `support-queue-slice` (when Support Desk packages are published)
