@@ -60,6 +60,32 @@ curl -fsSL https://pegma.dev/skill.md -o .claude/skills/pegma/SKILL.md</code></p
   </section>
 
   <section class="example">
+    <h2>Optional MCP surface</h2>
+    <p>
+      A thin public MCP server exposes the same catalog over Streamable HTTP.
+      Tools return catalog facts only — no private data plane, no auth for reads.
+      Endpoint: <code>https://pegma.dev/api/mcp</code>
+    </p>
+    <p>Tools: <code>list_components</code>, <code>get_component</code>,
+      <code>list_recipes</code>, <code>get_recipe</code>,
+      <code>plan_composition</code> (rule-based over structured
+      <code>capabilityTags</code> — not an LLM).</p>
+    <h3>MCP config snippet</h3>
+    <pre><code>{`{
+  "mcpServers": {
+    "pegma": {
+      "url": "https://pegma.dev/api/mcp"
+    }
+  }
+}`}</code></pre>
+    <p>
+      Clients without native remote MCP can use a local proxy, for example
+      <code>npx mcp-remote https://pegma.dev/api/mcp</code>. Prefer re-calling
+      tools over caching package versions.
+    </p>
+  </section>
+
+  <section class="example">
     <h2>What the skill teaches</h2>
     <ul>
       <li>Assembly over generation</li>
@@ -73,7 +99,8 @@ curl -fsSL https://pegma.dev/skill.md -o .claude/skills/pegma/SKILL.md</code></p
       <a href="/catalog.json">catalog.json</a> ·
       <a href="/examples">examples</a> ·
       <a href="/llms.txt">llms.txt</a> ·
-      <a href="/stack">stack</a>
+      <a href="/stack">stack</a> ·
+      <a href="/api/mcp">MCP</a>
     </p>
   </section>
 </Base>

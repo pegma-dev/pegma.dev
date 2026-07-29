@@ -32,12 +32,15 @@ import {
   type SupportRuntimeEnv,
 } from './support-desk';
 import { runSupportMaintenance } from './support-maintenance';
+import { createPegmaMcpHandler } from './mcp-server';
+import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 
 type AppEnv = Env &
   LoggerEnv &
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
-  SupportRuntimeEnv;
+  SupportRuntimeEnv &
+  CatalogFetchEnv;
 
 function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>) {
   const identityRuntime = createProductionIdentityRuntime(env, logger);
@@ -80,6 +83,29 @@ export default {
       path,
       host: url.host,
     });
+
+    // Public composition catalog MCP (stateless; catalog facts only).
+    if (path === '/api/mcp') {
+      try {
+        return await createPegmaMcpHandler(env)(request, env, ctx);
+      } catch (error) {
+        logger.log('error', 'mcp.unavailable', {
+          error: error instanceof Error ? error.name : 'unknown',
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return Response.json(
+          { error: 'mcp_unavailable' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
+    }
 
     if (
       request.method === 'GET' &&

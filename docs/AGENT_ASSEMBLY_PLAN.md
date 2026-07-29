@@ -2,12 +2,14 @@
 
 ## Status
 
-**Stage:** Phase 3 complete (hosted assembly skill). No MCP surface yet.
+**Stage:** Phase 4 complete (public catalog MCP). Phase 5 (scaffold + eval)
+remains open.
+
 This document is the working plan for closing the gap between what AI coding
 agents tend to do (regenerate common backend functions as bespoke code) and
 what the Pegma stack already packages (typed, tested, pin-able components).
 
-**Phase 0–3 artifacts:**
+**Phase 0–4 artifacts:**
 
 | Artifact | Path |
 | --- | --- |
@@ -22,6 +24,8 @@ what the Pegma stack already packages (typed, tested, pin-able components).
 | P2 fixture (Yard Loan outbox) | `recipes/storage-audit-mail-outbox/` |
 | Hosted assembly skill (raw) | `https://pegma.dev/skill.md` (`public/skill.md`) |
 | Skill install notes | `https://pegma.dev/skill` (`src/pages/skill.astro`) |
+| Catalog tool logic | `src/data/mcp-tools.ts` |
+| MCP Worker surface | `worker/src/mcp-server.ts` → `https://pegma.dev/api/mcp` |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -313,15 +317,31 @@ The skill teaches judgment only; versions and package sets stay in
 **Exit:** a human can add the Pegma skill to a major coding agent in one
 sitting; the skill does not hardcode package versions.
 
-### Phase 4 — MCP surface (optional but planned)
+### Phase 4 — MCP surface ✓
 
-Implement a thin MCP server over the published catalog (likely on the
-existing Workers API or a sibling Worker). Tools: list/get components,
-list/get recipes, plan_composition. Same progressive-disclosure limits as
-above.
+Implement a thin MCP server over the published catalog. Hosted on the
+existing `pegma-dev-api` Worker at `/api/mcp` (stateless Streamable HTTP via
+`createMcpHandler`). Tools: list/get components, list/get recipes,
+`plan_composition`. Same progressive-disclosure limits as above. Catalog is
+fetched from the static `catalog.json` URL — MCP is never the system of
+record.
+
+Shipped:
+
+| Surface | Path / URL |
+| --- | --- |
+| Tool logic (pure) | `src/data/mcp-tools.ts` |
+| Catalog fetch + cache | `worker/src/mcp-catalog-fetch.ts` |
+| MCP server factory | `worker/src/mcp-server.ts` |
+| Endpoint | `https://pegma.dev/api/mcp` |
+| Config snippet | `public/skill.md`, `/skill` |
 
 **Exit:** MCP config snippet on pegma.dev; tools return catalog facts only;
 no private data plane.
+
+**Done:** public MCP tools over catalog.json; install/config on skill page
+and `llms.txt`; `plan_composition` is rule-based over structured
+`capabilityTags`.
 
 ### Phase 5 — Scaffold and eval harness
 
@@ -398,8 +418,9 @@ Phase 0 recommendations (not irreversible) are recorded in
   **structured `capabilityTags`** (see schema).
 - **Skill packaging:** single canonical markdown vs. thin per-tool wrappers
   that only differ in install paths. (Phase 3)
-- **MCP hosting:** extend `pegma-dev-api` vs. separate Worker to keep the
-  account API’s privilege surface small. (Phase 4)
+- **MCP hosting:** ~~extend `pegma-dev-api` vs. separate Worker~~ →
+  **extend `pegma-dev-api` at `/api/mcp`** (stateless, public catalog only;
+  no new secrets or private data plane).
 
 ## Implementation note
 

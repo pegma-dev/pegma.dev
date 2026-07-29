@@ -56,6 +56,7 @@ const CAPABILITY_TAGS = new Set<CapabilityTag>([
   'sessions',
   'authorization',
   'storage',
+  'storage_blobs',
   'audit',
   'mail_transactional',
   'rate_limit_durable',

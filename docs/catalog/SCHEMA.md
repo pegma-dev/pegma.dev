@@ -115,9 +115,9 @@ CompositionCatalog
 Structured flags (not free text) so `plan_composition` can stay rule-based:
 
 `accounts`, `passkeys`, `email_codes`, `sessions`, `authorization`, `storage`,
-`audit`, `mail_transactional`, `rate_limit_durable`, `rate_limit_memory`,
-`webhooks_inbound`, `support_queue`, `health`, `logging`, `events_in_process`,
-`cloudflare`, `azure`, `static_host`.
+`storage_blobs`, `audit`, `mail_transactional`, `rate_limit_durable`,
+`rate_limit_memory`, `webhooks_inbound`, `support_queue`, `health`, `logging`,
+`events_in_process`, `cloudflare`, `azure`, `static_host`.
 
 ## TypeScript source
 
