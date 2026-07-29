@@ -2,9 +2,9 @@
 
 ## Status
 
-**Stage:** Phase B complete (2026-07-28). No GitHub organization webhook,
-Cloudflare webhook secret, or production activation yet. Phases C–E remain
-open.
+**Stage:** Phase D complete (2026-07-28). Implementable work is merged; Phase
+E (production activation) remains — no GitHub organization webhook, Cloudflare
+webhook secret, or live release traffic yet.
 
 **Phase A reconciliation (2026-07-28):** `@pegma/webhooks` is pinned to
 `@pegma/storage-core@0.4.0` (commit `1e5ef0732c3595ea82cb80394cf55cd9a0442318`).
@@ -26,8 +26,23 @@ authenticates raw-body HMAC-SHA256, allowlists organization `309286193` and
 explicit repository IDs, records deliveries in `@pegma/webhooks` (`source:
 "github"`), and projects current stable releases into the
 `componentReleases` collection. Draft/prerelease events are acknowledged
-without projection. No payload fields cross the release codec. Read API, UI,
-reconciliation, secret install, and organization webhook activation remain.
+without projection. No payload fields cross the release codec.
+
+**Phase C reconciliation (2026-07-28):** `GET /api/releases` serves schema
+`pegma.releases.v1` for allowlisted catalog slots (empty `current` when
+unset), with `max-age=300`, ETag (content-stable), and `nosniff`. The Stack
+page loads `/stack-releases.js` same-origin and renders loading, empty,
+populated, stale, and unavailable states; repository links remain usable
+without JS or when the API fails.
+
+**Phase D reconciliation (2026-07-28):** Six-hour cron `0 */6 * * *` runs
+GitHub reconciliation by numeric repository ID (independent of minute
+Identity maintenance). Backfill is the same path; no Webhooks receipt rows.
+Authoritative apply converges missed delete/unpublish to GitHub's current
+stable. Health detail `githubReleases` exposes configuration, last webhook
+and recon times, staleness, and current count. Operator docs cover secret
+install, org webhook, redelivery, recon, and rollback. Phase E activation
+remains.
 
 **Goal:** Keep the public release version and release date for Pegma
 components current on pegma.dev without a content commit, Pages build, or site
