@@ -74,10 +74,13 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
     intent:
       'A fictional equipment checkout service (Yard Loan) records inventory mutations in Storage Core and, in the same single-partition transaction, appends an audit row and enqueues a transactional mail delivery job.',
     packages: ['@pegma/storage-core', '@pegma/audit', '@pegma/mail', '@pegma/spine'],
-    adapters: [{ componentId: 'storage-core', adapterId: 'memory' }],
+    // Host chooses a durable storage-core adapter (cloudflare-d1 or azure-tables).
+    // Do not pin memory here — the recipe needs durable inventory/audit/outbox rows.
+    adapters: [],
     hostResponsibilities: [
       'Collection declarations',
       'Transaction boundary',
+      'Durable storage-core adapter for production (not memory)',
       'Outbox collection in host storage',
       'Mail provider and delivery worker schedule',
     ],

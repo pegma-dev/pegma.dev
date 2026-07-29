@@ -89,6 +89,9 @@ describe('compileCompositionCatalog', () => {
       componentId: 'storage-core',
       adapterId: 'cloudflare-d1',
     });
+    const outbox = catalog.recipes.find((r) => r.id === 'storage-audit-mail-outbox')!;
+    // Durable pattern: host picks adapter; memory must not be the recipe default.
+    expect(outbox.adapters).toEqual([]);
     for (const recipe of catalog.recipes) {
       expect(recipe.intent).not.toMatch(/retiregolden/i);
       expect(recipe.fixture.status).not.toBe('green');
