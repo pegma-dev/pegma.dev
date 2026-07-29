@@ -342,7 +342,14 @@ export async function handleGitHubReleaseWebhook(
     await applyReleaseProjection(store, decision);
     await ledger.markProcessed(deliveryId);
     try {
-      await markReleaseWebhookSuccess(store, observedAt);
+      // Invalidate recon ETag for this repository whenever projection may
+      // have changed local truth (upsert/delete). Drafts/ignores leave the
+      // ETag so conditional GETs keep working.
+      const repositoryId =
+        decision.kind === 'upsert' || decision.kind === 'delete'
+          ? facts.repositoryId
+          : undefined;
+      await markReleaseWebhookSuccess(store, observedAt, repositoryId);
     } catch (markerError) {
       // Projection and ledger are already final; health-marker failure must
       // not re-enter markFailed or flip the delivery outcome.

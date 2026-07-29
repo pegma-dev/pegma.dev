@@ -93,17 +93,31 @@ export async function readReleaseOpsState(store: Store): Promise<ReleaseOpsState
   return current ?? EMPTY;
 }
 
+/**
+ * Record a successful webhook observation and drop the recon ETag for the
+ * touched repository so a later 304 cannot mask a missed delete/unpublish
+ * that returned GitHub to a previously cached representation.
+ */
 export async function markReleaseWebhookSuccess(
   store: Store,
   at: string,
+  repositoryId?: string,
 ): Promise<void> {
-  await store.collection(releaseOpsCollection()).update(opsKey(), (current) => ({
-    action: 'write',
-    value: {
-      ...(current ?? EMPTY),
-      lastSuccessfulWebhookAt: at,
-    },
-  }));
+  await store.collection(releaseOpsCollection()).update(opsKey(), (current) => {
+    const base = current ?? EMPTY;
+    const etags = { ...base.repositoryEtags };
+    if (typeof repositoryId === 'string' && repositoryId.length > 0) {
+      delete etags[repositoryId];
+    }
+    return {
+      action: 'write',
+      value: {
+        ...base,
+        lastSuccessfulWebhookAt: at,
+        repositoryEtags: etags,
+      },
+    };
+  });
 }
 
 export async function markReleaseReconciliationSuccess(

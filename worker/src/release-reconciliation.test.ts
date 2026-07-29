@@ -251,6 +251,79 @@ describe('runReleaseReconciliation', () => {
     expect(await releases.get(componentReleaseKey(WEBHOOKS_ID))).not.toBeNull();
   });
 
+  it('does not 304-mask a missed delete after a later webhook projection', async () => {
+    const store = createMemoryStore();
+    const { markReleaseWebhookSuccess } = await import('./release-ops-state');
+
+    // Recon caches etag for A.
+    await runReleaseReconciliation({
+      store,
+      logger,
+      config: { allowedRepositoryIds: new Set([WEBHOOKS_ID]) },
+      now: '2026-07-28T10:00:00.000Z',
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            id: 100,
+            tag_name: 'v0.1.0',
+            published_at: '2026-06-01T00:00:00.000Z',
+            draft: false,
+            prerelease: false,
+          }),
+          { status: 200, headers: { ETag: '"etag-a"' } },
+        )) as unknown as typeof fetch,
+    });
+
+    // Webhook later projects B and must drop etag-a.
+    const releases = store.collection(componentReleaseCollection());
+    await releases.update(componentReleaseKey(WEBHOOKS_ID), () => ({
+      action: 'write',
+      value: {
+        repositoryId: WEBHOOKS_ID,
+        repositoryName: 'webhooks',
+        releaseId: '200',
+        tagName: 'v0.2.0',
+        publishedAt: '2026-07-20T00:00:00.000Z',
+        releaseUrl: 'https://github.com/pegma-dev/webhooks/releases/tag/v0.2.0',
+        observedAt: '2026-07-28T11:00:00.000Z',
+      },
+    }));
+    await markReleaseWebhookSuccess(store, '2026-07-28T11:00:00.000Z', WEBHOOKS_ID);
+
+    // Missed delete of B: GitHub is A again. Without ETag invalidation this
+    // would 304 and leave B; with invalidation we re-fetch A.
+    let sawIfNoneMatch = false;
+    const summary = await runReleaseReconciliation({
+      store,
+      logger,
+      config: { allowedRepositoryIds: new Set([WEBHOOKS_ID]) },
+      now: NOW,
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        if (headers.get('If-None-Match')) {
+          sawIfNoneMatch = true;
+        }
+        return new Response(
+          JSON.stringify({
+            id: 100,
+            tag_name: 'v0.1.0',
+            published_at: '2026-06-01T00:00:00.000Z',
+            draft: false,
+            prerelease: false,
+          }),
+          { status: 200, headers: { ETag: '"etag-a"' } },
+        );
+      }) as unknown as typeof fetch,
+    });
+
+    expect(sawIfNoneMatch).toBe(false);
+    expect(summary.upserted).toBe(1);
+    expect(await releases.get(componentReleaseKey(WEBHOOKS_ID))).toMatchObject({
+      releaseId: '100',
+      tagName: 'v0.1.0',
+    });
+  });
+
   it('replaces a local newer release with GitHub preceding stable after delete', async () => {
     const store = createMemoryStore();
     const releases = store.collection(componentReleaseCollection());

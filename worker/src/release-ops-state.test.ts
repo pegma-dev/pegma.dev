@@ -27,6 +27,23 @@ describe('release ops state', () => {
     expect(ops.repositoryEtags).toEqual({ '1313911960': '"etag"' });
   });
 
+  it('clears a repository ETag when a webhook projects a change', async () => {
+    const store = createMemoryStore();
+    await markReleaseReconciliationSuccess(
+      store,
+      '2026-07-28T12:00:00.000Z',
+      { '1313911960': '"etag-a"', '1312512520': '"keep"' },
+    );
+    await markReleaseWebhookSuccess(
+      store,
+      '2026-07-28T13:00:00.000Z',
+      '1313911960',
+    );
+    const ops = await readReleaseOpsState(store);
+    expect(ops.repositoryEtags).toEqual({ '1312512520': '"keep"' });
+    expect(ops.lastSuccessfulWebhookAt).toBe('2026-07-28T13:00:00.000Z');
+  });
+
   it('saves etags without claiming reconciliation success', async () => {
     const store = createMemoryStore();
     await saveReleaseRepositoryEtags(store, { a: '1' });
