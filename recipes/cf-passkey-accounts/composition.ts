@@ -26,7 +26,7 @@ import {
   type DurableRateLimiter,
 } from '@pegma/rate-limit';
 import { createSessionStore, type SessionStore } from '@pegma/sessions';
-import { fixedClock, type Clock, type Logger, type PrincipalId } from '@pegma/spine';
+import { systemClock, type Clock, type Logger, type PrincipalId } from '@pegma/spine';
 import { createMemoryStore, type Store } from '@pegma/storage-core';
 
 /** Fictional relying-party surface for the Northshelf Branch library. */
@@ -71,16 +71,22 @@ function decodeEmailCodeSecret(value: string): Uint8Array {
     value.length > 172 ||
     !/^[A-Za-z0-9+/]+={0,2}$/u.test(value)
   ) {
-    throw new Error('Northshelf email-code secret is not configured.');
+    throw new Error(
+      'Northshelf email-code secret is missing or invalid (expected base64 of 32–128 raw bytes).',
+    );
   }
   let binary: string;
   try {
     binary = atob(value);
   } catch {
-    throw new Error('Northshelf email-code secret is invalid.');
+    throw new Error(
+      'Northshelf email-code secret is missing or invalid (expected base64 of 32–128 raw bytes).',
+    );
   }
   if (binary.length < 32 || binary.length > 128) {
-    throw new Error('Northshelf email-code secret is invalid.');
+    throw new Error(
+      'Northshelf email-code secret is missing or invalid (expected base64 of 32–128 raw bytes).',
+    );
   }
   return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
@@ -107,7 +113,9 @@ export function createNorthshelfComposition(
   options: NorthshelfCompositionOptions,
 ): NorthshelfComposition {
   const store = options.store ?? createMemoryStore();
-  const clock = options.clock ?? fixedClock('2026-07-29T12:00:00.000Z');
+  // Live clock by default so production-shaped hosts expire challenges/sessions.
+  // Tests inject fixedClock when they need deterministic timestamps.
+  const clock = options.clock ?? systemClock;
   const emailCodeProtector = createHmacEmailCodeProtector(
     decodeEmailCodeSecret(options.emailCodeSecretBase64),
   );

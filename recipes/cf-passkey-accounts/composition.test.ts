@@ -1,4 +1,4 @@
-import type { PrincipalId } from '@pegma/spine';
+import { fixedClock, type PrincipalId } from '@pegma/spine';
 import { describe, expect, it } from 'vitest';
 import {
   createNorthshelfComposition,
@@ -9,11 +9,17 @@ import {
 /** Deterministic 32-byte secret, base64 — tests only. */
 const TEST_SECRET = btoa(String.fromCharCode(...new Uint8Array(32).fill(11)));
 
+/** Inject a fixed clock so expiry math stays deterministic in tests. */
+function makeComposition() {
+  return createNorthshelfComposition({
+    emailCodeSecretBase64: TEST_SECRET,
+    clock: fixedClock('2026-07-29T12:00:00.000Z'),
+  });
+}
+
 describe('cf-passkey-accounts (Northshelf Branch)', () => {
   it('wires Identity, Sessions, durable rate limits, and claims projection', async () => {
-    const composition = createNorthshelfComposition({
-      emailCodeSecretBase64: TEST_SECRET,
-    });
+    const composition = makeComposition();
 
     const user = await composition.identity.provisionVerifiedUser({
       principalId: 'prn_northshelf_patron' as PrincipalId,
@@ -44,9 +50,7 @@ describe('cf-passkey-accounts (Northshelf Branch)', () => {
   });
 
   it('starts passkey registration for an existing user (ceremony is host/browser)', async () => {
-    const composition = createNorthshelfComposition({
-      emailCodeSecretBase64: TEST_SECRET,
-    });
+    const composition = makeComposition();
     const user = await composition.identity.provisionVerifiedUser({
       principalId: 'prn_northshelf_staff' as PrincipalId,
       email: 'staff@northshelf.example',
@@ -62,9 +66,7 @@ describe('cf-passkey-accounts (Northshelf Branch)', () => {
   });
 
   it('starts email-code account creation without passwords', async () => {
-    const composition = createNorthshelfComposition({
-      emailCodeSecretBase64: TEST_SECRET,
-    });
+    const composition = makeComposition();
 
     const started = await composition.identity.beginAccountCreation(
       'new.patron@northshelf.example',
@@ -75,9 +77,9 @@ describe('cf-passkey-accounts (Northshelf Branch)', () => {
     expect(typeof started.expiresAt).toBe('string');
   });
 
-  it('refuses an unconfigured email-code secret', () => {
+  it('refuses a missing or invalid email-code secret', () => {
     expect(() =>
       createNorthshelfComposition({ emailCodeSecretBase64: 'short' }),
-    ).toThrow(/email-code secret/);
+    ).toThrow(/missing or invalid/);
   });
 });

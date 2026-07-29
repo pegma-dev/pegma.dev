@@ -55,25 +55,53 @@ bus.subscribe(AccountCreated, (envelope) => {
   welcomeCache.invalidate(envelope.payload.principalId);
 });`;
 
-/** Excerpt the createNorthshelfComposition function for the page (full file is long). */
-function excerptFunction(source: string, name: string, maxLines = 55): string {
-  const lines = source.replace(/\r\n/g, '\n').split('\n');
-  const start = lines.findIndex((l) => l.includes(`function ${name}`));
-  if (start < 0) return source.slice(0, 1200);
-  const slice = lines.slice(start, start + maxLines);
-  // Trim trailing incomplete block noise if we hit the cap mid-function.
-  return slice.join('\n').trimEnd() + (slice.length >= maxLines ? '\n  // …' : '');
+/**
+ * Extract a complete top-level function by brace matching so the page never
+ * quotes truncated, non-compiling TypeScript (AGENTS.md examples rule).
+ */
+function excerptFunction(source: string, name: string): string {
+  const text = source.replace(/\r\n/g, '\n');
+  const marker = `function ${name}`;
+  const start = text.indexOf(marker);
+  if (start < 0) {
+    throw new Error(`examples.astro: function ${name} not found in fixture`);
+  }
+  // Walk back to include a leading doc comment if present.
+  let from = start;
+  const before = text.slice(0, start);
+  const doc = before.lastIndexOf('\n/**');
+  if (doc >= 0 && !before.slice(doc).includes('\nexport ') && !before.slice(doc).includes('\nfunction ')) {
+    from = doc + 1;
+  } else {
+    const lineStart = before.lastIndexOf('\n');
+    from = lineStart < 0 ? 0 : lineStart + 1;
+  }
+
+  let i = text.indexOf('{', start);
+  if (i < 0) {
+    throw new Error(`examples.astro: no body for function ${name}`);
+  }
+  let depth = 0;
+  for (; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return text.slice(from, i + 1).trimEnd();
+      }
+    }
+  }
+  throw new Error(`examples.astro: unclosed function ${name}`);
 }
 
 const northshelfExcerpt = excerptFunction(
   northshelfComposition,
   'createNorthshelfComposition',
-  60,
 );
 const yardLoanExcerpt = excerptFunction(
   yardLoanComposition,
   'checkoutEquipment',
-  45,
 );
 
 const greenRecipes = RECIPE_BACKLOG.filter((r) => r.fixture.status === 'green');
