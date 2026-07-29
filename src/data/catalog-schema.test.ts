@@ -8,12 +8,15 @@ import {
   isPublishUsable,
   publishedPackageNames,
   recipePackagesReady,
+  parsePackageSpecifier,
   type CatalogAdapter,
   type CatalogComponent,
   type CatalogComponentStatus,
+  type CatalogDependency,
   type CatalogPackage,
   type CatalogRecipe,
   type CompositionCatalog,
+  type DependencyKind,
   type PublishUsability,
   type RecipeFixtureStatus,
 } from './catalog-schema';
@@ -37,6 +40,11 @@ const FIXTURE_STATUSES = new Set<RecipeFixtureStatus>([
   'none',
 ]);
 const ADAPTER_HOSTS = new Set(['cloudflare', 'azure', 'memory', 'other']);
+const DEPENDENCY_KINDS = new Set<DependencyKind>([
+  'requires',
+  'optional',
+  'composes_with',
+]);
 
 function assertString(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || value.length === 0) {
@@ -80,6 +88,21 @@ function parseAdapter(raw: unknown, label: string): CatalogAdapter {
     host: a.host as CatalogAdapter['host'],
     when: a.when,
     ...(typeof a.packageName === 'string' ? { packageName: a.packageName } : {}),
+  };
+}
+
+function parseDependency(raw: unknown, label: string): CatalogDependency {
+  if (!raw || typeof raw !== 'object') throw new Error(`${label} must be an object`);
+  const d = raw as Record<string, unknown>;
+  assertString(d.componentId, `${label}.componentId`);
+  assertString(d.kind, `${label}.kind`);
+  if (!DEPENDENCY_KINDS.has(d.kind as DependencyKind)) {
+    throw new Error(`${label}.kind invalid`);
+  }
+  return {
+    componentId: d.componentId,
+    kind: d.kind as DependencyKind,
+    ...(typeof d.note === 'string' ? { note: d.note } : {}),
   };
 }
 
@@ -127,7 +150,9 @@ function parseComponent(raw: unknown, index: number): CatalogComponent {
     summary: c.summary,
     owns: c.owns,
     refuses: c.refuses,
-    dependencies: c.dependencies as CatalogComponent['dependencies'],
+    dependencies: c.dependencies.map((d, i) =>
+      parseDependency(d, `components[${index}].dependencies[${i}]`),
+    ),
     adapters: c.adapters.map((a, i) => parseAdapter(a, `components[${index}].adapters[${i}]`)),
     hostMustProvide: c.hostMustProvide,
     capabilityTags: c.capabilityTags as CatalogComponent['capabilityTags'],
@@ -313,6 +338,62 @@ describe('composition catalog schema', () => {
         packages: ['@pegma/demo-core'],
       }),
     ).toBe(true);
+    expect(
+      recipePackagesReady(partialCatalog, {
+        ...partialCatalog.recipes[0]!,
+        packages: ['@pegma/demo-core@0.1.0'],
+      }),
+    ).toBe(true);
+    expect(
+      recipePackagesReady(partialCatalog, {
+        ...partialCatalog.recipes[0]!,
+        packages: ['@pegma/demo-core@9.9.9'],
+      }),
+    ).toBe(false);
+  });
+
+  it('parses scoped package@version specifiers', () => {
+    expect(parsePackageSpecifier('@pegma/spine@0.1.1')).toEqual({
+      name: '@pegma/spine',
+      version: '0.1.1',
+    });
+    expect(parsePackageSpecifier('@pegma/spine')).toEqual({
+      name: '@pegma/spine',
+      version: null,
+    });
+    expect(parsePackageSpecifier('left-pad@1.0.0')).toEqual({
+      name: 'left-pad',
+      version: '1.0.0',
+    });
+  });
+
+  it('rejects malformed dependency entries', () => {
+    expect(() =>
+      parseCompositionCatalog({
+        schemaVersion: CATALOG_SCHEMA_VERSION,
+        generatedAt: '2026-07-28T00:00:00.000Z',
+        components: [
+          {
+            id: 'x',
+            title: 'X',
+            repo: 'x',
+            packages: [],
+            status: 'published',
+            publishUsability: 'usable',
+            summary: 'x',
+            owns: [],
+            refuses: [],
+            dependencies: ['spine'],
+            adapters: [],
+            hostMustProvide: [],
+            capabilityTags: [],
+            recipeIds: [],
+            links: { githubRepo: 'https://github.com/pegma-dev/x' },
+          },
+        ],
+        recipes: [],
+      }),
+    ).toThrow(/dependencies\[0\]/);
   });
 
   it('keeps recipe intents synthetic (no commercial host names)', () => {

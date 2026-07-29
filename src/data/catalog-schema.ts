@@ -166,7 +166,7 @@ export interface CatalogRecipe {
   readonly id: string;
   /** One-paragraph synthetic product shape — never a real commercial product */
   readonly intent: string;
-  /** Package names (and optional pins once fixtures exist) */
+  /** Package names, optionally pinned as `name@version` once fixtures exist */
   readonly packages: readonly string[];
   /** Adapter ids selected for this recipe */
   readonly adapters: readonly string[];
@@ -228,19 +228,48 @@ export function publishedPackageNames(
 }
 
 /**
+ * Split a recipe package specifier into name and optional exact version.
+ * Accepts bare names (`@pegma/spine`) and pinned forms (`@pegma/spine@0.1.1`).
+ * Scoped packages keep the leading `@`; the last `@` separates the version.
+ */
+export function parsePackageSpecifier(spec: string): {
+  readonly name: string;
+  readonly version: string | null;
+} {
+  if (spec.startsWith('@')) {
+    const sep = spec.lastIndexOf('@');
+    if (sep > 0) {
+      return { name: spec.slice(0, sep), version: spec.slice(sep + 1) || null };
+    }
+    return { name: spec, version: null };
+  }
+  const sep = spec.indexOf('@');
+  if (sep > 0) {
+    return { name: spec.slice(0, sep), version: spec.slice(sep + 1) || null };
+  }
+  return { name: spec, version: null };
+}
+
+/**
  * True when every package named by the recipe is published with a version pin
  * somewhere in the catalog. Empty `recipe.packages` is ready (brochure / no-op).
+ * Specifiers may be bare names or `name@version` pins.
  */
 export function recipePackagesReady(
   catalog: CompositionCatalog,
   recipe: CatalogRecipe,
 ): boolean {
   if (recipe.packages.length === 0) return true;
-  for (const name of recipe.packages) {
+  for (const spec of recipe.packages) {
+    const { name, version } = parsePackageSpecifier(spec);
     const owner = catalog.components.find((c) =>
       c.packages.some((p) => p.name === name),
     );
     if (!owner || !isPackagePublished(owner, name)) return false;
+    if (version !== null) {
+      const pkg = owner.packages.find((p) => p.name === name);
+      if (!pkg || pkg.version !== version) return false;
+    }
   }
   return true;
 }

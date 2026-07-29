@@ -92,7 +92,7 @@ CompositionCatalog
 | --- | --- | --- |
 | `id` | string | Stable recipe id |
 | `intent` | string | Synthetic product shape (one paragraph) |
-| `packages` | string[] | Package names (pins appear when fixtures exist) |
+| `packages` | string[] | Package names, optionally pinned as `name@version` |
 | `adapters` | string[] | Selected adapter ids |
 | `hostResponsibilities` | string[] | Host-owned work |
 | `nonGoals` | string[] | Out of scope for the recipe |
