@@ -255,6 +255,12 @@ webhook delivery UI/API to redeliver; the ledger acknowledges duplicates
 without re-applying a processed projection. Missed or deleted events converge
 via six-hour reconciliation without operator D1 edits.
 
+**Replay:** GitHub's HMAC covers the body only, so `x-github-delivery` — the
+ledger's dedup key — is unauthenticated. Each signed body is therefore bound to
+the first delivery id that carried it; the same bytes presented under a
+different delivery id are refused with `409 duplicate_body` and have no storage
+effect. A delivery that fails releases its binding so redelivery still runs.
+
 **Rollback:** disable the organization webhook first. Keep `GET /api/releases`
 serving last-known public records while investigating unless integrity is in
 doubt — then disable release rendering (Stack still shows repository links).
