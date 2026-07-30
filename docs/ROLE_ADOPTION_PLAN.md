@@ -99,6 +99,21 @@ retiregolden.org's host-side index the shared component would otherwise have
 to carry. Extracting before those decisions would bake a workaround into a
 public package right as the library makes it unnecessary.
 
+When the gate clears, Phase 5 activates in this order — the `Admin` mapping
+and its bootstrap are PART OF this phase, because a surface gated on a role
+nobody holds and nothing grants is unreachable by construction:
+
+1. Map the `Admin` role in the policy (the name already exists in prose from
+   Phase 1) to the surface's permission set.
+2. One-time Admin bootstrap, identical in shape to Phase 3's Support seed:
+   `PEGMA_ADMIN_BOOTSTRAP_PRINCIPALS`, a REAL audited assignment with actor
+   `system:bootstrap`, a **deterministic assignment id**
+   (`bootstrap-admin-<principalId>`) so revocation stays durable while the
+   var lingers, human-managed after the write. Delete the var once the
+   first admin exists; the surface shows a standing warning while it is set.
+3. Only then does the surface ship gated on `Admin` — with the last-admin
+   guard meaningful from its first request, because an admin exists.
+
 Recorded for that extraction (from the reference host's build):
 
 - Generic: grants-model rendering (management policy: ongoing system actors
