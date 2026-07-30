@@ -136,7 +136,7 @@ export default {
         probe: 'disabled' | 'ok' | 'fail';
       } = {
         storage: 'cloudflare-d1',
-        packages: '@pegma/support-desk-application@0.1.0',
+        packages: '@pegma/support-desk-application@0.1.1',
         probe: 'disabled',
       };
       if (supportHealthProbeEnabled(env)) {
@@ -169,9 +169,9 @@ export default {
           }),
           createDetailCheck('identity', {
             storage: 'cloudflare-d1',
-            sessions: '@pegma/sessions@0.1.0',
-            runtime: '@pegma/identity@0.1.0',
-            authorizationAdapter: '@pegma/authorization-identity@0.1.2',
+            sessions: '@pegma/sessions@0.2.0',
+            runtime: '@pegma/identity@0.1.2',
+            authorizationAdapter: '@pegma/authorization-identity@0.2.0',
             emailDelivery:
               String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
               Boolean(env.RESEND_API_KEY),
