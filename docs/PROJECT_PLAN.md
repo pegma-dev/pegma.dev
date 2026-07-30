@@ -275,3 +275,7 @@ with a source link where not. Decide in Phase 3.
    2026-07-29:** the signed Webhooks `v0.1.0` release projected immediately
    without a site deploy; the exact registry package replaced the vendored
    bridge.
+5. Replace the Support Desk staff env allowlist with the Authorization Core
+   role store — pegma.dev is the ecosystem's second role-store host, and the
+   shared admin-surface extraction that second consumer triggers is gated on
+   authorization-core#23/#24. Plan: `docs/ROLE_ADOPTION_PLAN.md`.
