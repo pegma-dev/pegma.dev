@@ -45,7 +45,7 @@ export const components: readonly PegmaComponent[] = [
       'Durable events — anything that must survive a crash goes to a storage-backed outbox, never the in-process bus',
       'Growth — the more spine changes, the more the ecosystem churns',
     ],
-    now: '0.1.1 on npm; deliberately close to frozen.',
+    now: '0.1.2 on npm; deliberately close to frozen.',
   },
   {
     repo: 'storage-core',
@@ -69,7 +69,7 @@ export const components: readonly PegmaComponent[] = [
       'Cross-partition anything',
       'Compatibility layers for pre-existing data layouts — Pegma targets net-new projects',
     ],
-    now: '0.4.0 on npm with Azure Tables and Cloudflare D1 adapters; both adapters pass the same conformance suite.',
+    now: '0.4.0 on npm with the Azure Tables (0.4.0) and Cloudflare D1 (0.4.1) adapters; both adapters pass the same conformance suite.',
   },
   {
     repo: 'storage-blobs',
@@ -94,7 +94,7 @@ export const components: readonly PegmaComponent[] = [
       'Authorization, rate limits, malware scanning, or attachment lifecycle inside the store',
       'Cross-object transactions or server-side query by metadata',
     ],
-    now: '0.1.0 on npm with Azure Blob, R2, and S3 adapters; first consumer planned is Support Desk attachments.',
+    now: '0.1.2 on npm with Azure Blob, R2, and S3 adapters; first consumer planned is Support Desk attachments.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -105,6 +105,7 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/authorization-core',
       '@pegma/authorization-policy',
       '@pegma/authorization-auth0',
+      '@pegma/authorization-entra',
       '@pegma/authorization-stripe',
       '@pegma/authorization-storage',
       '@pegma/authorization-tokens',
@@ -116,7 +117,7 @@ export const components: readonly PegmaComponent[] = [
     owns: [
       'Principals, roles, entitlements, permissions, and versioned policy',
       'Deterministic resolution: trusted facts in, effective permissions out',
-      'Auth0 and Stripe adapters; storage over Storage Core',
+      'Auth0, Entra, and Stripe adapters; storage over Storage Core',
       'Short-lived signed access grants (ES256, single-use)',
     ],
     refuses: [
@@ -125,7 +126,7 @@ export const components: readonly PegmaComponent[] = [
       'Offline commercial licensing — a different artifact entirely',
       'Email as an authentication or authorization key',
     ],
-    now: '0.1.2 on npm; the Identity claims adapter is composed by this Cloudflare reference application.',
+    now: '0.1.4 on npm across nine synchronized packages, Entra included; the Identity claims adapter is composed by this Cloudflare reference application.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -143,7 +144,7 @@ export const components: readonly PegmaComponent[] = [
       'Owning a store, a collection, or a partition — an audit record a component writes separately can lie; one inside the caller’s transaction cannot',
       'Tamper-evidence, SIEM ambitions, global ordering',
     ],
-    now: '0.1.0 on npm; awaiting its first integrated consumer.',
+    now: '0.1.1 on npm; awaiting its first integrated consumer.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -155,7 +156,7 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/support-desk-application',
       '@pegma/support-desk-templates',
     ],
-    status: 'in development',
+    status: 'published',
     summary:
       'A composable support queue for web and email, authorized by permissions from day one.',
     owns: [
@@ -167,7 +168,7 @@ export const components: readonly PegmaComponent[] = [
       'Being a hosted SaaS — hosts run it, own its data, and choose its providers',
       'AI processing before the host documents what may leave its boundary',
     ],
-    now: 'The customer Phase 1/2 application slice and provider-neutral Phase 6 mail source are implemented; abuse limits and deployment phases remain open, and all packages are unpublished.',
+    now: 'The 0.1.0 package set is published on npm from the signed v0.1.0 release (2026-07-29); host deployments are the next step.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -187,7 +188,7 @@ export const components: readonly PegmaComponent[] = [
       'Ordering guarantees — domain logic, deliberately excluded',
       'Storing payloads — receipts hold ids and counters, never customer data',
     ],
-    now: '@pegma/webhooks@0.1.0 is published from the protected signed v0.1.0 release through trusted-publisher OIDC with provenance. RetireGolden Stripe and pegma.dev GitHub exercise two real providers, hosts, clouds, and stores; the 0.x API remains unstable.',
+    now: '@pegma/webhooks@0.1.1 is published through trusted-publisher OIDC with provenance. RetireGolden Stripe and pegma.dev GitHub exercise two real providers, hosts, clouds, and stores; the 0.x API remains unstable.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -206,7 +207,7 @@ export const components: readonly PegmaComponent[] = [
       'Authentication — no OIDC, cookies, or CSRF; the host logs people in, this store remembers',
       'Tokens at rest, ever',
     ],
-    now: '0.1.0 on npm; RetireGolden is the first integrated consumer and this site is the second, live consumer; early 0.x API remains unstable.',
+    now: '0.1.1 on npm; RetireGolden is the first integrated consumer and this site is the second, live consumer; early 0.x API remains unstable.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -226,7 +227,7 @@ export const components: readonly PegmaComponent[] = [
       'Inbound mail, bulk/marketing sending, rich templating',
       'Deliverability abstraction — SPF/DKIM/DMARC live in the host’s DNS',
     ],
-    now: '0.1.0 on npm; extracted from Support Desk and now shared by Support Desk and Identity.',
+    now: '0.1.1 on npm; extracted from Support Desk and now shared by Support Desk and Identity.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -266,7 +267,7 @@ export const components: readonly PegmaComponent[] = [
       'Being an OIDC/OAuth2 server for third parties',
       'Social login — external providers exist for that, and issuer-namespaced links let a host run both',
     ],
-    now: '0.1.0 on npm; composed here with Sessions, durable rate limits, Mail, and Cloudflare D1.',
+    now: '0.1.1 on npm; composed here with Sessions, durable rate limits, Mail, and Cloudflare D1.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -285,7 +286,7 @@ export const components: readonly PegmaComponent[] = [
       'DDoS protection — volumetric defense belongs at the edge',
       'Middleware and usage metering',
     ],
-    now: '0.1.0 on npm; durable fixed-window policies are composed by the production Identity worker.',
+    now: '0.1.1 on npm; durable fixed-window policies are composed by the production Identity worker.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -309,7 +310,7 @@ export const components: readonly PegmaComponent[] = [
       'Traces, metrics, APM, or SIEM — hosts use OpenTelemetry or vendor SDKs beside Pegma',
       'Growing Spine with sink SDKs',
     ],
-    now: '0.1.1 on npm; trusted publishing configured. Host tee wiring next.',
+    now: '0.1.3 on npm; trusted publishing configured. Host tee wiring next.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -329,7 +330,7 @@ export const components: readonly PegmaComponent[] = [
       'Autodiscovery of checks — hosts register them at the composition root',
       'Metrics, APM, or alert fan-out',
     ],
-    now: '0.1.1 on npm; trusted publishing configured.',
+    now: '0.1.2 on npm; trusted publishing configured.',
     plan: 'docs/PROJECT_PLAN.md',
   },
 ];
