@@ -22,6 +22,8 @@
     "@pegma/audit": "0.2.0",
     "@pegma/authorization-core": "0.2.0",
     "@pegma/authorization-identity": "0.2.0",
+    "@pegma/authorization-policy": "0.2.0",
+    "@pegma/authorization-storage": "0.2.0",
     "@pegma/health": "^0.2.0",
     "@pegma/identity": "0.1.2",
     "@pegma/logger-cloudflare": "^0.1.1",

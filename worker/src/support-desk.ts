@@ -9,6 +9,10 @@ import {
   type Logger,
   type PrincipalId,
 } from '@pegma/spine';
+import {
+  createRoleStore,
+  type InMemoryStorageAdapter,
+} from '@pegma/authorization-storage';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import type { Store } from '@pegma/storage-core';
 import {
@@ -24,7 +28,11 @@ import {
 } from '@pegma/support-desk-application';
 import { defineTemplate } from '@pegma/support-desk-templates';
 import type { IdentityLinkProjector, IdentityPort } from './identity-contracts';
+import { AUTHORIZATION_APPLICATION_ID } from './support-access';
 import type { SessionStore } from '@pegma/sessions';
+
+/** The audited role store surface createRoleStore returns. */
+export type RoleStore = InMemoryStorageAdapter;
 
 /** Host-configured category allowlist for pegma.dev product feedback. */
 export const PEGMA_SUPPORT_CATEGORIES = Object.freeze([
@@ -162,6 +170,12 @@ export interface SupportRuntimeEnv {
    * operators. Combined with {@link SUPPORT_STAFF_EMAILS}.
    */
   readonly SUPPORT_STAFF_PRINCIPALS?: string;
+  /**
+   * One-time Support-role bootstrap principals
+   * (docs/ROLE_ADOPTION_PLAN.md Phase 3). Delete after the first operator
+   * holds the role — it seeds state, it is never an authorization path.
+   */
+  readonly PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS?: string;
 }
 
 export interface SupportCompositionOptions {
@@ -177,6 +191,9 @@ export interface SupportCompositionOptions {
 
 export interface SupportRuntime {
   readonly store: Store;
+  /** Audited role store bound to this host's application partition
+   * (docs/ROLE_ADOPTION_PLAN.md Phase 1). */
+  readonly roleStore: RoleStore;
   readonly application: SupportDeskApplication;
   readonly clock: Clock;
   readonly createLimiter: DurableRateLimiter;
@@ -241,8 +258,13 @@ export function createSupportRuntime(
     queueTerminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
   });
 
+  // Audited role store on the SAME Store, partitioned by this host's
+  // application id (docs/ROLE_ADOPTION_PLAN.md Phase 1).
+  const roleStore = createRoleStore(store, AUTHORIZATION_APPLICATION_ID);
+
   return Object.freeze({
     store,
+    roleStore,
     application,
     clock,
     createLimiter,

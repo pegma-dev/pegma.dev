@@ -34,16 +34,16 @@ a `Support` role, and the staff gate reading it.
 
 ## Phase 1 — policy + role store binding
 
-- [ ] Add `@pegma/authorization-storage` (exact pin, same 0.x line as the
+- [x] Add `@pegma/authorization-storage` (exact pin, same 0.x line as the
       packages already composed).
-- [ ] One host policy document (schema-validated in a test with
+- [x] One host policy document (schema-validated in a test with
       `@pegma/authorization-policy`, the way retiregolden.org pins its
       `rg-policy-v1`): customer support permissions stay granted via
       `defaults` to any authenticated account (unchanged semantics), and a
       `Support` role maps to the six staff permissions. Define an `Admin`
       role name in the policy prose now, but map it only when Phase 5's
       surface exists to consume it — a role nothing checks is a loaded gun.
-- [ ] Bind `createRoleStore(store, 'pegma.dev')` at the worker composition
+- [x] Bind `createRoleStore(store, 'pegma.dev')` at the worker composition
       root, over the SAME D1-backed `Store` the other components share. The
       application id is one value, forever — changing it strands every
       assignment.
@@ -52,16 +52,16 @@ a `Support` role, and the staff gate reading it.
 
 The lockout-safe order proven on retiregolden.org, transplanted:
 
-- [ ] Staff access resolves the full context (stored roles + policy) **per
+- [x] Staff access resolves the full context (stored roles + policy) **per
       request, uncached** — that is what honors the library's 60-second
       staff-check cache bound; a revocation is effective on the next request.
-- [ ] Gate = role **or** legacy allowlist, both honored; a role-store
+- [x] Gate = role **or** legacy allowlist, both honored; a role-store
       failure falls through to the allowlist while the legacy path exists
       (it stays authoritative until deleted).
 
 ## Phase 3 — first-operator seed
 
-- [ ] `PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS` (comma-separated Identity
+- [x] `PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS` (comma-separated Identity
       principal ids): on an authorization touch, a listed principal lacking
       the grant receives a REAL audited `Support` assignment with actor
       `system:bootstrap`. Two properties are load-bearing, both learned the

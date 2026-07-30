@@ -23,6 +23,7 @@ import {
   runReleaseReconciliation,
 } from './release-reconciliation';
 import { handleGetReleases, readReleasesConfig } from './releases-api';
+import { parseBootstrapPrincipals } from './role-bootstrap';
 import { createSupportApi } from './support-api';
 import { parseStaffAllowlist } from './support-access';
 import {
@@ -58,6 +59,10 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     createLimiter: supportRuntime.createLimiter,
     replyLimiter: supportRuntime.replyLimiter,
     logger,
+    // The Support ROLE is the real staff gate; the allowlist is the legacy
+    // path until Phase 4 of docs/ROLE_ADOPTION_PLAN.md deletes it.
+    roleStore: supportRuntime.roleStore,
+    bootstrapPrincipals: parseBootstrapPrincipals(env),
     staffAllowlist: parseStaffAllowlist(env),
   });
   return { supportRuntime, api };

@@ -13,7 +13,9 @@ Exact published versions:
 - `@pegma/support-desk-contracts@0.1.0`
 - `@pegma/support-desk-core@0.1.0`
 - `@pegma/support-desk-templates@0.1.0`
-- `@pegma/authorization-core@0.1.2` (AccessContext resolution)
+- `@pegma/authorization-core@0.2.0` (AccessContext resolution)
+- `@pegma/authorization-policy@0.2.0` (PolicyDocumentV1 schema validation)
+- `@pegma/authorization-storage@0.2.0` (D1-backed role store)
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
 `@pegma/storage-cloudflare-d1@0.4.0`, `@pegma/sessions@0.1.0`,
@@ -39,30 +41,26 @@ two never share a cursor key.
 
 ### Customer
 
-Any authenticated pegma.dev account receives customer permissions through host
-AccessContext defaults (no paid entitlement):
+Any authenticated pegma.dev account receives customer permissions through the
+unified host policy's `defaults` (no paid entitlement):
 
 - `support.ticket.create`
 - `support.ticket.read.own`
 - `support.ticket.reply.own`
 
-Policy version: `pegma.dev-support-customer-1`.
+Policy version: `pegma.dev-policy-1` — one `PolicyDocumentV1` for the whole
+host, schema-validated in tests (see `docs/ROLE_ADOPTION_PLAN.md`).
 
-### Staff (host allowlist)
+### Staff (stored `Support` role)
 
-Staff are **not** a full role store. Operators are allowlisted via env:
+Staff access is granted by a stored, audited `Support` role assignment in the
+D1-backed role store (`@pegma/authorization-storage`, application id
+`pegma.dev`, application scope). The gate re-reads active assignments on every
+request, so a revocation is effective on the caller's next request. Non-staff
+callers of staff routes receive **403** `forbidden` (not 404).
+Unauthenticated callers receive **401**.
 
-| Env | Meaning |
-| --- | --- |
-| `SUPPORT_STAFF_EMAILS` | Comma-separated verified emails (case-insensitive) |
-| `SUPPORT_STAFF_PRINCIPALS` | Comma-separated Identity principal / subject ids |
-
-A principal is staff only when authenticated **and** (principal id is in
-`SUPPORT_STAFF_PRINCIPALS` **or** verified user email is in
-`SUPPORT_STAFF_EMAILS`). Non-staff callers of staff routes receive **403**
-`forbidden` (not 404). Unauthenticated callers receive **401**.
-
-Staff AccessContext policy version: `pegma.dev-support-staff-1`. Permissions:
+The `Support` role maps to:
 
 - `support.queue.read`
 - `support.ticket.reply.any`
@@ -70,6 +68,20 @@ Staff AccessContext policy version: `pegma.dev-support-staff-1`. Permissions:
 - `support.ticket.assign`
 - `support.ticket.manage`
 - `support.audit.read`
+
+**Bootstrap (one-time seeding).** `PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS`
+(comma-separated Identity principal ids) seeds a real audited `Support`
+assignment (actor `system:bootstrap`, deterministic assignment id
+`bootstrap-support-<principalId>`) on a listed principal's next authenticated
+support request. Each principal is seeded at most once, ever — a revoked seed
+stays revoked even while the env var lingers. Delete the var once the first
+operator holds the role.
+
+**Legacy allowlist (Phase 4 deletes it).** `SUPPORT_STAFF_EMAILS` /
+`SUPPORT_STAFF_PRINCIPALS` are still honored beside the role path during the
+lockout-safe retirement order; if the role store errors, the gate logs and
+falls through to the allowlist. Parsing and the legacy resolver are deleted
+whole in Phase 4 once the live bootstrap seed is confirmed.
 
 `principalId` is always the Identity principal / account id from the
 server-side session (`__Host-pegma_session`). Browser-supplied identity fields
