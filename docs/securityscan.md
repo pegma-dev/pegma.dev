@@ -162,10 +162,23 @@ fail-closed on any unexpected migration change (see CI).
   `Strict-Transport-Security` header to the `/*` block in `public/_headers`,
   with `src/security-headers.test.ts` asserting the whole static header set so
   a regression fails CI. `includeSubDomains` is safe today: `www.pegma.dev`
-  already serves HTTPS and 301s to the apex. Two operator actions remain
-  outside this repository: enabling HSTS zone-wide so Worker `/api/*`
-  responses carry it, and submitting the apex to hstspreload.org (the
-  `preload` token alone does nothing until then).
+  already serves HTTPS and 301s to the apex.
+- **Follow-up 2026-07-30 — zone-wide HSTS enabled; preloading declined.**
+  HSTS is now on for the whole zone (SSL/TLS → Edge Certificates:
+  `includeSubDomains`, `preload`, 12 months), so Worker `/api/*` responses
+  carry it too — verified live on both `https://pegma.dev/` and
+  `https://pegma.dev/api/health`. Cloudflare's longest max-age option is 12
+  months and the zone setting overrides this file, so `max-age` here was
+  lowered from `63072000` to the `31536000` actually served, keeping the
+  committed header honest about production.
+  The apex was deliberately **not** submitted to hstspreload.org.
+  hstspreload.org now states that "HSTS preloading is not recommended":
+  Chrome and Safari already upgrade all HTTP navigations to HTTPS regardless
+  of HSTS policy, so preloading only helps when that upgrade fails against an
+  active on-path attacker, while list entries are hardcoded into Chrome and
+  take months to add or remove. The domain does meet all four submission
+  requirements should that trade ever look worthwhile. The `preload` token is
+  retained to match the zone setting; it is inert without a list submission.
 
 ### [LOW] `Access-Control-Allow-Origin: *` on static HTML responses
 
