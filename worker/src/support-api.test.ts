@@ -17,13 +17,22 @@ import type {
   VerifiedIdentityClaims,
 } from './identity-contracts';
 import { createSupportApi } from './support-api';
+import { validatePolicy } from '@pegma/authorization-policy';
 import {
+  APPLICATION_SCOPE,
   customerAccessContext,
   parseStaffAllowlist,
+  PEGMA_ACCESS_POLICY,
   staffAccessContext,
+  staffAccessContextFromRoles,
+  SUPPORT_ROLE,
   SUPPORT_STAFF_PERMISSIONS,
-  SUPPORT_STAFF_POLICY_VERSION,
 } from './support-access';
+import {
+  bootstrapSupportAssignmentId,
+  ensureBootstrapSupport,
+  parseBootstrapPrincipals,
+} from './role-bootstrap';
 import {
   createSupportRuntime,
   formatPegmaTicketSubject,
@@ -146,6 +155,9 @@ function patch(
 function fixture(options: {
   readonly staffPrincipals?: readonly PrincipalId[];
   readonly staffEmails?: readonly string[];
+  readonly bootstrapPrincipals?: readonly PrincipalId[];
+  /** Override the role store the API sees (e.g. a failing one). */
+  readonly roleStoreOverride?: Parameters<typeof createSupportApi>[0]['roleStore'];
 } = {}) {
   const store = createMemoryStore();
   const sessions = createSessionStore(store, { logger });
@@ -175,9 +187,20 @@ function fixture(options: {
     createLimiter: runtime.createLimiter,
     replyLimiter: runtime.replyLimiter,
     logger,
+    roleStore: options.roleStoreOverride ?? runtime.roleStore,
+    bootstrapMarkers: runtime.bootstrapMarkers,
+    bootstrapPrincipals: new Set(options.bootstrapPrincipals ?? []),
     staffAllowlist,
   });
-  return { store, sessions, runtime, api, application: runtime.application };
+  return {
+    store,
+    sessions,
+    runtime,
+    roleStore: runtime.roleStore,
+    bootstrapMarkers: runtime.bootstrapMarkers,
+    api,
+    application: runtime.application,
+  };
 }
 
 async function createCustomerTicket(
@@ -542,7 +565,7 @@ describe('staff allowlist and access', () => {
       'staff@example.test',
     );
     expect(staffByPrincipal).not.toBeNull();
-    expect(staffByPrincipal?.policyVersion).toBe(SUPPORT_STAFF_POLICY_VERSION);
+    expect(staffByPrincipal?.policyVersion).toBe(PEGMA_ACCESS_POLICY.version);
     expect(staffByPrincipal?.permissions).toEqual(
       expect.arrayContaining([...SUPPORT_STAFF_PERMISSIONS]),
     );
@@ -898,5 +921,207 @@ describe('staff support API', () => {
     );
     const queue = await api(get('/api/support/admin/queue', staff.cookie));
     expect(queue.status).toBe(200);
+  });
+});
+
+describe('Support role store adoption (docs/ROLE_ADOPTION_PLAN.md phases 1–3)', () => {
+  async function grantSupport(
+    roleStore: ReturnType<typeof createSupportRuntime>['roleStore'],
+    principalId: PrincipalId,
+    id = `assign-${principalId}`,
+  ) {
+    const granted = await roleStore.grantRoleAssignmentWithAudit({
+      assignment: {
+        id,
+        principalId,
+        role: SUPPORT_ROLE,
+        scope: APPLICATION_SCOPE,
+        grantedBy: { kind: 'principal', principalId: 'principal-admin' },
+        grantedAtEpochMs: Date.parse('2026-07-30T00:00:00.000Z'),
+        status: 'active',
+      },
+      auditEventId: `evt-${id}`,
+    });
+    expect(granted.status).toBe('granted');
+  }
+
+  it('the host policy validates as a PolicyDocumentV1 (schema drift fails CI)', () => {
+    const serialized = JSON.parse(JSON.stringify(PEGMA_ACCESS_POLICY));
+    expect(validatePolicy(serialized)).toMatchObject({ valid: true });
+    expect(validatePolicy({ ...serialized, version: 42 }).valid).toBe(false);
+  });
+
+  it('staffAccessContextFromRoles grants via the stored role and honors revocation next call', async () => {
+    const { roleStore } = fixture();
+    expect(
+      await staffAccessContextFromRoles(principalStaff, roleStore),
+    ).toBeNull();
+
+    await grantSupport(roleStore, principalStaff);
+    const access = await staffAccessContextFromRoles(principalStaff, roleStore);
+    expect(access).not.toBeNull();
+    expect(access?.policyVersion).toBe(PEGMA_ACCESS_POLICY.version);
+    expect(access?.permissions).toEqual(
+      expect.arrayContaining([...SUPPORT_STAFF_PERMISSIONS]),
+    );
+
+    const current = await roleStore.getRoleAssignment(
+      `assign-${principalStaff}`,
+    );
+    const revoked = await roleStore.revokeRoleAssignmentWithAudit({
+      assignmentId: `assign-${principalStaff}`,
+      expectedConcurrencyToken: current!.concurrencyToken,
+      revokedBy: { kind: 'principal', principalId: 'principal-admin' },
+      revokedAtEpochMs: Date.parse('2026-07-30T01:00:00.000Z'),
+      auditEventId: 'evt-revoke-staff',
+    });
+    expect(revoked.status).toBe('revoked');
+    // Re-resolved per request — the 60-second bound is honored trivially.
+    expect(
+      await staffAccessContextFromRoles(principalStaff, roleStore),
+    ).toBeNull();
+  });
+
+  it('a role-holder passes staff routes with an EMPTY allowlist (roles are the real gate)', async () => {
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
+    const staff = await sessionCookie(sessions, principalStaff, 's'.repeat(43));
+    const queue = await api(get('/api/support/admin/queue', staff.cookie));
+    expect(queue.status).toBe(200);
+  });
+
+  it('denies without role or allowlist; a role-store failure falls back to the legacy allowlist', async () => {
+    const failing = {
+      listActiveRoleAssignments: async () => {
+        throw new Error('role store down');
+      },
+      getRoleAssignment: async () => null,
+      grantRoleAssignmentWithAudit: async () => {
+        throw new Error('role store down');
+      },
+    } as unknown as Parameters<typeof createSupportApi>[0]['roleStore'];
+
+    const denied = fixture({ roleStoreOverride: failing });
+    const nobody = await sessionCookie(denied.sessions, principalA, 'n'.repeat(43));
+    expect(
+      (await denied.api(get('/api/support/admin/queue', nobody.cookie))).status,
+    ).toBe(403);
+
+    const legacy = fixture({
+      roleStoreOverride: failing,
+      staffPrincipals: [principalStaff],
+    });
+    const staff = await sessionCookie(legacy.sessions, principalStaff, 'l'.repeat(43));
+    expect(
+      (await legacy.api(get('/api/support/admin/queue', staff.cookie))).status,
+    ).toBe(200);
+  });
+
+  it('bootstrap seeds a listed principal on an authenticated touch, once, revocation-durable', async () => {
+    const { api, sessions, roleStore, bootstrapMarkers } = fixture({
+      bootstrapPrincipals: [principalStaff],
+    });
+    const staff = await sessionCookie(sessions, principalStaff, 'b'.repeat(43));
+
+    // Any authenticated support touch seeds; the next staff call succeeds.
+    expect(
+      (await api(get('/api/support/categories', staff.cookie))).status,
+    ).toBe(200);
+    expect(
+      (await api(get('/api/support/admin/queue', staff.cookie))).status,
+    ).toBe(200);
+
+    const assignmentId = bootstrapSupportAssignmentId(principalStaff);
+    const stored = await roleStore.getRoleAssignment(assignmentId);
+    expect(stored?.assignment).toMatchObject({
+      role: SUPPORT_ROLE,
+      grantedBy: { kind: 'system', systemId: 'bootstrap' },
+      status: 'active',
+    });
+
+    // Human revocation is DURABLE while the env var is still configured:
+    // the next touch must not resurrect the grant.
+    const revoked = await roleStore.revokeRoleAssignmentWithAudit({
+      assignmentId,
+      expectedConcurrencyToken: stored!.concurrencyToken,
+      revokedBy: { kind: 'principal', principalId: 'principal-admin' },
+      // After the seed's real-clock grantedAtEpochMs — a revocation must
+      // not predate its grant.
+      revokedAtEpochMs: Date.now() + 1_000,
+      auditEventId: 'evt-revoke-bootstrap',
+    });
+    expect(revoked.status).toBe('revoked');
+    expect(
+      (await api(get('/api/support/categories', staff.cookie))).status,
+    ).toBe(200);
+    expect(
+      await ensureBootstrapSupport(
+        roleStore,
+        bootstrapMarkers,
+        principalStaff,
+        new Set([principalStaff]),
+      ),
+    ).toBe('already');
+    expect(
+      (await api(get('/api/support/admin/queue', staff.cookie))).status,
+    ).toBe(403);
+  });
+
+  it('marks a listed principal already holding Support elsewhere, so revoking that grant cannot be undone by a reseed', async () => {
+    const { api, sessions, roleStore, bootstrapMarkers } = fixture({
+      bootstrapPrincipals: [principalStaff],
+    });
+    // Support held via a NON-bootstrap assignment before the first touch.
+    await grantSupport(roleStore, principalStaff);
+    const other = await roleStore.getRoleAssignment(`assign-${principalStaff}`);
+    const staff = await sessionCookie(sessions, principalStaff, 'm'.repeat(43));
+
+    // The touch grants nothing (the store refuses a second active
+    // assignment per tuple) but still records the handled seed — the host
+    // marker is the ONLY "already seeded" signal; role state is not one.
+    expect(
+      (await api(get('/api/support/categories', staff.cookie))).status,
+    ).toBe(200);
+    expect(
+      await roleStore.getRoleAssignment(
+        bootstrapSupportAssignmentId(principalStaff),
+      ),
+    ).toBeNull();
+    expect(
+      await bootstrapMarkers.get({
+        partition: 'support-bootstrap',
+        id: principalStaff,
+      }),
+    ).toMatchObject({ principalId: principalStaff, outcome: 'held_elsewhere' });
+
+    // Revoke the held assignment; the next touch must not re-grant.
+    const revoked = await roleStore.revokeRoleAssignmentWithAudit({
+      assignmentId: other!.assignment.id,
+      expectedConcurrencyToken: other!.concurrencyToken,
+      revokedBy: { kind: 'principal', principalId: 'principal-admin' },
+      revokedAtEpochMs: Date.now() + 1_000,
+      auditEventId: `evt-revoke-${other!.assignment.id}`,
+    });
+    expect(revoked.status).toBe('revoked');
+    expect(
+      (await api(get('/api/support/categories', staff.cookie))).status,
+    ).toBe(200);
+    expect(
+      await roleStore.getRoleAssignment(
+        bootstrapSupportAssignmentId(principalStaff),
+      ),
+    ).toBeNull();
+    expect(
+      (await api(get('/api/support/admin/queue', staff.cookie))).status,
+    ).toBe(403);
+  });
+
+  it('parses the bootstrap principal list (trimmed, empties dropped)', () => {
+    expect(
+      parseBootstrapPrincipals({
+        PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS: ' p-1, ,p-2 ',
+      }),
+    ).toEqual(new Set(['p-1', 'p-2']));
+    expect(parseBootstrapPrincipals({})).toEqual(new Set());
   });
 });

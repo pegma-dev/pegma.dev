@@ -27,9 +27,16 @@ import type {
   VerifiedIdentityClaims,
 } from './identity-contracts';
 import {
+  ensureBootstrapSupport,
+  type BootstrapMarkerStore,
+  type BootstrapRoleStore,
+} from './role-bootstrap';
+import {
   customerAccessContext,
   emptyStaffAllowlist,
   staffAccessContext,
+  staffAccessContextFromRoles,
+  type SupportRoleReader,
   type StaffAllowlist,
 } from './support-access';
 import {
@@ -96,10 +103,21 @@ interface SupportApiOptions {
   readonly replyLimiter: DurableRateLimiter;
   readonly logger: Logger;
   /**
-   * Host staff allowlist. Prefer injecting from env via `parseStaffAllowlist`
+   * LEGACY host staff allowlist, honored beside the role path during the
+   * lockout-safe retirement order (docs/ROLE_ADOPTION_PLAN.md) — deleted
+   * whole in Phase 4. Prefer injecting from env via `parseStaffAllowlist`
    * so tests can supply a fixed list without process env.
    */
   readonly staffAllowlist?: StaffAllowlist;
+  /**
+   * Audited role store — the REAL staff gate (Phase 2). Absent ⇒ only the
+   * legacy allowlist can grant staff access.
+   */
+  readonly roleStore?: SupportRoleReader & BootstrapRoleStore;
+  /** One-time Support bootstrap principals (Phase 3). */
+  readonly bootstrapPrincipals?: ReadonlySet<string>;
+  /** Durable bootstrap-seed markers; required for the seed to run. */
+  readonly bootstrapMarkers?: BootstrapMarkerStore;
 }
 
 interface SessionData {
@@ -427,6 +445,35 @@ async function requireAuthentication(
   if (authenticated === null) {
     throw new ApiError(401, 'authentication_required');
   }
+  // One-time Support bootstrap (docs/ROLE_ADOPTION_PLAN.md Phase 3): any
+  // authenticated support touch by a listed principal seeds the audited
+  // grant. Fail OPEN — a seed failure must not break the request; it
+  // retries on the next touch. The set-membership check short-circuits for
+  // everyone not listed.
+  if (
+    options.roleStore !== undefined &&
+    options.bootstrapMarkers !== undefined &&
+    options.bootstrapPrincipals !== undefined &&
+    options.bootstrapPrincipals.size > 0
+  ) {
+    try {
+      const seeded = await ensureBootstrapSupport(
+        options.roleStore,
+        options.bootstrapMarkers,
+        authenticated.link.subject,
+        options.bootstrapPrincipals,
+      );
+      if (seeded === 'granted') {
+        options.logger.log('warn', 'support.bootstrap_support_seeded', {
+          principalId: authenticated.link.subject,
+        });
+      }
+    } catch (error) {
+      options.logger.log('warn', 'support.bootstrap_support_failed', {
+        error: error instanceof Error ? error.name : 'unknown',
+      });
+    }
+  }
   return authenticated;
 }
 
@@ -648,10 +695,30 @@ function parseStaffQueueQuery(url: URL): StaffQueueQuery {
   return query;
 }
 
-function requireStaffAccess(
+async function requireStaffAccess(
   authenticated: Authenticated,
   allowlist: StaffAllowlist,
+  options: SupportApiOptions,
 ) {
+  // The Support ROLE is the real gate (docs/ROLE_ADOPTION_PLAN.md Phase 2);
+  // the env allowlist stays honored as the legacy path until Phase 4
+  // deletes it whole. A role-store failure falls through to the allowlist
+  // rather than 503ing — the legacy path is authoritative until deleted.
+  if (options.roleStore !== undefined) {
+    try {
+      const roleAccess = await staffAccessContextFromRoles(
+        authenticated.link.subject,
+        options.roleStore,
+      );
+      if (roleAccess !== null) {
+        return roleAccess;
+      }
+    } catch (error) {
+      options.logger.log('warn', 'support.staff_role_check_failed', {
+        error: error instanceof Error ? error.name : 'unknown',
+      });
+    }
+  }
   const access = staffAccessContext(
     authenticated.link.subject,
     allowlist,
@@ -725,7 +792,7 @@ export function createSupportApi(
 
       if (request.method === 'GET' && path === '/api/support/admin/queue') {
         const authenticated = await requireAuthentication(request, options);
-        const access = requireStaffAccess(authenticated, staffAllowlist);
+        const access = await requireStaffAccess(authenticated, staffAllowlist, options);
         const queueQuery = parseStaffQueueQuery(url);
         const result = await options.application.listStaffQueue(
           access,
@@ -745,7 +812,7 @@ export function createSupportApi(
       ) {
         const ticketId = adminMatch[1]!;
         const authenticated = await requireAuthentication(request, options);
-        const access = requireStaffAccess(authenticated, staffAllowlist);
+        const access = await requireStaffAccess(authenticated, staffAllowlist, options);
         const view = await options.application.readStaffTicket(
           access,
           ticketId,
@@ -765,7 +832,7 @@ export function createSupportApi(
         const ticketId = adminMatch[1]!;
         const authenticated = await requireAuthentication(request, options);
         await requireCsrf(request, authenticated);
-        const access = requireStaffAccess(authenticated, staffAllowlist);
+        const access = await requireStaffAccess(authenticated, staffAllowlist, options);
 
         const body = optionalKeysObject(
           await readJson(request),
@@ -857,7 +924,7 @@ export function createSupportApi(
         await requireCsrf(request, authenticated);
         // Authorize before debiting the shared customer/staff reply limiter so
         // non-staff sessions fail closed without mutating quota state.
-        const access = requireStaffAccess(authenticated, staffAllowlist);
+        const access = await requireStaffAccess(authenticated, staffAllowlist, options);
         await enforceRateLimit(
           options.replyLimiter,
           authenticated.link.subject,
@@ -893,7 +960,7 @@ export function createSupportApi(
         const authenticated = await requireAuthentication(request, options);
         await requireCsrf(request, authenticated);
         // Same order as messages: staff check before shared limiter debit.
-        const access = requireStaffAccess(authenticated, staffAllowlist);
+        const access = await requireStaffAccess(authenticated, staffAllowlist, options);
         await enforceRateLimit(
           options.replyLimiter,
           authenticated.link.subject,
