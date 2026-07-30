@@ -21,9 +21,7 @@ import { validatePolicy } from '@pegma/authorization-policy';
 import {
   APPLICATION_SCOPE,
   customerAccessContext,
-  parseStaffAllowlist,
   PEGMA_ACCESS_POLICY,
-  staffAccessContext,
   staffAccessContextFromRoles,
   SUPPORT_ROLE,
   SUPPORT_STAFF_PERMISSIONS,
@@ -153,9 +151,9 @@ function patch(
 }
 
 function fixture(options: {
-  readonly staffPrincipals?: readonly PrincipalId[];
-  readonly staffEmails?: readonly string[];
   readonly bootstrapPrincipals?: readonly PrincipalId[];
+  /** Wire the API without any role store (fail-closed 503 posture). */
+  readonly omitRoleStore?: boolean;
   /** Override the role store the API sees (e.g. a failing one). */
   readonly roleStoreOverride?: Parameters<typeof createSupportApi>[0]['roleStore'];
 } = {}) {
@@ -175,10 +173,6 @@ function fixture(options: {
     logger,
     clock,
   });
-  const staffAllowlist = parseStaffAllowlist({
-    SUPPORT_STAFF_PRINCIPALS: (options.staffPrincipals ?? []).join(','),
-    SUPPORT_STAFF_EMAILS: (options.staffEmails ?? []).join(','),
-  });
   const api = createSupportApi({
     application: runtime.application,
     sessions,
@@ -187,10 +181,11 @@ function fixture(options: {
     createLimiter: runtime.createLimiter,
     replyLimiter: runtime.replyLimiter,
     logger,
-    roleStore: options.roleStoreOverride ?? runtime.roleStore,
+    roleStore: options.omitRoleStore
+      ? undefined
+      : (options.roleStoreOverride ?? runtime.roleStore),
     bootstrapMarkers: runtime.bootstrapMarkers,
     bootstrapPrincipals: new Set(options.bootstrapPrincipals ?? []),
-    staffAllowlist,
   });
   return {
     store,
@@ -201,6 +196,27 @@ function fixture(options: {
     api,
     application: runtime.application,
   };
+}
+
+/** Grant the stored Support role the way an operator surface would. */
+async function grantSupport(
+  roleStore: ReturnType<typeof createSupportRuntime>['roleStore'],
+  principalId: PrincipalId,
+  id = `assign-${principalId}`,
+) {
+  const granted = await roleStore.grantRoleAssignmentWithAudit({
+    assignment: {
+      id,
+      principalId,
+      role: SUPPORT_ROLE,
+      scope: APPLICATION_SCOPE,
+      grantedBy: { kind: 'principal', principalId: 'principal-admin' },
+      grantedAtEpochMs: Date.parse('2026-07-30T00:00:00.000Z'),
+      status: 'active',
+    },
+    auditEventId: `evt-${id}`,
+  });
+  expect(granted.status).toBe('granted');
 }
 
 async function createCustomerTicket(
@@ -538,55 +554,9 @@ describe('application ownership boundary', () => {
   });
 });
 
-describe('staff allowlist and access', () => {
-  it('parses env allowlists case-insensitively for emails', () => {
-    const allowlist = parseStaffAllowlist({
-      SUPPORT_STAFF_EMAILS: ' Ops@Example.TEST , other@example.test ',
-      SUPPORT_STAFF_PRINCIPALS: ' principal-staff , principal-x ',
-    });
-    expect(allowlist.emails.has('ops@example.test')).toBe(true);
-    expect(allowlist.emails.has('other@example.test')).toBe(true);
-    expect(allowlist.principals.has('principal-staff')).toBe(true);
-    expect(allowlist.principals.has('principal-x')).toBe(true);
-  });
-
-  it('grants staff permissions only for allowlisted principals or emails', () => {
-    const byPrincipal = parseStaffAllowlist({
-      SUPPORT_STAFF_PRINCIPALS: principalStaff,
-    });
-    const byEmail = parseStaffAllowlist({
-      SUPPORT_STAFF_EMAILS: 'staff@example.test',
-    });
-    const empty = parseStaffAllowlist({});
-
-    const staffByPrincipal = staffAccessContext(
-      principalStaff,
-      byPrincipal,
-      'staff@example.test',
-    );
-    expect(staffByPrincipal).not.toBeNull();
-    expect(staffByPrincipal?.policyVersion).toBe(PEGMA_ACCESS_POLICY.version);
-    expect(staffByPrincipal?.permissions).toEqual(
-      expect.arrayContaining([...SUPPORT_STAFF_PERMISSIONS]),
-    );
-
-    const staffByEmail = staffAccessContext(
-      principalA,
-      byEmail,
-      'STAFF@example.test',
-    );
-    expect(staffByEmail).not.toBeNull();
-
-    expect(staffAccessContext(principalA, empty, 'a@example.test')).toBeNull();
-    expect(
-      staffAccessContext(principalA, byPrincipal, 'a@example.test'),
-    ).toBeNull();
-  });
-});
-
 describe('staff support API', () => {
   it('returns 401 for unauthenticated staff routes', async () => {
-    const { api } = fixture({ staffPrincipals: [principalStaff] });
+    const { api } = fixture();
     const queue = await api(get('/api/support/admin/queue'));
     expect(queue.status).toBe(401);
     expect(await queue.json()).toEqual({ error: 'authentication_required' });
@@ -596,7 +566,8 @@ describe('staff support API', () => {
   });
 
   it('returns 403 for authenticated non-staff on queue, read, reply, and note', async () => {
-    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');
     const nonStaff = await sessionCookie(sessions, principalB, 'b'.repeat(43));
 
@@ -641,7 +612,8 @@ describe('staff support API', () => {
   });
 
   it('lists the queue for allowlisted staff after customer create', async () => {
-    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');
     const staff = await sessionCookie(
       sessions,
@@ -662,7 +634,8 @@ describe('staff support API', () => {
   });
 
   it('reads staff ticket including messages and requester email', async () => {
-    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');
     const staff = await sessionCookie(
       sessions,
@@ -695,7 +668,8 @@ describe('staff support API', () => {
   });
 
   it('public staff reply is customer-visible and advances status', async () => {
-    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');
     const staff = await sessionCookie(
       sessions,
@@ -745,7 +719,8 @@ describe('staff support API', () => {
   });
 
   it('internal notes are staff-only and never on customer read', async () => {
-    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');
     const staff = await sessionCookie(
       sessions,
@@ -793,7 +768,8 @@ describe('staff support API', () => {
   });
 
   it('keeps public reply and internal note on separate endpoints', async () => {
-    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');
     const staff = await sessionCookie(
       sessions,
@@ -857,7 +833,8 @@ describe('staff support API', () => {
   });
 
   it('supports assign, priority change, and resolve for staff', async () => {
-    const { api, sessions } = fixture({ staffPrincipals: [principalStaff] });
+    const { api, sessions, roleStore } = fixture();
+    await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');
     const staff = await sessionCookie(
       sessions,
@@ -908,42 +885,9 @@ describe('staff support API', () => {
     };
     expect(resolvedBody.ticket.status).toBe('resolved');
   });
-
-  it('allows staff by verified email allowlist', async () => {
-    const { api, sessions } = fixture({
-      staffEmails: ['staff@example.test'],
-    });
-    await createCustomerTicket(api, sessions, principalA, 'a');
-    const staff = await sessionCookie(
-      sessions,
-      principalStaff,
-      's'.repeat(43),
-    );
-    const queue = await api(get('/api/support/admin/queue', staff.cookie));
-    expect(queue.status).toBe(200);
-  });
 });
 
 describe('Support role store adoption (docs/ROLE_ADOPTION_PLAN.md phases 1–3)', () => {
-  async function grantSupport(
-    roleStore: ReturnType<typeof createSupportRuntime>['roleStore'],
-    principalId: PrincipalId,
-    id = `assign-${principalId}`,
-  ) {
-    const granted = await roleStore.grantRoleAssignmentWithAudit({
-      assignment: {
-        id,
-        principalId,
-        role: SUPPORT_ROLE,
-        scope: APPLICATION_SCOPE,
-        grantedBy: { kind: 'principal', principalId: 'principal-admin' },
-        grantedAtEpochMs: Date.parse('2026-07-30T00:00:00.000Z'),
-        status: 'active',
-      },
-      auditEventId: `evt-${id}`,
-    });
-    expect(granted.status).toBe('granted');
-  }
 
   it('the host policy validates as a PolicyDocumentV1 (schema drift fails CI)', () => {
     const serialized = JSON.parse(JSON.stringify(PEGMA_ACCESS_POLICY));
@@ -990,7 +934,21 @@ describe('Support role store adoption (docs/ROLE_ADOPTION_PLAN.md phases 1–3)'
     expect(queue.status).toBe(200);
   });
 
-  it('denies without role or allowlist; a role-store failure falls back to the legacy allowlist', async () => {
+  it('fails CLOSED: no role store is a 503, and a role-store failure is a 503 even for a role holder', async () => {
+    const unconfigured = fixture({ omitRoleStore: true });
+    const nobody = await sessionCookie(
+      unconfigured.sessions,
+      principalA,
+      'n'.repeat(43),
+    );
+    const unconfiguredQueue = await unconfigured.api(
+      get('/api/support/admin/queue', nobody.cookie),
+    );
+    expect(unconfiguredQueue.status).toBe(503);
+    expect(await unconfiguredQueue.json()).toEqual({
+      error: 'support_not_configured',
+    });
+
     const failing = {
       listActiveRoleAssignments: async () => {
         throw new Error('role store down');
@@ -1000,21 +958,22 @@ describe('Support role store adoption (docs/ROLE_ADOPTION_PLAN.md phases 1–3)'
         throw new Error('role store down');
       },
     } as unknown as Parameters<typeof createSupportApi>[0]['roleStore'];
-
-    const denied = fixture({ roleStoreOverride: failing });
-    const nobody = await sessionCookie(denied.sessions, principalA, 'n'.repeat(43));
-    expect(
-      (await denied.api(get('/api/support/admin/queue', nobody.cookie))).status,
-    ).toBe(403);
-
-    const legacy = fixture({
-      roleStoreOverride: failing,
-      staffPrincipals: [principalStaff],
+    const degraded = fixture({ roleStoreOverride: failing });
+    // The durable store holds a real Support grant, but the API reads
+    // through the failing store — outage must never quietly deny or allow.
+    await grantSupport(degraded.roleStore, principalStaff);
+    const staff = await sessionCookie(
+      degraded.sessions,
+      principalStaff,
+      'l'.repeat(43),
+    );
+    const degradedQueue = await degraded.api(
+      get('/api/support/admin/queue', staff.cookie),
+    );
+    expect(degradedQueue.status).toBe(503);
+    expect(await degradedQueue.json()).toEqual({
+      error: 'service_unavailable',
     });
-    const staff = await sessionCookie(legacy.sessions, principalStaff, 'l'.repeat(43));
-    expect(
-      (await legacy.api(get('/api/support/admin/queue', staff.cookie))).status,
-    ).toBe(200);
   });
 
   it('bootstrap seeds a listed principal on an authenticated touch, once, revocation-durable', async () => {

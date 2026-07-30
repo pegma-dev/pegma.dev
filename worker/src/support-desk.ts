@@ -162,16 +162,6 @@ export interface SupportRuntimeEnv {
   /** When `"true"`, health includes a lightweight Support Desk store probe. */
   readonly SUPPORT_HEALTH_PROBE?: string;
   /**
-   * Comma-separated verified emails of Support Desk staff operators
-   * (case-insensitive). Combined with {@link SUPPORT_STAFF_PRINCIPALS}.
-   */
-  readonly SUPPORT_STAFF_EMAILS?: string;
-  /**
-   * Comma-separated Identity principal / subject ids of Support Desk staff
-   * operators. Combined with {@link SUPPORT_STAFF_EMAILS}.
-   */
-  readonly SUPPORT_STAFF_PRINCIPALS?: string;
-  /**
    * One-time Support-role bootstrap principals
    * (docs/ROLE_ADOPTION_PLAN.md Phase 3). Delete after the first operator
    * holds the role — it seeds state, it is never an authorization path.

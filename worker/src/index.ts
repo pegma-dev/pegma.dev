@@ -25,7 +25,6 @@ import {
 import { handleGetReleases, readReleasesConfig } from './releases-api';
 import { parseBootstrapPrincipals } from './role-bootstrap';
 import { createSupportApi } from './support-api';
-import { parseStaffAllowlist } from './support-access';
 import {
   createProductionSupportRuntime,
   probeSupportStore,
@@ -59,12 +58,10 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     createLimiter: supportRuntime.createLimiter,
     replyLimiter: supportRuntime.replyLimiter,
     logger,
-    // The Support ROLE is the real staff gate; the allowlist is the legacy
-    // path until Phase 4 of docs/ROLE_ADOPTION_PLAN.md deletes it.
+    // The stored Support ROLE is the only staff gate (fail closed).
     roleStore: supportRuntime.roleStore,
     bootstrapMarkers: supportRuntime.bootstrapMarkers,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
-    staffAllowlist: parseStaffAllowlist(env),
   });
   return { supportRuntime, api };
 }
