@@ -78,11 +78,11 @@ The lockout-safe order proven on retiregolden.org, transplanted:
 
 ## Phase 4 — retire the allowlist
 
-- [ ] Delete the allowlist path whole (`SUPPORT_STAFF_EMAILS` /
+- [x] Delete the allowlist path whole (`SUPPORT_STAFF_EMAILS` /
       `SUPPORT_STAFF_PRINCIPALS` parsing and the legacy staff context) — it
       must not survive as a quiet second gate. After this, a role-store
       failure is a controlled **503, fail closed, no fallback**.
-- [ ] Delete the env vars from the Worker configuration and update
+- [x] Delete the env vars from the Worker configuration and update
       `SUPPORT_COMPOSITION.md`'s staff section to role-only.
 
 ## Phase 5 — the shared admin surface (GATED)

@@ -80,11 +80,12 @@ nothing was granted because `Support` was already held through another
 assignment — so a later revocation stays revoked while the env var lingers.
 Delete the var once the first operator holds the role.
 
-**Legacy allowlist (Phase 4 deletes it).** `SUPPORT_STAFF_EMAILS` /
-`SUPPORT_STAFF_PRINCIPALS` are still honored beside the role path during the
-lockout-safe retirement order; if the role store errors, the gate logs and
-falls through to the allowlist. Parsing and the legacy resolver are deleted
-whole in Phase 4 once the live bootstrap seed is confirmed.
+**Fail-closed posture.** The role store is the only gate: a host wired
+without one answers staff routes with **503** `support_not_configured`, and a
+role-store failure is **503** `service_unavailable` — never a quiet allow or
+a misleading 403. The former `SUPPORT_STAFF_EMAILS` /
+`SUPPORT_STAFF_PRINCIPALS` allowlist was deleted whole in Phase 4 of
+`docs/ROLE_ADOPTION_PLAN.md`.
 
 `principalId` is always the Identity principal / account id from the
 server-side session (`__Host-pegma_session`). Browser-supplied identity fields
@@ -153,7 +154,7 @@ Durable rate-limit policies (separate from Identity):
 | --- | --- |
 | `/feedback` | Customer create + list |
 | `/feedback/ticket/?id=…` | Customer read + reply |
-| `/staff/support` | Staff queue (allowlisted operators) |
+| `/staff/support` | Staff queue (Support role holders) |
 | `/staff/support/ticket/?id=…` | Staff ticket detail, compose, lifecycle |
 
 ## Maintenance and health
@@ -172,8 +173,8 @@ store probe runs only when `SUPPORT_HEALTH_PROBE` is exactly `"true"`.
   authorized operators.
 - Feedback is not automatically published to the roadmap, documentation, or
   GitHub Issues.
-- The staff surface is only for allowlisted operators (env allowlist). It is
-  not a shared control plane with other hosts.
+- The staff surface is only for operators holding the stored Support role.
+  It is not a shared control plane with other hosts.
 - Staff ticket views may include requester email after staff authz; customer
   endpoints never gain staff fields.
 - Internal notes must never appear on customer reads.
