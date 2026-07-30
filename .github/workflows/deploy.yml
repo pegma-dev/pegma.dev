@@ -42,13 +42,17 @@ jobs:
             sha256sum --check --strict
       # Worker before Pages: the site is a client of the worker's API, so a
       # freshly deployed site must never race ahead of the API it calls.
-      # Secrets persist across deploys; plain vars come from wrangler.jsonc
-      # (a dashboard-added var would be replaced here — use secrets).
+      # CLOUDFLARE_WORKER_API_TOKEN is a SEPARATE least-privileged credential
+      # (Workers Scripts:Edit + pegma.dev zone Workers Routes:Edit) — the
+      # Pages token deliberately carries no Worker authority, per the
+      # credential contract in docs/PROJECT_PLAN.md. Non-secret worker config
+      # lives in wrangler.jsonc `vars` (a deploy replaces plain vars, so
+      # dashboard-added vars do not survive); operator secrets persist.
       - name: Deploy Worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy -c worker/wrangler.jsonc
+        run: npm run worker:deploy
       - name: Deploy to Cloudflare Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
