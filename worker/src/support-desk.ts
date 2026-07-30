@@ -11,7 +11,7 @@ import {
 } from '@pegma/spine';
 import { createRoleStore } from '@pegma/authorization-storage';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
-import type { CollectionStore, Store } from '@pegma/storage-core';
+import type { Store } from '@pegma/storage-core';
 import {
   createSupportDeskApplication,
   defaultQueueTerminalRetentionMilliseconds,
@@ -26,10 +26,6 @@ import {
 import { defineTemplate } from '@pegma/support-desk-templates';
 import type { IdentityLinkProjector, IdentityPort } from './identity-contracts';
 import { AUTHORIZATION_APPLICATION_ID } from './support-access';
-import {
-  bootstrapMarkerCollection,
-  type BootstrapMarker,
-} from './role-bootstrap';
 import type { SessionStore } from '@pegma/sessions';
 
 /** The audited role store surface createRoleStore returns. */
@@ -185,8 +181,6 @@ export interface SupportRuntime {
   /** Audited role store bound to this host's application partition
    * (docs/ROLE_ADOPTION_PLAN.md Phase 1). */
   readonly roleStore: RoleStore;
-  /** Durable one-time bootstrap-seed markers (role-bootstrap.ts). */
-  readonly bootstrapMarkers: CollectionStore<BootstrapMarker>;
   readonly application: SupportDeskApplication;
   readonly clock: Clock;
   readonly createLimiter: DurableRateLimiter;
@@ -254,12 +248,10 @@ export function createSupportRuntime(
   // Audited role store on the SAME Store, partitioned by this host's
   // application id (docs/ROLE_ADOPTION_PLAN.md Phase 1).
   const roleStore = createRoleStore(store, AUTHORIZATION_APPLICATION_ID);
-  const bootstrapMarkers = store.collection(bootstrapMarkerCollection());
 
   return Object.freeze({
     store,
     roleStore,
-    bootstrapMarkers,
     application,
     clock,
     createLimiter,

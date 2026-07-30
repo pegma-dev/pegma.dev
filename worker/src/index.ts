@@ -60,7 +60,6 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     logger,
     // The stored Support ROLE is the only staff gate (fail closed).
     roleStore: supportRuntime.roleStore,
-    bootstrapMarkers: supportRuntime.bootstrapMarkers,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
   });
   return { supportRuntime, api };

@@ -13,9 +13,9 @@ Exact published versions:
 - `@pegma/support-desk-contracts@0.1.0`
 - `@pegma/support-desk-core@0.1.0`
 - `@pegma/support-desk-templates@0.1.0`
-- `@pegma/authorization-core@0.2.0` (AccessContext resolution)
-- `@pegma/authorization-policy@0.2.0` (PolicyDocumentV1 schema validation)
-- `@pegma/authorization-storage@0.2.0` (D1-backed role store)
+- `@pegma/authorization-core@0.3.0` (AccessContext resolution)
+- `@pegma/authorization-policy@0.3.0` (PolicyDocumentV1 schema validation)
+- `@pegma/authorization-storage@0.3.0` (D1-backed role store)
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
 `@pegma/storage-cloudflare-d1@0.4.0`, `@pegma/sessions@0.1.0`,
@@ -33,7 +33,6 @@ collection name, not by sharing Identity mail cursors or session rows:
 | Ticket numbers | `support-desk.ticket-numbers.v1` |
 | Queue projection | `support-desk.queue-index.v1` |
 | Host maintenance cursors | `pegma-dev-support-maintenance` |
-| Bootstrap-seed markers | `support-bootstrap.markers.v1` |
 
 Identity keeps its own collections and `pegma-dev-maintenance` cursors. The
 two never share a cursor key.
@@ -74,10 +73,12 @@ The `Support` role maps to:
 (comma-separated Identity principal ids) seeds a real audited `Support`
 assignment (actor `system:bootstrap`, deterministic assignment id
 `bootstrap-support-<principalId>`) on a listed principal's next authenticated
-support request. Each principal is seeded at most once, ever: the handled
-seed is recorded in the `support-bootstrap.markers.v1` collection — even when
-nothing was granted because `Support` was already held through another
-assignment — so a later revocation stays revoked while the env var lingers.
+support request. Each principal is seeded at most once, ever: ANY `Support`
+assignment record — active or revoked, whatever its provenance — counts as
+already seeded, read first-class via `listRoleAssignments`
+(authorization-storage 0.3.0; this check previously needed the host
+`support-bootstrap.markers.v1` marker collection, deleted with the upgrade).
+A deliberate revocation therefore stays revoked while the env var lingers.
 Delete the var once the first operator holds the role.
 
 **Fail-closed posture.** The role store is the only gate: a host wired

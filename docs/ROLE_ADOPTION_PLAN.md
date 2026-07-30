@@ -90,14 +90,15 @@ The lockout-safe order proven on retiregolden.org, transplanted:
 Both hosts now want the same role-management surface (lookup → grants view →
 audited assign/revoke → history). Per the ecosystem's
 extract-on-second-consumer rule this is the extraction trigger — but it is
-**gated on upstream first**:
+**gated on upstream first** — a gate now largely cleared:
 [authorization-core#23](https://github.com/pegma-dev/authorization-core/issues/23)
-(identity-link writes) and
+(identity-link writes) shipped and
 [authorization-core#24](https://github.com/pegma-dev/authorization-core/issues/24)
-(per-principal/by-role assignment enumeration) decide how much of
-retiregolden.org's host-side index the shared component would otherwise have
-to carry. Extracting before those decisions would bake a workaround into a
-public package right as the library makes it unnecessary.
+delivered per-principal lifecycle enumeration (`listRoleAssignments`) in the
+synchronized 0.3.0 line, both adopted by the hosts 2026-07-30; by-role
+selection deliberately remains the documented host-side
+superset-with-verification recipe, which the shared component will carry as
+its one host-provided port.
 
 When the gate clears, Phase 5 activates in this order — the `Admin` mapping
 and its bootstrap are PART OF this phase, because a surface gated on a role
