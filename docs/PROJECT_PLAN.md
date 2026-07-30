@@ -178,9 +178,12 @@ least-privileged D1 credential. Pull requests run the build gate but never
 receive the production token; branch previews remain disabled until a
 separately scoped preview credential exists.
 
-The Worker is an explicit operator deployment until a second GitHub credential
-has least-privileged Worker script plus `pegma.dev` route authority. The broad
-local OAuth credential is never copied into GitHub.
+The Worker deploys from the same push-to-main workflow, ordered before the
+Pages deploy, using `CLOUDFLARE_WORKER_API_TOKEN` — a second, separately
+least-privileged GitHub credential with Worker script plus `pegma.dev` route
+authority only (the Pages token keeps no Worker authority). The broad local
+OAuth credential is never copied into GitHub; `npm run worker:deploy` from an
+operator session remains available as a break-glass path.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
 
