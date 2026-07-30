@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   bindSignedWebhookBody,
   hashSignedWebhookBody,
-  releaseSignedWebhookBody,
 } from './github-webhook-body-binding';
 
 const FIRST_DELIVERY = '11111111-1111-4111-8111-111111111111';
@@ -79,10 +78,8 @@ describe('bindSignedWebhookBody', () => {
       }),
     ).toEqual({ status: 'bound' });
   });
-});
 
-describe('releaseSignedWebhookBody', () => {
-  it('lets another delivery id claim a released body', async () => {
+  it('keeps the first delivery id, so a claim never transfers', async () => {
     const store = createMemoryStore();
     const bodyHash = await hashSignedWebhookBody(bytes('{"action":"edited"}'));
     await bindSignedWebhookBody(store, {
@@ -91,24 +88,24 @@ describe('releaseSignedWebhookBody', () => {
       firstSeenAt: AT,
     });
 
-    await releaseSignedWebhookBody(store, bodyHash);
+    // Repeated replay attempts keep naming the original owner rather than
+    // rewriting the record to the most recent caller.
+    for (const attempt of [1, 2, 3]) {
+      expect(
+        await bindSignedWebhookBody(store, {
+          bodyHash,
+          deliveryId: SECOND_DELIVERY,
+          firstSeenAt: `2026-07-28T2${attempt}:00:00.000Z`,
+        }),
+      ).toEqual({ status: 'replayed', boundDeliveryId: FIRST_DELIVERY });
+    }
 
     expect(
       await bindSignedWebhookBody(store, {
         bodyHash,
-        deliveryId: SECOND_DELIVERY,
+        deliveryId: FIRST_DELIVERY,
         firstSeenAt: AT,
       }),
     ).toEqual({ status: 'bound' });
-  });
-
-  it('is a no-op for a body that was never bound', async () => {
-    const store = createMemoryStore();
-    await expect(
-      releaseSignedWebhookBody(
-        store,
-        await hashSignedWebhookBody(bytes('unseen')),
-      ),
-    ).resolves.toBeUndefined();
   });
 });

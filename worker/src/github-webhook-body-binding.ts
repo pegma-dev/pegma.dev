@@ -75,6 +75,13 @@ export async function hashSignedWebhookBody(
  * and slip past dedup. Binding the signed bytes to the first delivery id that
  * carried them moves dedup onto data the signature actually covers. The claim
  * is an `insertIfAbsent`, so concurrent deliveries cannot both win it.
+ *
+ * A claim is permanent, including after a failed attempt: GitHub keeps one
+ * delivery id per event across redeliveries, so a retry re-binds and proceeds,
+ * while expiring a claim would be granting permission to replay that body
+ * later. Growth is one small row per distinct signed body — bounded by the
+ * release cadence of the allowlisted repositories, the same rate at which the
+ * `@pegma/webhooks` receipt beside it accrues.
  */
 export async function bindSignedWebhookBody(
   store: Store,
@@ -87,20 +94,4 @@ export async function bindSignedWebhookBody(
     return { status: 'bound' };
   }
   return { status: 'replayed', boundDeliveryId: result.value.deliveryId };
-}
-
-/**
- * Drop a claim so a delivery that failed stays retryable.
- *
- * The binding exists to stop a replay of an already-applied body, not to make
- * one failed attempt final: GitHub does not auto-retry, so an operator
- * redelivery must still be able to run.
- */
-export async function releaseSignedWebhookBody(
-  store: Store,
-  bodyHash: string,
-): Promise<void> {
-  await store
-    .collection(webhookBodyBindingCollection())
-    .delete(webhookBodyBindingKey(bodyHash));
 }

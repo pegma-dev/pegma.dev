@@ -304,7 +304,7 @@ describe('handleGitHubReleaseWebhook', () => {
     });
   });
 
-  it('releases the body claim when processing fails so redelivery works', async () => {
+  it('keeps the body claim through a failed attempt and still allows redelivery', async () => {
     const store = createMemoryStore();
     const releases = store.collection(componentReleaseCollection());
     const payload = releasePayload();
@@ -328,7 +328,9 @@ describe('handleGitHubReleaseWebhook', () => {
     expect(failed.status).toBe(500);
     expect(await releases.get(componentReleaseKey(REPO_ID))).toBeNull();
 
-    const retried = await handleGitHubReleaseWebhook({
+    // A failed attempt is not a licence to replay: another delivery id still
+    // cannot claim those bytes.
+    const replay = await handleGitHubReleaseWebhook({
       request: await signedRequest(payload, {
         'X-GitHub-Delivery': OTHER_DELIVERY,
       }),
@@ -337,7 +339,18 @@ describe('handleGitHubReleaseWebhook', () => {
       config,
       now: NOW,
     });
-    expect(retried.status).toBe(204);
+    expect(replay.status).toBe(409);
+    expect(await releases.get(componentReleaseKey(REPO_ID))).toBeNull();
+
+    // GitHub keeps one delivery id per event, so the redelivery still runs.
+    const redelivery = await handleGitHubReleaseWebhook({
+      request: await signedRequest(payload),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(redelivery.status).toBe(204);
     expect(await releases.get(componentReleaseKey(REPO_ID))).toMatchObject({
       tagName: 'v0.1.0',
     });

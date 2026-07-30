@@ -251,9 +251,10 @@ fail-closed on any unexpected migration change (see CI).
   SHA-256 of the signed body to the first delivery id that carried it via
   `insertIfAbsent`, and `handleGitHubReleaseWebhook` refuses the same bytes
   under a different delivery id with `409 duplicate_body` before the ledger or
-  any projection runs. A failed delivery releases its binding so operator
-  redelivery still works, and the claim is race-free rather than a
-  read-then-write check. Covered by
+  any projection runs. The claim is race-free rather than a read-then-write
+  check, and it is permanent: GitHub keeps one delivery id per event across
+  redeliveries, so a retry re-binds and runs while a different id stays
+  refused. Covered by
   `worker/src/github-webhook-body-binding.test.ts` plus replay and
   failed-delivery cases in `worker/src/github-release-webhook.test.ts`;
   documented in `worker/README.md`.

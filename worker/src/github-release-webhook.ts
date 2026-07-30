@@ -5,7 +5,6 @@ import type { Logger } from '@pegma/spine';
 import {
   bindSignedWebhookBody,
   hashSignedWebhookBody,
-  releaseSignedWebhookBody,
 } from './github-webhook-body-binding';
 import { verifyGitHubWebhookSignature } from './github-webhook-signature';
 import {
@@ -406,17 +405,10 @@ export async function handleGitHubReleaseWebhook(
           markFailedError instanceof Error ? markFailedError.name : 'unknown',
       });
     }
-    // This delivery is still retryable, so it must not keep the body claim:
-    // an operator redelivery has to be able to run. Release failure only costs
-    // replay detection for one body, so it stays a logged non-event.
-    try {
-      await releaseSignedWebhookBody(store, bodyHash);
-    } catch (releaseError) {
-      logger.log('error', 'github_release_webhook.body_release_failed', {
-        deliveryId,
-        error: releaseError instanceof Error ? releaseError.name : 'unknown',
-      });
-    }
+    // The body binding deliberately survives a failed attempt. GitHub keeps
+    // one delivery id per event across redeliveries, so the retry still binds;
+    // dropping the claim here would only let a different delivery id take it,
+    // which is the replay the binding exists to refuse.
     return jsonResponse(500, { error: 'processing_failed' });
   }
 }
