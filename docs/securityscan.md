@@ -158,6 +158,14 @@ fail-closed on any unexpected migration change (see CI).
   includeSubDomains; preload` to the `/*` block in `public/_headers`, and
   enable HSTS zone-wide in the Cloudflare dashboard (SSL/TLS → Edge
   Certificates) so it also covers API responses from the Worker.
+- **Disposition:** ✅ Resolved 2026-07-29 — added the recommended
+  `Strict-Transport-Security` header to the `/*` block in `public/_headers`,
+  with `src/security-headers.test.ts` asserting the whole static header set so
+  a regression fails CI. `includeSubDomains` is safe today: `www.pegma.dev`
+  already serves HTTPS and 301s to the apex. Two operator actions remain
+  outside this repository: enabling HSTS zone-wide so Worker `/api/*`
+  responses carry it, and submitting the apex to hstspreload.org (the
+  `preload` token alone does nothing until then).
 
 ### [LOW] `Access-Control-Allow-Origin: *` on static HTML responses
 
@@ -172,6 +180,16 @@ fail-closed on any unexpected migration change (see CI).
 - **Fix:** optional; if desired, strip the header for HTML responses via a
   Pages `_headers` override or serve static assets through the Worker and
   control headers explicitly.
+- **Disposition:** ⚠️ Disputed 2026-07-29 — not a valid finding: the header
+  grants cross-origin script read access to bytes that are already served to
+  anonymous clients and published from a public repository, so it discloses
+  nothing. Nothing on the Pages origin is credentialed, and without
+  `Access-Control-Allow-Credentials: true` a browser will not attach the
+  `__Host-` session cookie to a cross-origin read regardless of ACAO. The
+  credentialed surface is `/api/*` on the Worker, which returns no ACAO
+  (asserted in `releases-api.test.ts:177`). The finding's own exploitability
+  note and "optional" fix agree there is no impact; changing the header would
+  add a Pages override with no security effect.
 
 ### [LOW] Public health endpoint discloses versions and ops timing
 
@@ -191,6 +209,25 @@ fail-closed on any unexpected migration change (see CI).
   behind the staff allowlist, or strip versions/timestamps from the public
   body. If public detail is deliberate for the reference environment,
   document that in the endpoint contract.
+- **Disposition:** ⚠️ Disputed 2026-07-29 — not a valid finding: nothing in
+  the body is confidential in this repository. The version strings are
+  hardcoded literals in `worker/src/index.ts` in a **public** repo whose
+  `package.json` pins the same versions (`@pegma/identity` 0.1.0,
+  `@pegma/authorization-identity` 0.1.2, `@pegma/sessions` 0.1.0), so the
+  endpoint reveals nothing an attacker cannot read from the source — and,
+  being literals, it is not even evidence of what is deployed. The site
+  publishes those versions on purpose: `GET /api/releases` and the Stack page
+  are a deliberate public feed of every `@pegma/*` release. The ops timing is
+  likewise already public — `/api/releases` returns the same reconciliation
+  instant as `observedAt` (both `2026-07-30T00:00:05.178Z` when probed), and
+  the 1-minute/6-hour cron cadence is in the public `worker/wrangler.jsonc`.
+  `datadog` and `emailDelivery` are configuration booleans with no secret
+  values, and `@pegma/health` defines check detail as "booleans and names,
+  never secrets". The finding's own alternative remedy — document the public
+  contract — is already met in `worker/README.md`, which specifies the
+  `githubReleases` detail fields and the "no secrets, delivery IDs, or
+  payloads" rule. Gating this endpoint behind sessions would also add D1 reads
+  to a liveness probe, making it fail for exactly the monitors it exists for.
 
 ### [LOW] Webhook replay: delivery ID unsigned, no body-hash binding
 
@@ -209,6 +246,17 @@ fail-closed on any unexpected migration change (see CI).
   reject bodies seen under a different delivery ID. (GitHub signs no
   timestamp, so a true freshness window is unavailable; reconciliation
   already bounds worst-case drift.)
+- **Disposition:** ✅ Resolved 2026-07-29 — dedup now keys on data the
+  signature covers: `worker/src/github-webhook-body-binding.ts` binds the
+  SHA-256 of the signed body to the first delivery id that carried it via
+  `insertIfAbsent`, and `handleGitHubReleaseWebhook` refuses the same bytes
+  under a different delivery id with `409 duplicate_body` before the ledger or
+  any projection runs. A failed delivery releases its binding so operator
+  redelivery still works, and the claim is race-free rather than a
+  read-then-write check. Covered by
+  `worker/src/github-webhook-body-binding.test.ts` plus replay and
+  failed-delivery cases in `worker/src/github-release-webhook.test.ts`;
+  documented in `worker/README.md`.
 
 ## Phase 3 — Summary
 
@@ -218,6 +266,15 @@ fail-closed on any unexpected migration change (see CI).
 | High | 0 |
 | Medium | 0 |
 | Low | 4 |
+
+Dispositions recorded 2026-07-29, one per finding above:
+
+| Finding | Disposition |
+| --- | --- |
+| Missing HSTS | ✅ Resolved — header added to `public/_headers` |
+| ACAO `*` on static HTML | ⚠️ Disputed — public bytes, no credentialed origin |
+| Health endpoint detail | ⚠️ Disputed — same facts already public by design |
+| Webhook replay binding | ✅ Resolved — signed body bound to its delivery id |
 
 | Layer | Status |
 | --- | --- |
