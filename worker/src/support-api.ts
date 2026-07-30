@@ -696,7 +696,7 @@ async function requireStaffAccess(
   if (options.roleStore === undefined) {
     throw new ApiError(503, 'support_not_configured');
   }
-  let roleAccess;
+  let roleAccess: Awaited<ReturnType<typeof staffAccessContextFromRoles>>;
   try {
     roleAccess = await staffAccessContextFromRoles(
       authenticated.link.subject,

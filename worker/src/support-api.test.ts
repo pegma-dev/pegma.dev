@@ -611,7 +611,7 @@ describe('staff support API', () => {
     expect(await note.json()).toEqual({ error: 'forbidden' });
   });
 
-  it('lists the queue for allowlisted staff after customer create', async () => {
+  it('lists the queue for Support role holders after customer create', async () => {
     const { api, sessions, roleStore } = fixture();
     await grantSupport(roleStore, principalStaff);
     const customer = await createCustomerTicket(api, sessions, principalA, 'a');

@@ -154,7 +154,7 @@ Durable rate-limit policies (separate from Identity):
 | --- | --- |
 | `/feedback` | Customer create + list |
 | `/feedback/ticket/?id=…` | Customer read + reply |
-| `/staff/support` | Staff queue (allowlisted operators) |
+| `/staff/support` | Staff queue (Support role holders) |
 | `/staff/support/ticket/?id=…` | Staff ticket detail, compose, lifecycle |
 
 ## Maintenance and health
@@ -173,8 +173,8 @@ store probe runs only when `SUPPORT_HEALTH_PROBE` is exactly `"true"`.
   authorized operators.
 - Feedback is not automatically published to the roadmap, documentation, or
   GitHub Issues.
-- The staff surface is only for allowlisted operators (env allowlist). It is
-  not a shared control plane with other hosts.
+- The staff surface is only for operators holding the stored Support role.
+  It is not a shared control plane with other hosts.
 - Staff ticket views may include requester email after staff authz; customer
   endpoints never gain staff fields.
 - Internal notes must never appear on customer reads.
