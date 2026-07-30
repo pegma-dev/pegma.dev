@@ -173,7 +173,7 @@ export default {
             storage: 'cloudflare-d1',
             sessions: '@pegma/sessions@0.2.0',
             runtime: '@pegma/identity@0.1.2',
-            authorizationAdapter: '@pegma/authorization-identity@0.2.0',
+            authorizationAdapter: '@pegma/authorization-identity@0.3.0',
             emailDelivery:
               String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
               Boolean(env.RESEND_API_KEY),
