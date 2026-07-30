@@ -27,9 +27,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      # Keep production Pages deploys on the Node suite. The Workers/D1 pool
+      # Keep production deploys on the Node suite. The Workers/D1 pool
       # suite stays in CI via `npm test` so workerd/pool flakes cannot block
-      # an otherwise unrelated site deploy.
+      # an otherwise unrelated deploy.
       - run: npm run test:node
       - run: npm run build
       # Migration 0001 is already applied remotely. Keep deployment fail-closed
@@ -40,6 +40,15 @@ jobs:
           test "$(find worker/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)" -eq 1
           echo "3f820cb7c1f8e76196e83f8bc8448dd9e72e840884fc39641c84e6b9d60ff27f  worker/migrations/0001_pegma_storage.sql" |
             sha256sum --check --strict
+      # Worker before Pages: the site is a client of the worker's API, so a
+      # freshly deployed site must never race ahead of the API it calls.
+      # Secrets persist across deploys; plain vars come from wrangler.jsonc
+      # (a dashboard-added var would be replaced here — use secrets).
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy -c worker/wrangler.jsonc
       - name: Deploy to Cloudflare Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
