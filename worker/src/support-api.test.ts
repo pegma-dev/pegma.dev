@@ -188,6 +188,7 @@ function fixture(options: {
     replyLimiter: runtime.replyLimiter,
     logger,
     roleStore: options.roleStoreOverride ?? runtime.roleStore,
+    bootstrapMarkers: runtime.bootstrapMarkers,
     bootstrapPrincipals: new Set(options.bootstrapPrincipals ?? []),
     staffAllowlist,
   });
@@ -196,6 +197,7 @@ function fixture(options: {
     sessions,
     runtime,
     roleStore: runtime.roleStore,
+    bootstrapMarkers: runtime.bootstrapMarkers,
     api,
     application: runtime.application,
   };
@@ -1016,7 +1018,7 @@ describe('Support role store adoption (docs/ROLE_ADOPTION_PLAN.md phases 1–3)'
   });
 
   it('bootstrap seeds a listed principal on an authenticated touch, once, revocation-durable', async () => {
-    const { api, sessions, roleStore } = fixture({
+    const { api, sessions, roleStore, bootstrapMarkers } = fixture({
       bootstrapPrincipals: [principalStaff],
     });
     const staff = await sessionCookie(sessions, principalStaff, 'b'.repeat(43));
@@ -1055,10 +1057,60 @@ describe('Support role store adoption (docs/ROLE_ADOPTION_PLAN.md phases 1–3)'
     expect(
       await ensureBootstrapSupport(
         roleStore,
+        bootstrapMarkers,
         principalStaff,
         new Set([principalStaff]),
       ),
     ).toBe('already');
+    expect(
+      (await api(get('/api/support/admin/queue', staff.cookie))).status,
+    ).toBe(403);
+  });
+
+  it('marks a listed principal already holding Support elsewhere, so revoking that grant cannot be undone by a reseed', async () => {
+    const { api, sessions, roleStore, bootstrapMarkers } = fixture({
+      bootstrapPrincipals: [principalStaff],
+    });
+    // Support held via a NON-bootstrap assignment before the first touch.
+    await grantSupport(roleStore, principalStaff);
+    const other = await roleStore.getRoleAssignment(`assign-${principalStaff}`);
+    const staff = await sessionCookie(sessions, principalStaff, 'm'.repeat(43));
+
+    // The touch grants nothing (the store refuses a second active
+    // assignment per tuple) but still records the handled seed — the host
+    // marker is the ONLY "already seeded" signal; role state is not one.
+    expect(
+      (await api(get('/api/support/categories', staff.cookie))).status,
+    ).toBe(200);
+    expect(
+      await roleStore.getRoleAssignment(
+        bootstrapSupportAssignmentId(principalStaff),
+      ),
+    ).toBeNull();
+    expect(
+      await bootstrapMarkers.get({
+        partition: 'support-bootstrap',
+        id: principalStaff,
+      }),
+    ).toMatchObject({ principalId: principalStaff, outcome: 'held_elsewhere' });
+
+    // Revoke the held assignment; the next touch must not re-grant.
+    const revoked = await roleStore.revokeRoleAssignmentWithAudit({
+      assignmentId: other!.assignment.id,
+      expectedConcurrencyToken: other!.concurrencyToken,
+      revokedBy: { kind: 'principal', principalId: 'principal-admin' },
+      revokedAtEpochMs: Date.now() + 1_000,
+      auditEventId: `evt-revoke-${other!.assignment.id}`,
+    });
+    expect(revoked.status).toBe('revoked');
+    expect(
+      (await api(get('/api/support/categories', staff.cookie))).status,
+    ).toBe(200);
+    expect(
+      await roleStore.getRoleAssignment(
+        bootstrapSupportAssignmentId(principalStaff),
+      ),
+    ).toBeNull();
     expect(
       (await api(get('/api/support/admin/queue', staff.cookie))).status,
     ).toBe(403);

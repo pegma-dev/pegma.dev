@@ -183,8 +183,13 @@ export function staffAccessContext(
   if (!principalAllowed && !emailAllowed) {
     return null;
   }
-  return resolveAccess(
+  const context = resolveAccess(
     { principalId, roles: [SUPPORT_ROLE] },
     PEGMA_ACCESS_POLICY,
   );
+  // Same permission proof as the role path: allowlisting alone never
+  // outranks what the policy actually grants.
+  return hasPermission(context, supportPermissions.queueRead)
+    ? context
+    : null;
 }

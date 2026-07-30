@@ -62,6 +62,7 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     // The Support ROLE is the real staff gate; the allowlist is the legacy
     // path until Phase 4 of docs/ROLE_ADOPTION_PLAN.md deletes it.
     roleStore: supportRuntime.roleStore,
+    bootstrapMarkers: supportRuntime.bootstrapMarkers,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
     staffAllowlist: parseStaffAllowlist(env),
   });

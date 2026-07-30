@@ -33,6 +33,7 @@ collection name, not by sharing Identity mail cursors or session rows:
 | Ticket numbers | `support-desk.ticket-numbers.v1` |
 | Queue projection | `support-desk.queue-index.v1` |
 | Host maintenance cursors | `pegma-dev-support-maintenance` |
+| Bootstrap-seed markers | `support-bootstrap.markers.v1` |
 
 Identity keeps its own collections and `pegma-dev-maintenance` cursors. The
 two never share a cursor key.
@@ -73,9 +74,11 @@ The `Support` role maps to:
 (comma-separated Identity principal ids) seeds a real audited `Support`
 assignment (actor `system:bootstrap`, deterministic assignment id
 `bootstrap-support-<principalId>`) on a listed principal's next authenticated
-support request. Each principal is seeded at most once, ever — a revoked seed
-stays revoked even while the env var lingers. Delete the var once the first
-operator holds the role.
+support request. Each principal is seeded at most once, ever: the handled
+seed is recorded in the `support-bootstrap.markers.v1` collection — even when
+nothing was granted because `Support` was already held through another
+assignment — so a later revocation stays revoked while the env var lingers.
+Delete the var once the first operator holds the role.
 
 **Legacy allowlist (Phase 4 deletes it).** `SUPPORT_STAFF_EMAILS` /
 `SUPPORT_STAFF_PRINCIPALS` are still honored beside the role path during the
