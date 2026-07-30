@@ -1,5 +1,6 @@
 import { createMemoryStore } from '@pegma/storage-core';
 import type { Logger } from '@pegma/spine';
+import type { WebhookLedger } from '@pegma/webhooks';
 import { describe, expect, it, vi } from 'vitest';
 import {
   componentReleaseCollection,
@@ -16,6 +17,7 @@ const SECRET = "It's a Secret to Everybody";
 const ORG_ID = '309286193';
 const REPO_ID = '1313911960';
 const DELIVERY = '11111111-1111-4111-8111-111111111111';
+const OTHER_DELIVERY = '33333333-3333-4333-8333-333333333333';
 const NOW = '2026-07-28T18:00:00.000Z';
 
 const logger: Logger = { log: vi.fn() };
@@ -256,6 +258,99 @@ describe('handleGitHubReleaseWebhook', () => {
       now: NOW,
     });
     expect(duplicate.status).toBe(204);
+    expect(await releases.get(componentReleaseKey(REPO_ID))).toMatchObject({
+      tagName: 'v0.1.0',
+    });
+  });
+
+  it('rejects a signed body replayed under a fresh delivery id', async () => {
+    const store = createMemoryStore();
+    const releases = store.collection(componentReleaseCollection());
+    const payload = releasePayload();
+
+    const first = await handleGitHubReleaseWebhook({
+      request: await signedRequest(payload),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(first.status).toBe(204);
+
+    const replay = await handleGitHubReleaseWebhook({
+      request: await signedRequest(payload, {
+        'X-GitHub-Delivery': OTHER_DELIVERY,
+      }),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toEqual({ error: 'duplicate_body' });
+
+    // The real delivery may still be redelivered under its own id.
+    const redelivery = await handleGitHubReleaseWebhook({
+      request: await signedRequest(payload),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(redelivery.status).toBe(204);
+    expect(await releases.get(componentReleaseKey(REPO_ID))).toMatchObject({
+      tagName: 'v0.1.0',
+      releaseId: '100',
+    });
+  });
+
+  it('keeps the body claim through a failed attempt and still allows redelivery', async () => {
+    const store = createMemoryStore();
+    const releases = store.collection(componentReleaseCollection());
+    const payload = releasePayload();
+    const brokenLedger: WebhookLedger = {
+      begin: async () => {
+        throw new Error('ledger unavailable');
+      },
+      markProcessed: async () => {},
+      markFailed: async () => ({ attempts: 1, quarantined: false }),
+      purgeExpired: async () => 0,
+    };
+
+    const failed = await handleGitHubReleaseWebhook({
+      request: await signedRequest(payload),
+      store,
+      logger,
+      config,
+      now: NOW,
+      ledger: brokenLedger,
+    });
+    expect(failed.status).toBe(500);
+    expect(await releases.get(componentReleaseKey(REPO_ID))).toBeNull();
+
+    // A failed attempt is not a licence to replay: another delivery id still
+    // cannot claim those bytes.
+    const replay = await handleGitHubReleaseWebhook({
+      request: await signedRequest(payload, {
+        'X-GitHub-Delivery': OTHER_DELIVERY,
+      }),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(replay.status).toBe(409);
+    expect(await releases.get(componentReleaseKey(REPO_ID))).toBeNull();
+
+    // GitHub keeps one delivery id per event, so the redelivery still runs.
+    const redelivery = await handleGitHubReleaseWebhook({
+      request: await signedRequest(payload),
+      store,
+      logger,
+      config,
+      now: NOW,
+    });
+    expect(redelivery.status).toBe(204);
     expect(await releases.get(componentReleaseKey(REPO_ID))).toMatchObject({
       tagName: 'v0.1.0',
     });

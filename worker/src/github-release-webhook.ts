@@ -2,6 +2,10 @@ import { createWebhookLedger, type WebhookLedger } from '@pegma/webhooks';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import type { Store } from '@pegma/storage-core';
 import type { Logger } from '@pegma/spine';
+import {
+  bindSignedWebhookBody,
+  hashSignedWebhookBody,
+} from './github-webhook-body-binding';
 import { verifyGitHubWebhookSignature } from './github-webhook-signature';
 import {
   applyReleaseProjection,
@@ -322,6 +326,25 @@ export async function handleGitHubReleaseWebhook(
     return jsonResponse(403, { error: 'repository_not_allowed' });
   }
 
+  const observedAt = options.now ?? new Date().toISOString();
+
+  // The HMAC covers the body only, so `x-github-delivery` — the ledger's dedup
+  // key — is unauthenticated. Bind the signed bytes to the first delivery id
+  // that carried them so a captured body cannot be replayed under a fresh id.
+  const bodyHash = await hashSignedWebhookBody(bounded.body);
+  const binding = await bindSignedWebhookBody(store, {
+    bodyHash,
+    deliveryId,
+    firstSeenAt: observedAt,
+  });
+  if (binding.status === 'replayed') {
+    logger.log('warn', 'github_release_webhook.body_replayed', {
+      deliveryId,
+      boundDeliveryId: binding.boundDeliveryId,
+    });
+    return jsonResponse(409, { error: 'duplicate_body' });
+  }
+
   const ledger =
     options.ledger ??
     createWebhookLedger({
@@ -340,7 +363,6 @@ export async function handleGitHubReleaseWebhook(
       return emptyResponse(204);
     }
 
-    const observedAt = options.now ?? new Date().toISOString();
     const decision = decideReleaseProjection(facts, observedAt);
     await applyReleaseProjection(store, decision);
     // ETag invalidation is correctness-critical (not best-effort): a later
@@ -383,6 +405,10 @@ export async function handleGitHubReleaseWebhook(
           markFailedError instanceof Error ? markFailedError.name : 'unknown',
       });
     }
+    // The body binding deliberately survives a failed attempt. GitHub keeps
+    // one delivery id per event across redeliveries, so the retry still binds;
+    // dropping the claim here would only let a different delivery id take it,
+    // which is the replay the binding exists to refuse.
     return jsonResponse(500, { error: 'processing_failed' });
   }
 }
