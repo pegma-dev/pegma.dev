@@ -105,6 +105,7 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/authorization-core',
       '@pegma/authorization-policy',
       '@pegma/authorization-auth0',
+      '@pegma/authorization-entra',
       '@pegma/authorization-stripe',
       '@pegma/authorization-storage',
       '@pegma/authorization-tokens',
@@ -116,7 +117,7 @@ export const components: readonly PegmaComponent[] = [
     owns: [
       'Principals, roles, entitlements, permissions, and versioned policy',
       'Deterministic resolution: trusted facts in, effective permissions out',
-      'Auth0 and Stripe adapters; storage over Storage Core',
+      'Auth0, Entra, and Stripe adapters; storage over Storage Core',
       'Short-lived signed access grants (ES256, single-use)',
     ],
     refuses: [
