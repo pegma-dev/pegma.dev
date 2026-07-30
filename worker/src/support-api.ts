@@ -28,7 +28,6 @@ import type {
 } from './identity-contracts';
 import {
   ensureBootstrapSupport,
-  type BootstrapMarkerStore,
   type BootstrapRoleStore,
 } from './role-bootstrap';
 import {
@@ -106,8 +105,6 @@ interface SupportApiOptions {
   readonly roleStore?: SupportRoleReader & BootstrapRoleStore;
   /** One-time Support bootstrap principals (Phase 3). */
   readonly bootstrapPrincipals?: ReadonlySet<string>;
-  /** Durable bootstrap-seed markers; required for the seed to run. */
-  readonly bootstrapMarkers?: BootstrapMarkerStore;
 }
 
 interface SessionData {
@@ -442,14 +439,12 @@ async function requireAuthentication(
   // everyone not listed.
   if (
     options.roleStore !== undefined &&
-    options.bootstrapMarkers !== undefined &&
     options.bootstrapPrincipals !== undefined &&
     options.bootstrapPrincipals.size > 0
   ) {
     try {
       const seeded = await ensureBootstrapSupport(
         options.roleStore,
-        options.bootstrapMarkers,
         authenticated.link.subject,
         options.bootstrapPrincipals,
       );

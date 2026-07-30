@@ -60,7 +60,6 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     logger,
     // The stored Support ROLE is the only staff gate (fail closed).
     roleStore: supportRuntime.roleStore,
-    bootstrapMarkers: supportRuntime.bootstrapMarkers,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
   });
   return { supportRuntime, api };
@@ -174,7 +173,7 @@ export default {
             storage: 'cloudflare-d1',
             sessions: '@pegma/sessions@0.2.0',
             runtime: '@pegma/identity@0.1.2',
-            authorizationAdapter: '@pegma/authorization-identity@0.2.0',
+            authorizationAdapter: '@pegma/authorization-identity@0.3.0',
             emailDelivery:
               String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
               Boolean(env.RESEND_API_KEY),
