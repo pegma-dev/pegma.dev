@@ -73,7 +73,7 @@ The lockout-safe order proven on retiregolden.org, transplanted:
       - **Human-managed despite the system actor**: `system:bootstrap`
         writes once and never touches the assignment again, so it is
         revocable like any human grant.
-- [ ] Delete the env var after the first operator holds the role. It seeds
+- [x] Delete the env var after the first operator holds the role. It seeds
       state; it is never itself an authorization path.
 
 ## Phase 4 — retire the allowlist
