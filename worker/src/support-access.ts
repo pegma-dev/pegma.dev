@@ -25,12 +25,22 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
   supportPermissions.auditRead,
 ] as const);
 
-/**
- * The operator role name (docs/ROLE_ADOPTION_PLAN.md). An `Admin` role is
- * deliberately NOT mapped yet — it arrives with the Phase 5 management
- * surface; a role nothing checks is a loaded gun.
- */
+/** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */
 export const SUPPORT_ROLE = 'Support' as const;
+
+/**
+ * The role-administration role name — mapped since the Phase 5 surface
+ * shipped; the permissions below are exactly what the admin API checks.
+ */
+export const ADMIN_ROLE = 'Admin' as const;
+
+/** Admin permission set, granted via the {@link ADMIN_ROLE} role. */
+export const ADMIN_PERMISSIONS = Object.freeze([
+  'admin.principal.read',
+  'admin.role.assign',
+  'admin.role.revoke',
+  'admin.audit.read',
+] as const);
 
 /**
  * The application partition every pegma.dev authorization record belongs
@@ -51,14 +61,17 @@ export const APPLICATION_SCOPE = Object.freeze({
  * Customer permissions are granted to any authenticated account via
  * `defaults` — not a paid entitlement or invented multi-tenant role (there
  * is no billing ledger on pegma.dev; roles are the only stored grant).
- * Staff permissions are granted via the stored, audited `Support` role.
+ * Staff permissions are granted via the stored, audited `Support` role,
+ * and role administration via the stored, audited `Admin` role — mapped
+ * with the Phase 5 surface (version 2 of the document).
  */
 export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
   schemaVersion: 1,
-  version: 'pegma.dev-policy-1',
+  version: 'pegma.dev-policy-2',
   defaults: [...SUPPORT_CUSTOMER_PERMISSIONS],
   roles: Object.freeze({
     [SUPPORT_ROLE]: [...SUPPORT_STAFF_PERMISSIONS],
+    [ADMIN_ROLE]: [...ADMIN_PERMISSIONS],
   }),
 });
 

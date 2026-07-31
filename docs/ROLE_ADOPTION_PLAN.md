@@ -85,7 +85,16 @@ The lockout-safe order proven on retiregolden.org, transplanted:
 - [x] Delete the env vars from the Worker configuration and update
       `SUPPORT_COMPOSITION.md`'s staff section to role-only.
 
-## Phase 5 — the shared admin surface (GATED)
+## Phase 5 — the shared admin surface ✓ (2026-07-31)
+
+**Executed:** `@pegma/authorization-admin@0.4.0` (extracted upstream from
+both hosts) composes the surface: `Admin` mapped in policy version
+`pegma.dev-policy-2` to the four `admin.*` permissions; one-time
+`PEGMA_ADMIN_BOOTSTRAP_PRINCIPALS` seed via the package helper (fresh
+opaque ids per attempt — lifecycle history is the already-seeded signal);
+`/api/admin/*` + `/staff/roles` gated on `Admin`, with the
+last-administrator guard live from the first request and the by-role
+holder index at `role-holder-index.v1`. Original gating record follows.
 
 Both hosts now want the same role-management surface (lookup → grants view →
 audited assign/revoke → history). Per the ecosystem's

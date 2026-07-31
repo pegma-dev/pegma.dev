@@ -1,0 +1,99 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+
+<Base
+  title="Role administration — Pegma"
+  description="Operator role administration for pegma.dev. Admin role required."
+>
+  <section class="account-hero">
+    <p class="eyebrow">Staff · Role administration</p>
+    <h1>Roles</h1>
+    <p class="lede">
+      Look up a principal, review and change stored role assignments, and read
+      the audited history. Access requires the stored Admin role — this
+      administers pegma.dev only.
+    </p>
+  </section>
+
+  <div id="roles-status" class="notice" role="status" aria-live="polite">
+    Checking admin access…
+  </div>
+
+  <section id="roles-signed-out" class="account-panel" hidden>
+    <h2>Sign in required</h2>
+    <p>
+      Role administration uses your pegma.dev account session.
+      <a href="/account">Sign in</a> first.
+    </p>
+  </section>
+
+  <section id="roles-forbidden" class="account-panel" hidden>
+    <h2>You do not have admin access</h2>
+    <p>
+      This surface is only available to operators holding the Admin role. If
+      you expected access, contact an administrator.
+    </p>
+    <p>
+      <a href="/account">Account</a>
+      ·
+      <a href="/staff/support">Support queue</a>
+    </p>
+  </section>
+
+  <section id="roles-panel" class="account-panel" hidden>
+    <div id="bootstrap-warning" class="notice" data-tone="error" hidden>
+      PEGMA_ADMIN_BOOTSTRAP_PRINCIPALS is still configured. The seed input
+      should be deleted now that an administrator exists.
+    </div>
+
+    <form id="lookup-form" class="account-form">
+      <label for="lookup-principal">Principal id</label>
+      <input
+        id="lookup-principal"
+        name="principal"
+        type="text"
+        required
+        autocomplete="off"
+        placeholder="a41f406e-…"
+      />
+      <div class="account-inline">
+        <button type="submit">Look up</button>
+      </div>
+      <p class="form-note">
+        Exact Identity principal id. Principal search by email stays outside
+        this surface.
+      </p>
+    </form>
+
+    <section id="principal-card" hidden>
+      <h3 id="principal-email"></h3>
+      <p id="principal-meta" class="form-note"></p>
+
+      <h4>Active roles</h4>
+      <ul id="role-list" class="ticket-list"></ul>
+
+      <form id="assign-form" class="account-form">
+        <label for="assign-role">Assign role</label>
+        <select id="assign-role" name="role">
+          <option value="Support">Support</option>
+          <option value="Admin">Admin</option>
+        </select>
+        <div class="account-inline">
+          <button type="submit">Assign</button>
+        </div>
+      </form>
+
+      <h4>History</h4>
+      <ul id="history-list" class="ticket-list"></ul>
+    </section>
+  </section>
+
+  <noscript>
+    <p class="notice">
+      Role administration requires JavaScript and a signed-in admin session.
+    </p>
+  </noscript>
+
+  <script is:inline type="module" src="/staff-roles.js"></script>
+</Base>

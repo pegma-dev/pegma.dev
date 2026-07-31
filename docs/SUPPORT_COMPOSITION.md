@@ -13,9 +13,10 @@ Exact published versions:
 - `@pegma/support-desk-contracts@0.1.0`
 - `@pegma/support-desk-core@0.1.0`
 - `@pegma/support-desk-templates@0.1.0`
-- `@pegma/authorization-core@0.3.0` (AccessContext resolution)
-- `@pegma/authorization-policy@0.3.0` (PolicyDocumentV1 schema validation)
-- `@pegma/authorization-storage@0.3.0` (D1-backed role store)
+- `@pegma/authorization-admin@0.4.0` (role administration service)
+- `@pegma/authorization-core@0.4.0` (AccessContext resolution)
+- `@pegma/authorization-policy@0.4.0` (PolicyDocumentV1 schema validation)
+- `@pegma/authorization-storage@0.4.0` (D1-backed role store)
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
 `@pegma/storage-cloudflare-d1@0.4.0`, `@pegma/sessions@0.1.0`,
@@ -33,6 +34,7 @@ collection name, not by sharing Identity mail cursors or session rows:
 | Ticket numbers | `support-desk.ticket-numbers.v1` |
 | Queue projection | `support-desk.queue-index.v1` |
 | Host maintenance cursors | `pegma-dev-support-maintenance` |
+| Role holder index (by-role guard) | `role-holder-index.v1` |
 
 Identity keeps its own collections and `pegma-dev-maintenance` cursors. The
 two never share a cursor key.
@@ -157,6 +159,7 @@ Durable rate-limit policies (separate from Identity):
 | `/feedback/ticket/?id=…` | Customer read + reply |
 | `/staff/support` | Staff queue (Support role holders) |
 | `/staff/support/ticket/?id=…` | Staff ticket detail, compose, lifecycle |
+| `/staff/roles` | Role administration (Admin role holders) |
 
 ## Maintenance and health
 

@@ -158,6 +158,12 @@ export interface SupportRuntimeEnv {
   /** When `"true"`, health includes a lightweight Support Desk store probe. */
   readonly SUPPORT_HEALTH_PROBE?: string;
   /**
+   * One-time Admin bootstrap principals for the role-administration
+   * surface (docs/ROLE_ADOPTION_PLAN.md Phase 5). Delete after the first
+   * administrator holds the role.
+   */
+  readonly PEGMA_ADMIN_BOOTSTRAP_PRINCIPALS?: string;
+  /**
    * One-time Support-role bootstrap principals
    * (docs/ROLE_ADOPTION_PLAN.md Phase 3). Delete after the first operator
    * holds the role — it seeds state, it is never an authorization path.
@@ -204,6 +210,17 @@ function durableLimiter(
     store,
     { clock },
   );
+}
+
+/**
+ * Durable limiter for role-administration mutations (assign/revoke).
+ * Separate policy from the Support Desk limits; same shared Store.
+ */
+export function createAdminMutationLimiter(
+  store: Store,
+  clock: Clock = systemClock,
+): DurableRateLimiter {
+  return durableLimiter(store, 'pegma.admin.role.mutate', 30, 60 * 60_000, clock);
 }
 
 /**
