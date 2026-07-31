@@ -4,10 +4,11 @@ const forbidden = document.querySelector('#roles-forbidden');
 const panel = document.querySelector('#roles-panel');
 const bootstrapWarning = document.querySelector('#bootstrap-warning');
 const lookupForm = document.querySelector('#lookup-form');
-const principalInput = document.querySelector('#lookup-principal');
+const lookupInput = document.querySelector('#lookup-query');
 const principalCard = document.querySelector('#principal-card');
 const principalEmail = document.querySelector('#principal-email');
 const principalMeta = document.querySelector('#principal-meta');
+const principalMatched = document.querySelector('#principal-matched');
 const roleList = document.querySelector('#role-list');
 const assignForm = document.querySelector('#assign-form');
 const assignRole = document.querySelector('#assign-role');
@@ -107,10 +108,11 @@ function renderRoles(roles) {
               ? 'Revoked — the guard restored the principal to keep an administrator.'
               : 'Revoked.',
           );
-          await loadPrincipal(currentPrincipal);
+          await refreshPrincipal();
         } catch (error) {
           showStatus(
-            MUTATION_ERRORS[error.message] ?? `Revoke failed (${error.message}).`,
+            MUTATION_ERRORS[error.message] ??
+              `Revoke failed (${error.message}).`,
             true,
           );
         }
@@ -139,37 +141,68 @@ function renderHistory(events) {
   }
 }
 
-async function loadPrincipal(principalId) {
-  const [detail, history] = await Promise.all([
-    api(`/api/admin/principals/${encodeURIComponent(principalId)}`),
-    api(`/api/admin/principals/${encodeURIComponent(principalId)}/history`),
-  ]);
-  currentPrincipal = principalId;
+function renderPrincipal(detail, matchedBy) {
+  currentPrincipal = detail.principal.principalId;
   principalEmail.textContent = detail.principal.email;
   principalMeta.textContent = `${detail.principal.principalId} · ${detail.principal.status} · created ${detail.principal.createdAt}`;
+  if (matchedBy === undefined) {
+    principalMatched.hidden = true;
+  } else {
+    principalMatched.textContent =
+      matchedBy === 'email'
+        ? 'Matched by email address.'
+        : 'Matched by principal id.';
+    principalMatched.hidden = false;
+  }
   renderRoles(detail.roles);
-  renderHistory(history.events);
   principalCard.hidden = false;
+}
+
+/** One box, one request: the worker decides email vs principal id. */
+async function resolvePrincipal(query) {
+  const detail = await api('/api/admin/lookup', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  });
+  renderPrincipal(detail, detail.matchedBy);
+  const id = encodeURIComponent(detail.principal.principalId);
+  const history = await api(`/api/admin/principals/${id}/history`);
+  renderHistory(history.events);
+}
+
+/** Re-read the already-resolved principal after a mutation. */
+async function refreshPrincipal() {
+  const id = encodeURIComponent(currentPrincipal);
+  const [detail, history] = await Promise.all([
+    api(`/api/admin/principals/${id}`),
+    api(`/api/admin/principals/${id}/history`),
+  ]);
+  renderPrincipal(detail);
+  renderHistory(history.events);
 }
 
 lookupForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const principalId = principalInput.value.trim();
-  if (principalId === '') {
+  const query = lookupInput.value.trim();
+  if (query === '') {
     return;
   }
-  showStatus('Loading principal…');
+  showStatus('Looking up…');
   try {
-    await loadPrincipal(principalId);
+    await resolvePrincipal(query);
     showStatus('Ready.');
   } catch (error) {
     principalCard.hidden = true;
-    showStatus(
-      error.status === 404
-        ? 'No account with that principal id.'
-        : `Lookup failed (${error.message}).`,
-      true,
-    );
+    if (error.status === 404) {
+      showStatus('No account matches that email or principal id.', true);
+    } else if (error.status === 400) {
+      showStatus(
+        'That does not look like an email address or a principal id.',
+        true,
+      );
+    } else {
+      showStatus(`Lookup failed (${error.message}).`, true);
+    }
   }
 });
 
@@ -181,7 +214,9 @@ assignForm.addEventListener('submit', async (event) => {
   const role = assignRole.value;
   if (
     role === 'Admin' &&
-    !window.confirm('Grant the Admin role? Admins can change all role assignments.')
+    !window.confirm(
+      'Grant the Admin role? Admins can change all role assignments.',
+    )
   ) {
     return;
   }
@@ -191,7 +226,7 @@ assignForm.addEventListener('submit', async (event) => {
       { method: 'POST', body: JSON.stringify({ role }) },
     );
     showStatus(`Assigned ${role}.`);
-    await loadPrincipal(currentPrincipal);
+    await refreshPrincipal();
   } catch (error) {
     showStatus(
       MUTATION_ERRORS[error.message] ?? `Assign failed (${error.message}).`,

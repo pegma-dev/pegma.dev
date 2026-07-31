@@ -146,10 +146,45 @@ with no default and styles the two modes differently. Mail / outbound
 notification is still deferred (Task 10) — staff reply omits `notification`
 like customer create/reply.
 
+### Role administration (`/api/admin/…`)
+
+Gated on the stored `Admin` role (`@pegma/authorization-admin`); the host
+checks permissions before calling the service, which never re-checks its own
+callers.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` | `/api/admin/state` | `bootstrapArmed` + CSRF token |
+| `POST` | `/api/admin/lookup` | One search box: body `{ query }`, resolves an email **or** a principal id |
+| `GET` | `/api/admin/principals/:id` | Principal + active roles with `managedBy` |
+| `GET` | `/api/admin/principals/:id/history` | Audited lifecycle timeline |
+| `POST` | `/api/admin/principals/:id/roles` | Assign `Support` or `Admin` |
+| `DELETE` | `/api/admin/assignments/:id` | Revoke; last-administrator guard |
+
+**One search box, decided server-side.** `classifyLookup` treats a `@`
+anywhere in the query as an email and everything else as a principal id:
+Identity's one normalization function requires exactly one `@` in every
+address, and principal ids never contain one. Email lookups call the
+published `Identity.findUserByEmail`; the host passes the trimmed value
+through **without normalizing it**, because exactly one normalization
+function exists and it lives in Identity (test-pinned).
+
+**Why the lookup is a POST.** The query can be a real person's email
+address, so it stays out of URLs, referrers, and access logs; the same
+choice puts CSRF and same-origin in front of the one endpoint that can
+confirm an address exists. Identity's public enumeration resistance is
+untouched — this path is reachable only by an authenticated `Admin` holder,
+and it is rate-limited so a stolen admin session cannot harvest the
+directory.
+
 Durable rate-limit policies (separate from Identity):
 
 - `pegma.support.ticket.create`
 - `pegma.support.ticket.reply` (customer replies and staff message/note posts)
+- `pegma.admin.role.mutate` (assign / revoke, 30/h per operator)
+- `pegma.admin.principal.lookup` (directory lookups, 120/h per operator)
+
+All four are swept by the same scheduled maintenance run.
 
 ## Site pages
 

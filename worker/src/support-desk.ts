@@ -224,6 +224,24 @@ export function createAdminMutationLimiter(
 }
 
 /**
+ * Durable limiter for role-administration directory lookups. Looser than
+ * the mutation limit — operators search far more than they grant — but
+ * bounded so a stolen admin session cannot harvest the directory.
+ */
+export function createAdminLookupLimiter(
+  store: Store,
+  clock: Clock = systemClock,
+): DurableRateLimiter {
+  return durableLimiter(
+    store,
+    'pegma.admin.principal.lookup',
+    120,
+    60 * 60_000,
+    clock,
+  );
+}
+
+/**
  * Production Support Desk composition for pegma.dev.
  *
  * Uses the same `IDENTITY_DB` D1 binding with Support Desk's own collection

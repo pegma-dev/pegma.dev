@@ -48,27 +48,27 @@ import Base from '../../layouts/Base.astro';
     </div>
 
     <form id="lookup-form" class="account-form">
-      <label for="lookup-principal">Principal id</label>
+      <label for="lookup-query">Email or principal id</label>
       <input
-        id="lookup-principal"
-        name="principal"
+        id="lookup-query"
+        name="query"
         type="text"
         required
         autocomplete="off"
-        placeholder="a41f406e-…"
+        placeholder="person@example.com or a41f406e-…"
       />
       <div class="account-inline">
         <button type="submit">Look up</button>
       </div>
       <p class="form-note">
-        Exact Identity principal id. Principal search by email stays outside
-        this surface.
+        Exact match either way — the surface works out which you typed.
       </p>
     </form>
 
     <section id="principal-card" hidden>
       <h3 id="principal-email"></h3>
       <p id="principal-meta" class="form-note"></p>
+      <p id="principal-matched" class="form-note" hidden></p>
 
       <h4>Active roles</h4>
       <ul id="role-list" class="ticket-list"></ul>

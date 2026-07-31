@@ -17,6 +17,7 @@ export type IdentityPort = Pick<
   Identity,
   | 'claimsFor'
   | 'getUser'
+  | 'findUserByEmail'
   | 'beginPasskeyRegistration'
   | 'finishPasskeyRegistration'
   | 'beginPasskeyAuthentication'

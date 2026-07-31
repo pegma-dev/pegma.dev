@@ -43,6 +43,22 @@ const PRINCIPAL_PATH =
   /^\/api\/admin\/principals\/([A-Za-z0-9._~-]{1,200})(?:\/(roles|history))?$/u;
 const ASSIGNMENT_PATH = /^\/api\/admin\/assignments\/([A-Za-z0-9._~-]{1,200})$/u;
 
+/** How a lookup query was interpreted. */
+export type LookupKind = 'email' | 'principalId';
+
+/**
+ * Decide whether an operator typed an email address or a principal id.
+ *
+ * `@` is a total, unambiguous discriminator here: Identity's one
+ * normalization function requires exactly one `@` in every email, and
+ * principal ids are opaque Identity subjects that never contain one (the
+ * principal route's own charset excludes it). One rule, server-side, so
+ * the operator gets a single search box instead of two.
+ */
+export function classifyLookup(query: string): LookupKind {
+  return query.includes('@') ? 'email' : 'principalId';
+}
+
 /** The only roles the surface may assign; entitlements are not roles. */
 const ASSIGNABLE_ROLES: ReadonlySet<string> = Object.freeze(
   new Set<string>([SUPPORT_ROLE, ADMIN_ROLE]),
@@ -59,6 +75,12 @@ export interface AdminApiOptions {
   readonly holderIndex: RoleHolderIndex;
   /** Durable limiter for role mutations. */
   readonly mutationLimiter: DurableRateLimiter;
+  /**
+   * Durable limiter for directory lookups. Separate from mutations: an
+   * authorized operator looks up far more often than they grant, and a
+   * stolen admin session must not be able to harvest the directory.
+   */
+  readonly lookupLimiter: DurableRateLimiter;
   /**
    * One-time Admin bootstrap principals (`PEGMA_ADMIN_BOOTSTRAP_PRINCIPALS`).
    * Delete the var once the first administrator holds the role; the
@@ -177,6 +199,61 @@ export function createAdminApi(
         return json({
           bootstrapArmed: options.bootstrapPrincipals.size > 0,
           csrfToken: authenticated.csrfToken,
+        });
+      }
+
+      // One search box: POST so the operator's query — which may be a real
+      // person's email — never lands in a URL, a referrer, or a log line,
+      // and so CSRF plus same-origin gate the one endpoint that can
+      // confirm an address exists.
+      if (request.method === 'POST' && path === '/api/admin/lookup') {
+        requireSameOriginMutation(request);
+        const authenticated = await requireAdminAccess(
+          request,
+          'admin.principal.read',
+        );
+        await requireCsrf(request, authenticated);
+        await enforceRateLimit(
+          options.lookupLimiter,
+          authenticated.link.subject,
+        );
+        const body = exactObject(await readJson(request), ['query']);
+        const query =
+          typeof body.query === 'string' ? body.query.trim() : '';
+        if (query === '' || query.length > 320) {
+          throw new ApiError(400, 'invalid_query');
+        }
+        const matchedBy = classifyLookup(query);
+        let user;
+        try {
+          user =
+            matchedBy === 'email'
+              ? await options.identity.findUserByEmail(query)
+              : await options.identity.getUser(query as PrincipalId);
+        } catch (error) {
+          // Identity rejects malformed input; that is the operator's typo,
+          // not a server fault.
+          const code =
+            typeof error === 'object' && error !== null && 'code' in error
+              ? (error as { readonly code?: unknown }).code
+              : undefined;
+          if (code === 'invalid_input') {
+            throw new ApiError(400, 'invalid_query');
+          }
+          throw error;
+        }
+        if (user === null) {
+          throw new ApiError(404, 'not_found');
+        }
+        return json({
+          matchedBy,
+          principal: {
+            principalId: user.principalId,
+            email: user.email,
+            status: user.status,
+            createdAt: user.createdAt,
+          },
+          roles: await rolesView(administration, user.principalId),
         });
       }
 

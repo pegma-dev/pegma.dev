@@ -89,6 +89,7 @@ function identity(): IdentityPort {
         emailVerified: true,
       }) satisfies VerifiedIdentityClaims,
     ),
+    findUserByEmail: vi.fn(async () => null),
     getUser: vi.fn(async () => user),
     beginPasskeyRegistration: vi.fn(),
     finishPasskeyRegistration: vi.fn(),

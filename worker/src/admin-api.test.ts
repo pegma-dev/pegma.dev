@@ -3,7 +3,7 @@ import { createMemoryStore } from '@pegma/storage-core';
 import { createSessionStore } from '@pegma/sessions';
 import { fixedClock, type Logger, type PrincipalId } from '@pegma/spine';
 import { describe, expect, it, vi } from 'vitest';
-import { createAdminApi } from './admin-api';
+import { classifyLookup, createAdminApi } from './admin-api';
 import { IDENTITY_ISSUER, SESSION_COOKIE } from './identity-api';
 import type {
   IdentityPort,
@@ -13,6 +13,7 @@ import type {
 import { createRoleHolderIndex } from './role-holder-index';
 import { ADMIN_ROLE, SUPPORT_ROLE } from './support-access';
 import {
+  createAdminLookupLimiter,
   createAdminMutationLimiter,
   createSupportRuntime,
 } from './support-desk';
@@ -48,6 +49,12 @@ function identityFor(
         subject: principalId,
         emailVerified: true,
       } satisfies VerifiedIdentityClaims;
+    }),
+    findUserByEmail: vi.fn(async (email: string) => {
+      for (const user of users.values()) {
+        if (user.email === email.trim().toLowerCase()) return user;
+      }
+      return null;
     }),
     getUser: vi.fn(
       async (principalId: PrincipalId) => users.get(principalId) ?? null,
@@ -132,9 +139,10 @@ function fixture(options: { bootstrapPrincipals?: readonly PrincipalId[] } = {})
     roleStore: runtime.roleStore,
     holderIndex: createRoleHolderIndex(store),
     mutationLimiter: createAdminMutationLimiter(store, clock),
+    lookupLimiter: createAdminLookupLimiter(store, clock),
     bootstrapPrincipals: new Set(options.bootstrapPrincipals ?? []),
   });
-  return { api, sessions, roleStore: runtime.roleStore };
+  return { api, sessions, identity, roleStore: runtime.roleStore };
 }
 
 /** Seed the first administrator the way the bootstrap touch would. */
@@ -152,6 +160,126 @@ async function bootstrappedAdmin(
   );
   return { ...world, auth };
 }
+
+describe('classifyLookup', () => {
+  it('routes anything containing @ to email and everything else to id', () => {
+    expect(classifyLookup('nrover@gmail.com')).toBe('email');
+    expect(classifyLookup('a41f406e-6e58-4090-b5b9-62bf7a8ab65d')).toBe(
+      'principalId',
+    );
+    // Identity's normalization rejects malformed addresses; the classifier
+    // only decides which endpoint answers, never whether input is valid.
+    expect(classifyLookup('@')).toBe('email');
+    expect(classifyLookup('not-an-email')).toBe('principalId');
+  });
+});
+
+describe('one search box', () => {
+  it('resolves a principal id', async () => {
+    const { api, auth } = await bootstrappedAdmin();
+    const response = await api(
+      mutate('POST', '/api/admin/lookup', auth, { query: admin }),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      matchedBy: string;
+      principal: { principalId: string; email: string };
+      roles: readonly { role: string }[];
+    };
+    expect(body.matchedBy).toBe('principalId');
+    expect(body.principal.principalId).toBe(admin);
+    expect(body.roles.map((role) => role.role)).toEqual([ADMIN_ROLE]);
+  });
+
+  it('resolves an email and hands Identity the value verbatim', async () => {
+    const { api, auth, identity } = await bootstrappedAdmin();
+    const response = await api(
+      mutate('POST', '/api/admin/lookup', auth, {
+        query: '  Member@Example.TEST  ',
+      }),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      matchedBy: string;
+      principal: { principalId: string };
+    };
+    expect(body.matchedBy).toBe('email');
+    expect(body.principal.principalId).toBe(member);
+    // Exactly one email normalization function exists and it lives in
+    // Identity: the host trims the text-box value and passes it through
+    // untouched — no host-side lowercasing.
+    expect(identity.findUserByEmail).toHaveBeenCalledWith('Member@Example.TEST');
+  });
+
+  it('answers 404 for an unknown principal and 400 for unusable input', async () => {
+    const { api, auth } = await bootstrappedAdmin();
+    expect(
+      (
+        await api(
+          mutate('POST', '/api/admin/lookup', auth, {
+            query: 'nobody@example.test',
+          }),
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await api(mutate('POST', '/api/admin/lookup', auth, { query: '   ' })))
+        .status,
+    ).toBe(400);
+    expect(
+      (
+        await api(
+          mutate('POST', '/api/admin/lookup', auth, {
+            query: `${'x'.repeat(320)}@example.test`,
+          }),
+        )
+      ).status,
+    ).toBe(400);
+  });
+
+  it('maps an Identity input rejection to 400, not 500', async () => {
+    const world = await bootstrappedAdmin();
+    world.identity.findUserByEmail = vi.fn(async () => {
+      throw Object.assign(new Error('bad'), { code: 'invalid_input' });
+    });
+    const response = await world.api(
+      mutate('POST', '/api/admin/lookup', world.auth, { query: 'a@b@c' }),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid_query' });
+  });
+
+  it('is gated on the Admin role and CSRF like every other admin route', async () => {
+    const { api, sessions } = fixture();
+    const nobody = await sessionCookie(sessions, member, 'q'.repeat(43));
+    expect(
+      (
+        await api(
+          mutate(
+            'POST',
+            '/api/admin/lookup',
+            { cookie: nobody.cookie, csrfToken: nobody.csrfToken },
+            { query: member },
+          ),
+        )
+      ).status,
+    ).toBe(403);
+
+    // A separate world: its session store owns the admin cookie below.
+    const bootstrapped = await bootstrappedAdmin();
+    const noCsrf = new Request('https://pegma.dev/api/admin/lookup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: IDENTITY_ISSUER,
+        'Sec-Fetch-Site': 'same-origin',
+        Cookie: bootstrapped.auth.cookie,
+      },
+      body: JSON.stringify({ query: admin }),
+    });
+    expect((await bootstrapped.api(noCsrf)).status).toBe(403);
+  });
+});
 
 describe('admin API access', () => {
   it('requires authentication and the Admin role, fail-closed order', async () => {

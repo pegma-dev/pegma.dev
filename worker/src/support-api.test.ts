@@ -76,6 +76,12 @@ function identityFor(
         emailVerified: true,
       } satisfies VerifiedIdentityClaims;
     }),
+    findUserByEmail: vi.fn(async (email: string) => {
+      for (const user of users.values()) {
+        if (user.email === email.trim().toLowerCase()) return user;
+      }
+      return null;
+    }),
     getUser: vi.fn(async (principalId: PrincipalId) => users.get(principalId) ?? null),
     beginPasskeyRegistration: vi.fn(),
     finishPasskeyRegistration: vi.fn(),
