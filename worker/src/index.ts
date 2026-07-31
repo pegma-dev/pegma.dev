@@ -31,6 +31,7 @@ import { createAdminApi } from './admin-api';
 import { createRoleHolderIndex } from './role-holder-index';
 import { createSupportApi } from './support-api';
 import {
+  createAdminLookupLimiter,
   createAdminMutationLimiter,
   createProductionSupportRuntime,
   probeSupportStore,
@@ -78,6 +79,7 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     roleStore: supportRuntime.roleStore,
     holderIndex: createRoleHolderIndex(supportRuntime.store),
     mutationLimiter: createAdminMutationLimiter(supportRuntime.store),
+    lookupLimiter: createAdminLookupLimiter(supportRuntime.store),
     bootstrapPrincipals: parseAdminBootstrapPrincipals(env),
   });
   return { supportRuntime, api, adminApi };
@@ -427,6 +429,10 @@ export default {
               limiters: [
                 ...supportRuntime.limiters,
                 createAdminMutationLimiter(
+                  supportRuntime.store,
+                  supportRuntime.clock,
+                ),
+                createAdminLookupLimiter(
                   supportRuntime.store,
                   supportRuntime.clock,
                 ),

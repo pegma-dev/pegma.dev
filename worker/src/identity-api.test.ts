@@ -70,6 +70,8 @@ class TestSessions implements SessionStore {
 function identity(overrides: Partial<IdentityPort> = {}): IdentityPort {
   return {
     claimsFor: vi.fn(async () => claims),
+    findUserByEmail: vi.fn(async () => null),
+
     getUser: vi.fn(async () => ({
       principalId,
       email: 'person@example.test',
