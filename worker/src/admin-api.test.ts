@@ -163,7 +163,7 @@ async function bootstrappedAdmin(
 
 describe('classifyLookup', () => {
   it('routes anything containing @ to email and everything else to id', () => {
-    expect(classifyLookup('nrover@gmail.com')).toBe('email');
+    expect(classifyLookup('person@example.test')).toBe('email');
     expect(classifyLookup('a41f406e-6e58-4090-b5b9-62bf7a8ab65d')).toBe(
       'principalId',
     );

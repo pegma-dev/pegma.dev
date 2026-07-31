@@ -158,27 +158,43 @@ function renderPrincipal(detail, matchedBy) {
   principalCard.hidden = false;
 }
 
-/** One box, one request: the worker decides email vs principal id. */
-async function resolvePrincipal(query) {
-  const detail = await api('/api/admin/lookup', {
-    method: 'POST',
-    body: JSON.stringify({ query }),
-  });
-  renderPrincipal(detail, detail.matchedBy);
+/**
+ * Every load takes a ticket. A second lookup (or a refresh after a
+ * mutation) invalidates any in-flight one, so a slow response can never
+ * paint its principal's history under a newer principal's details.
+ */
+let loadTicket = 0;
+
+/**
+ * Fetch details and history, then render BOTH or NEITHER: the card only
+ * becomes interactive once the pair belongs to the same principal.
+ */
+async function loadPrincipal(fetchDetail) {
+  const ticket = (loadTicket += 1);
+  const detail = await fetchDetail();
   const id = encodeURIComponent(detail.principal.principalId);
   const history = await api(`/api/admin/principals/${id}/history`);
+  if (ticket !== loadTicket) {
+    return;
+  }
+  renderPrincipal(detail, detail.matchedBy);
   renderHistory(history.events);
+}
+
+/** One box: the worker decides email vs principal id. */
+async function resolvePrincipal(query) {
+  await loadPrincipal(() =>
+    api('/api/admin/lookup', {
+      method: 'POST',
+      body: JSON.stringify({ query }),
+    }),
+  );
 }
 
 /** Re-read the already-resolved principal after a mutation. */
 async function refreshPrincipal() {
   const id = encodeURIComponent(currentPrincipal);
-  const [detail, history] = await Promise.all([
-    api(`/api/admin/principals/${id}`),
-    api(`/api/admin/principals/${id}/history`),
-  ]);
-  renderPrincipal(detail);
-  renderHistory(history.events);
+  await loadPrincipal(() => api(`/api/admin/principals/${id}`));
 }
 
 lookupForm.addEventListener('submit', async (event) => {
