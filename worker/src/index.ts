@@ -421,7 +421,16 @@ export default {
             {
               store: supportRuntime.store,
               clock: supportRuntime.clock,
-              limiters: supportRuntime.limiters,
+              // The admin mutation limiter joins the sweep: without it,
+              // expired pegma.admin.role.mutate counters would sit in D1
+              // forever.
+              limiters: [
+                ...supportRuntime.limiters,
+                createAdminMutationLimiter(
+                  supportRuntime.store,
+                  supportRuntime.clock,
+                ),
+              ],
               terminalRetentionMilliseconds:
                 supportRuntime.terminalRetentionMilliseconds,
             },

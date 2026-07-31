@@ -2,9 +2,10 @@
  * Session-authenticated API primitives shared by the Support Desk API and
  * the role-administration API: cookie session resolution against Identity,
  * CSRF and same-origin enforcement for mutations, strict JSON parsing, and
- * the typed error envelope. Extracted verbatim from the Support Desk API
- * when the admin surface became its second consumer; behavior and emitted
- * log events are unchanged.
+ * the typed error envelope. Extracted from the Support Desk API when the
+ * admin surface became its second consumer; behavior, error codes, and
+ * emitted log events are unchanged (diff against the pre-extraction
+ * support-api.ts to verify).
  */
 import type { Logger, PrincipalId } from '@pegma/spine';
 import type { SessionStore } from '@pegma/sessions';
@@ -177,27 +178,33 @@ export async function readJson(request: Request): Promise<unknown> {
     declaredLength !== null &&
     (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > JSON_LIMIT)
   ) {
-    throw new ApiError(413, 'payload_too_large');
+    throw new ApiError(413, 'request_too_large');
   }
   if (request.body === null) {
     throw new ApiError(400, 'invalid_json');
   }
+
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  let length = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      length += chunk.value.byteLength;
+      if (length > JSON_LIMIT) {
+        await reader.cancel();
+        throw new ApiError(413, 'request_too_large');
+      }
+      chunks.push(chunk.value);
     }
-    received += value.byteLength;
-    if (received > JSON_LIMIT) {
-      await reader.cancel();
-      throw new ApiError(413, 'payload_too_large');
-    }
-    chunks.push(value);
+  } finally {
+    reader.releaseLock();
   }
-  const bytes = new Uint8Array(received);
+
+  const bytes = new Uint8Array(length);
   let offset = 0;
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
