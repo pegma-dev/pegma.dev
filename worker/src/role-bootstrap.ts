@@ -30,11 +30,7 @@ export type BootstrapRoleStore = Pick<
   'listRoleAssignments' | 'grantRoleAssignmentWithAudit'
 >;
 
-/** Parse the bootstrap principal allowlist (trimmed, empties dropped). */
-export function parseBootstrapPrincipals(env: {
-  readonly PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS?: string;
-}): ReadonlySet<string> {
-  const raw = env.PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS;
+function parsePrincipalList(raw: string | undefined): ReadonlySet<string> {
   if (raw === undefined || raw.trim() === '') {
     return new Set();
   }
@@ -44,6 +40,20 @@ export function parseBootstrapPrincipals(env: {
       .map((part) => part.trim())
       .filter((part) => part.length > 0),
   );
+}
+
+/** Parse the Support bootstrap allowlist (trimmed, empties dropped). */
+export function parseBootstrapPrincipals(env: {
+  readonly PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS?: string;
+}): ReadonlySet<string> {
+  return parsePrincipalList(env.PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS);
+}
+
+/** Parse the Admin bootstrap allowlist (docs/ROLE_ADOPTION_PLAN.md Phase 5). */
+export function parseAdminBootstrapPrincipals(env: {
+  readonly PEGMA_ADMIN_BOOTSTRAP_PRINCIPALS?: string;
+}): ReadonlySet<string> {
+  return parsePrincipalList(env.PEGMA_ADMIN_BOOTSTRAP_PRINCIPALS);
 }
 
 /** The one bootstrap seed a principal can ever receive. */

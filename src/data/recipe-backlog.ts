@@ -19,7 +19,7 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       '@pegma/sessions@0.2.0',
       '@pegma/mail@0.1.1',
       '@pegma/rate-limit@0.2.0',
-      '@pegma/authorization-identity@0.3.0',
+      '@pegma/authorization-identity@0.4.0',
       '@pegma/storage-core@0.4.0',
       '@pegma/storage-cloudflare-d1@0.4.1',
       '@pegma/spine@0.1.1',

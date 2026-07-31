@@ -23,9 +23,15 @@ import {
   runReleaseReconciliation,
 } from './release-reconciliation';
 import { handleGetReleases, readReleasesConfig } from './releases-api';
-import { parseBootstrapPrincipals } from './role-bootstrap';
+import {
+  parseAdminBootstrapPrincipals,
+  parseBootstrapPrincipals,
+} from './role-bootstrap';
+import { createAdminApi } from './admin-api';
+import { createRoleHolderIndex } from './role-holder-index';
 import { createSupportApi } from './support-api';
 import {
+  createAdminMutationLimiter,
   createProductionSupportRuntime,
   probeSupportStore,
   supportHealthProbeEnabled,
@@ -62,7 +68,19 @@ function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLo
     roleStore: supportRuntime.roleStore,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
   });
-  return { supportRuntime, api };
+  // One admin tool per site: the role-administration API over
+  // @pegma/authorization-admin, gated on the stored Admin role.
+  const adminApi = createAdminApi({
+    sessions: supportRuntime.sessions,
+    identity: supportRuntime.identity,
+    identityLinkFromClaims: supportRuntime.identityLinkFromClaims,
+    logger,
+    roleStore: supportRuntime.roleStore,
+    holderIndex: createRoleHolderIndex(supportRuntime.store),
+    mutationLimiter: createAdminMutationLimiter(supportRuntime.store),
+    bootstrapPrincipals: parseAdminBootstrapPrincipals(env),
+  });
+  return { supportRuntime, api, adminApi };
 }
 
 /**
@@ -173,7 +191,7 @@ export default {
             storage: 'cloudflare-d1',
             sessions: '@pegma/sessions@0.2.0',
             runtime: '@pegma/identity@0.1.2',
-            authorizationAdapter: '@pegma/authorization-identity@0.3.0',
+            authorizationAdapter: '@pegma/authorization-identity@0.4.0',
             emailDelivery:
               String(env.IDENTITY_EMAIL_ENABLED) === 'true' &&
               Boolean(env.RESEND_API_KEY),
@@ -297,6 +315,27 @@ export default {
       }
     }
 
+    if (path.startsWith('/api/admin/')) {
+      try {
+        return await createSupportHandler(env, logger).adminApi(request);
+      } catch (error) {
+        logger.log('error', 'admin.runtime_unavailable', {
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+        return Response.json(
+          { error: 'admin_unavailable' },
+          {
+            status: 503,
+            headers: {
+              'Cache-Control': 'no-store',
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Content-Type-Options': 'nosniff',
+            },
+          },
+        );
+      }
+    }
+
     if (path.startsWith('/api/support/')) {
       try {
         return await createSupportHandler(env, logger).api(request);
@@ -382,7 +421,16 @@ export default {
             {
               store: supportRuntime.store,
               clock: supportRuntime.clock,
-              limiters: supportRuntime.limiters,
+              // The admin mutation limiter joins the sweep: without it,
+              // expired pegma.admin.role.mutate counters would sit in D1
+              // forever.
+              limiters: [
+                ...supportRuntime.limiters,
+                createAdminMutationLimiter(
+                  supportRuntime.store,
+                  supportRuntime.clock,
+                ),
+              ],
               terminalRetentionMilliseconds:
                 supportRuntime.terminalRetentionMilliseconds,
             },
