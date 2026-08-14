@@ -497,9 +497,9 @@ The mechanized evidence must cover:
 Repository gates remain:
 
 ```text
-npm run check
-npm test
-npm run build
+pnpm run check
+pnpm test
+pnpm run build
 ```
 
 Webhooks additionally keeps:

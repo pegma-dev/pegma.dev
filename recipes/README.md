@@ -12,7 +12,7 @@ CI-tested composition sketches for agents. Product names and domains are
 ## Rules
 
 1. **Synthetic only.** No routes, schemas, or ops topology from production hosts.
-2. **Executed.** Every recipe has a `*.test.ts` included in `npm test`.
+2. **Executed.** Every recipe has a `*.test.ts` included in `pnpm test`.
 3. **Catalog citation.** `/catalog.json` and `/examples` may quote wiring only
    from files under this tree (or from already-public package README/conformance
    sources). `fixture.status` is `green` only when CI covers the fixture.

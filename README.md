@@ -31,13 +31,13 @@ retiregolden.org, runs the stack on Azure).
 ## Worker logging
 
 ```sh
-npm ci
-npm run worker:deploy
+pnpm install --frozen-lockfile
+pnpm run worker:deploy
 # optional Datadog arm:
-npx wrangler secret put DATADOG_API_KEY -c worker/wrangler.jsonc
+pnpm exec wrangler secret put DATADOG_API_KEY -c worker/wrangler.jsonc
 # optional EU site:
-npx wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
-npm run worker:tail
+pnpm exec wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
+pnpm run worker:tail
 ```
 
 `GET /health` on the Worker uses `@pegma/health` (process + logging sink
