@@ -28,9 +28,22 @@ retiregolden.org, runs the stack on Azure).
   until their first exact public versions can replace the release boundary in
   `worker/src/identity-runtime.ts`.
 
+## Local development
+
+Stock Node 22/24 ships Corepack but not a `pnpm` shim.
+
+```sh
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run check
+pnpm test
+pnpm run build
+```
+
 ## Worker logging
 
 ```sh
+corepack enable
 pnpm install --frozen-lockfile
 pnpm run worker:deploy
 # optional Datadog arm:
