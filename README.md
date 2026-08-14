@@ -30,9 +30,11 @@ retiregolden.org, runs the stack on Azure).
 
 ## Local development
 
-Stock Node 22/24 ships Corepack but not a `pnpm` shim.
+Stock Node 22/24 ships Corepack but not a `pnpm` shim. Node 25+ does
+not bundle Corepack; install it first.
 
 ```sh
+npm install -g corepack
 corepack enable
 pnpm install --frozen-lockfile
 pnpm run check
@@ -43,6 +45,7 @@ pnpm run build
 ## Worker logging
 
 ```sh
+npm install -g corepack
 corepack enable
 pnpm install --frozen-lockfile
 pnpm run worker:deploy
