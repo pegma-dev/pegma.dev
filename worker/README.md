@@ -20,17 +20,17 @@ Workers Logs is enabled in `wrangler.jsonc` via:
 }
 ```
 
-Redeploy with `npm run worker:deploy`. Query logs in the dashboard under
-Workers → `pegma-dev-api` → Observability, or `npm run worker:tail`.
+Redeploy with `pnpm run worker:deploy`. Query logs in the dashboard under
+Workers → `pegma-dev-api` → Observability, or `pnpm run worker:tail`.
 
 ## Datadog arm
 
 Optional. Without `DATADOG_API_KEY`, only the Cloudflare sink runs.
 
 ```sh
-npx wrangler secret put DATADOG_API_KEY -c worker/wrangler.jsonc
+pnpm exec wrangler secret put DATADOG_API_KEY -c worker/wrangler.jsonc
 # optional site host (bare domain only; default is us5.datadoghq.com):
-npx wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
+pnpm exec wrangler secret put DATADOG_SITE -c worker/wrangler.jsonc
 # value: us5.datadoghq.com   (or datadoghq.eu — not a full URL)
 ```
 
@@ -38,7 +38,7 @@ CI deploys this Worker on push to main (before the Pages deploy) using the
 separate least-privileged `CLOUDFLARE_WORKER_API_TOKEN` repository secret
 (Worker script + `pegma.dev` route authority only; the Pages credential keeps
 no Worker authority). Do not substitute a broad personal OAuth token into
-GitHub. `npm run worker:deploy` from an authenticated operator session remains
+GitHub. `pnpm run worker:deploy` from an authenticated operator session remains
 the break-glass path.
 
 ## Identity composition
@@ -82,8 +82,8 @@ Set the stable email-code HMAC secret and optional Resend credential
 interactively; never commit either value:
 
 ```sh
-npx wrangler secret put IDENTITY_EMAIL_CODE_SECRET_BASE64 -c worker/wrangler.jsonc
-npx wrangler secret put RESEND_API_KEY -c worker/wrangler.jsonc
+pnpm exec wrangler secret put IDENTITY_EMAIL_CODE_SECRET_BASE64 -c worker/wrangler.jsonc
+pnpm exec wrangler secret put RESEND_API_KEY -c worker/wrangler.jsonc
 ```
 
 The first value is canonical base64 for 32–128 cryptographically random bytes
@@ -107,7 +107,7 @@ Use this activation sequence for a new environment or credential rotation:
 3. Put the key directly into the Worker:
 
    ```sh
-   npx wrangler secret put RESEND_API_KEY -c worker/wrangler.jsonc
+   pnpm exec wrangler secret put RESEND_API_KEY -c worker/wrangler.jsonc
    ```
 
 4. Send a provider smoke test from `Pegma <identity@pegma.dev>` to a real
@@ -229,7 +229,7 @@ See `docs/SUPPORT_COMPOSITION.md`.
 **Secret (never in git, Actions, Pages, health, or logs):**
 
 ```sh
-npx wrangler secret put GITHUB_WEBHOOK_SECRET -c worker/wrangler.jsonc
+pnpm exec wrangler secret put GITHUB_WEBHOOK_SECRET -c worker/wrangler.jsonc
 ```
 
 Use a high-entropy random value. GitHub organization webhooks expose one active

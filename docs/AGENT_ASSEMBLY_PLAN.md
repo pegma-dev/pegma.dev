@@ -27,7 +27,7 @@ what the Pegma stack already packages (typed, tested, pin-able components).
 | Catalog tool logic | `src/data/mcp-tools.ts` |
 | MCP Worker surface | `worker/src/mcp-server.ts` → `https://pegma.dev/api/mcp` |
 | Minimal CF scaffold | `recipes/scaffold-cf-minimal/` |
-| Offline assembly eval | `evals/assembly-eval.ts` (`npm run eval:assembly`) |
+| Offline assembly eval | `evals/assembly-eval.ts` (`pnpm run eval:assembly`) |
 
 **Goal:** An agent given a short product description chooses the right
 `@pegma/*` packages, respects their refusals, and wires them at an explicit
@@ -362,7 +362,7 @@ Shipped:
 | Catalog recipe | `static-brochure-minimal` (green scaffold citation) |
 | Eval cases | `evals/assembly-cases.ts` |
 | Eval runner | `evals/assembly-eval.ts` |
-| CI coverage | `evals/assembly-eval.test.ts` via `npm test` / `npm run eval:assembly` |
+| CI coverage | `evals/assembly-eval.test.ts` via `pnpm test` / `pnpm run eval:assembly` |
 
 The offline harness scores `plan_composition` over the **compiled** catalog
 against the prompt set. Offline baseline is a **no-catalog** empty plan

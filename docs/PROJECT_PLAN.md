@@ -168,7 +168,7 @@ Cloudflare Pages project, `pegma.dev` custom domain, GitHub integration or
 Actions deploy (SHA-pinned, per ecosystem standard).
 Exit: push-to-main publishes; the domain serves the site with an A grade on
 the obvious security headers. **Done:** project `pegma-dev`, deploys via
-plain `npx wrangler` in the SHA-pinned workflow (the CI token is scoped to
+plain `pnpm exec wrangler` in the SHA-pinned workflow (the CI token is scoped to
 Pages:Edit only — deliberately no Worker, D1, or DNS scope; the custom domain
 was attached in the dashboard); security headers served from
 `public/_headers`, CSP with same-origin scripts only; `www` 301s to the apex.
@@ -182,7 +182,7 @@ The Worker deploys from the same push-to-main workflow, ordered before the
 Pages deploy, using `CLOUDFLARE_WORKER_API_TOKEN` — a second, separately
 least-privileged GitHub credential with Worker script plus `pegma.dev` route
 authority only (the Pages token keeps no Worker authority). The broad local
-OAuth credential is never copied into GitHub; `npm run worker:deploy` from an
+OAuth credential is never copied into GitHub; `pnpm run worker:deploy` from an
 operator session remains available as a break-glass path.
 
 ### Phase 3 — the compiled roadmap ✓ (2026-07-27)
