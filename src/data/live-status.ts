@@ -59,16 +59,35 @@ export function planStage(repo: string, plan: string | undefined): Promise<strin
   return hit;
 }
 
-function statusFromStage(stage: string | null, fallback: ComponentStatus): ComponentStatus {
+/**
+ * True when a fetched Stage paragraph claims the packages are unpublished.
+ * Includes "Nothing is published" — that phrase is not a positive publish signal.
+ */
+export function stageClaimsUnpublished(stage: string | null): boolean {
+  if (!stage) return false;
+  return /\b(?:unpublished|not published|nothing is published)\b/.test(
+    stage.toLowerCase(),
+  );
+}
+
+/**
+ * Positive publish phrasing. "Nothing is published" must not match: the
+ * unpublished detector runs first, and `is published` also uses a lookbehind
+ * so a leftover `\bis published\b` cannot treat the negation as a publish.
+ */
+const PUBLISHED_SIGNAL =
+  /(?<!nothing )\b(?:is published|published as|published at|on npm|first public)\b/;
+
+export function statusFromStage(
+  stage: string | null,
+  fallback: ComponentStatus,
+): ComponentStatus {
   if (!stage) return fallback;
 
   const normalized = stage.toLowerCase();
-  const saysUnpublished = /\b(?:unpublished|not published)\b/.test(normalized);
+  const saysUnpublished = stageClaimsUnpublished(stage);
 
-  if (
-    !saysUnpublished &&
-    /\b(?:is published|published as|published at|on npm|first public)\b/.test(normalized)
-  ) {
+  if (!saysUnpublished && PUBLISHED_SIGNAL.test(normalized)) {
     return 'published';
   }
 

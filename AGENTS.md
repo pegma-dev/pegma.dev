@@ -52,6 +52,7 @@ Analytics (cookieless) or nothing.
 ## Reference points
 
 The plan is `docs/PROJECT_PLAN.md`. The ecosystem's repos (spine,
-storage-core, authorization-core, audit, webhooks, sessions, rate-limit,
-support-desk, mail, identity, logger-adapters) are the source of truth for
-everything the site says about them.
+storage-core, storage-blobs, cache-core, authorization-core, audit, webhooks,
+sessions, rate-limit, support-desk, mail, identity, billing-core, flags-core,
+logger-adapters) are the source of truth for everything the site says about
+them.

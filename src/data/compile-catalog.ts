@@ -12,7 +12,7 @@
 import { components, SNAPSHOT_DATE, type ComponentStatus } from './components';
 import { enrichmentFor } from './catalog-enrichment';
 import { RECIPE_BACKLOG } from './recipe-backlog';
-import { compileComponentStatus } from './live-status';
+import { compileComponentStatus, statusFromStage } from './live-status';
 import {
   CATALOG_SCHEMA_VERSION,
   type CatalogComponent,
@@ -130,12 +130,14 @@ export async function compileCompositionCatalog(
 
   const compiled =
     options.stageByRepo !== undefined
-      ? components.map((component) => ({
-          ...component,
-          stage: options.stageByRepo![component.repo] ?? null,
-          // Keep registry status when stages are injected (tests).
-          status: component.status,
-        }))
+      ? components.map((component) => {
+          const stage = options.stageByRepo![component.repo] ?? null;
+          return {
+            ...component,
+            stage,
+            status: statusFromStage(stage, component.status),
+          };
+        })
       : await Promise.all(components.map(compileComponentStatus));
   const catalogComponents: CatalogComponent[] = [];
 

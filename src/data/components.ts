@@ -3,6 +3,7 @@
  * snapshot. Build-time aggregation adds the Stage paragraph from each
  * repository's docs/PROJECT_PLAN.md when available; pages prefer that `stage`
  * field over `now`, so these facts stay useful during a fetch failure.
+ * Fetched plans win disagreements; do not discard a successful Stage fetch.
  */
 
 export type ComponentStatus = 'published' | 'in development' | 'planned';
@@ -26,7 +27,7 @@ export interface PegmaComponent {
   readonly plan?: string;
 }
 
-export const SNAPSHOT_DATE = '2026-07-29';
+export const SNAPSHOT_DATE = '2026-08-15';
 
 export const components: readonly PegmaComponent[] = [
   {
@@ -95,6 +96,36 @@ export const components: readonly PegmaComponent[] = [
       'Cross-object transactions or server-side query by metadata',
     ],
     now: '0.1.2 on npm with Azure Blob, R2, and S3 adapters; first consumer planned is Support Desk attachments.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
+  {
+    repo: 'cache-core',
+    title: 'Cache Core',
+    packages: [
+      '@pegma/cache-core',
+      '@pegma/cache-conformance',
+      '@pegma/cache-redis',
+      '@pegma/cache-azure-redis',
+      '@pegma/cache-elasticache',
+      '@pegma/cache-upstash-redis',
+    ],
+    status: 'published',
+    summary:
+      'A cache port and adapters: ephemeral getOrCompute, namespaced keys, clock-driven TTL.',
+    owns: [
+      'Strict key namespacing with schema-aware codecs (JSON and binary)',
+      'Cache-aside getOrCompute with single-flight coalescing and optional probabilistic early expiration (XFetch)',
+      'Sliding and absolute TTL via an injected Spine Clock',
+      'Fail-open / fail-closed fallback policies',
+      'A conformance suite every adapter must pass',
+    ],
+    refuses: [
+      'Durability guarantees — durable state belongs in @pegma/storage-core',
+      'Implicit cross-partition multi-key ops; Redis Cluster hash tags are in the contract',
+      'Unbounded local memory fallbacks when a remote cache is down',
+      'Vendor clients leaking into application code',
+    ],
+    now: '0.1.1 on npm with Redis, Azure Cache for Redis, ElastiCache, and Upstash adapters; 0.x API remains unstable.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -233,8 +264,8 @@ export const components: readonly PegmaComponent[] = [
   {
     repo: 'billing-core',
     title: 'Billing Core',
-    packages: ['@pegma/billing-core'],
-    status: 'planned',
+    packages: ['@pegma/billing-core', '@pegma/billing-stripe'],
+    status: 'published',
     summary:
       'A provider-agnostic subscription ledger, maintained correctly under out-of-order webhook delivery.',
     owns: [
@@ -247,7 +278,7 @@ export const components: readonly PegmaComponent[] = [
       'Entitlement resolution — what a subscription grants is Authorization Core’s job; this is what it is',
       'Card data, raw payloads, line items, amounts — the ledger stores identifiers and derived state only',
     ],
-    now: 'Plan published; extraction from the reference application’s production ledger is scheduled deliberately.',
+    now: '0.1.1 on npm with @pegma/billing-core and @pegma/billing-stripe; a subscription ledger, not a payment processor. 0.x API remains unstable.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
@@ -287,6 +318,39 @@ export const components: readonly PegmaComponent[] = [
       'Middleware and usage metering',
     ],
     now: '0.1.1 on npm; durable fixed-window policies are composed by the production Identity worker.',
+    plan: 'docs/PROJECT_PLAN.md',
+  },
+  {
+    repo: 'flags-core',
+    title: 'Flags Core',
+    packages: [
+      '@pegma/flags-contracts',
+      '@pegma/flags-core',
+      '@pegma/flags-static',
+      '@pegma/flags-azure-appconfig',
+      '@pegma/flags-aws-appconfig',
+      '@pegma/flags-cloudflare-flagship',
+      '@pegma/flags-flagd',
+      '@pegma/flags-launchdarkly',
+    ],
+    status: 'published',
+    summary:
+      'A flag port and adapters: typed evaluation, honest reasons, no authoring UI.',
+    owns: [
+      'Typed flag schema (declareFlags / flag.boolean|string|number|json)',
+      'Standardized EvaluationContext and EvaluationDetail',
+      'Local snapshot / TTL cache with stale-while-revalidate',
+      'A conformance suite every adapter must pass',
+      'Ports for Spine Logger, Clock, and a health probe helper',
+    ],
+    refuses: [
+      'Flag authoring or a control-plane UI (@pegma/flags-storage is not in scope)',
+      'A custom rule or expression language',
+      'Global singletons or ambient request context',
+      'Blocking synchronous network on the request path',
+      'Returning a default without a log line and an evaluation reason',
+    ],
+    now: '0.1.1 on npm with static, Azure App Configuration, AWS AppConfig, Cloudflare Flagship, flagd, and LaunchDarkly adapters; 0.x API remains unstable.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {
