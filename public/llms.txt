@@ -1,8 +1,8 @@
 # Pegma
 
 > An MIT-licensed family of composable backend components — storage,
-> authorization, identity, audit, webhooks, sessions, rate limiting, billing, mail,
-> a support desk —
+> authorization, identity, audit, webhooks, sessions, rate limiting, cache, flags,
+> billing, mail, a support desk —
 > designed to be assembled and maintained by AI agents. Early 0.x: some
 > packages published, none stable. npm scope: @pegma. GitHub: pegma-dev.
 
@@ -34,6 +34,12 @@ reference environment.
   conditional deletes, bounded authoritative scans, single-partition
   transactions, and a conformance suite adapters must pass against a real
   backend. Published as 0.4.0.
+- [Cache Core](https://github.com/pegma-dev/cache-core):
+  @pegma/cache-core, @pegma/cache-conformance, @pegma/cache-redis,
+  @pegma/cache-azure-redis, @pegma/cache-elasticache,
+  @pegma/cache-upstash-redis — a cache port and adapters: namespaced keys,
+  cache-aside getOrCompute, clock-driven TTL, conformance suite. Published
+  as 0.1.1; 0.x API remains unstable. Optional — not a store.
 - [Authorization Core](https://github.com/pegma-dev/authorization-core):
   @pegma/authorization-* (contracts, core, policy, auth0, stripe, storage,
   tokens, identity) — provider-neutral roles, entitlements, permissions,
@@ -59,18 +65,25 @@ reference environment.
   remains unstable.
 - [Rate Limit](https://github.com/pegma-dev/rate-limit): @pegma/rate-limit —
   an honest in-memory tier and a durable fail-closed tier. Published as 0.1.0.
+- [Flags Core](https://github.com/pegma-dev/flags-core):
+  @pegma/flags-contracts, @pegma/flags-core, @pegma/flags-static,
+  @pegma/flags-azure-appconfig, @pegma/flags-aws-appconfig,
+  @pegma/flags-cloudflare-flagship, @pegma/flags-flagd,
+  @pegma/flags-launchdarkly — a flag port and adapters: typed schema,
+  evaluation context, honest reasons, no authoring UI. Published as 0.1.1;
+  0.x API remains unstable. Optional.
 - [Identity](https://github.com/pegma-dev/identity): @pegma/identity —
   first-party identity: passkeys-first, email-code fallback, NO passwords
   (a refusal, not a phase); user records in the host's own storage. Published
   as 0.1.0 and composed by this site's Cloudflare Worker.
 - [Billing Core](https://github.com/pegma-dev/billing-core):
-  @pegma/billing-core — a provider-agnostic subscription ledger maintained
-  correctly under out-of-order webhook delivery: event-arbitration guard
-  (watermark + snapshot freshness bound + lifecycle-rank tie-breaking),
-  drift-repairing reconciliation, declared sticky/first-wins invariants,
-  single-opportunity checkout reservation. Never sees card data or raw
-  payloads. Planned; extraction from the reference application scheduled
-  deliberately.
+  @pegma/billing-core, @pegma/billing-stripe — a provider-agnostic
+  subscription ledger maintained correctly under out-of-order webhook
+  delivery: event-arbitration guard (watermark + snapshot freshness bound +
+  lifecycle-rank tie-breaking), drift-repairing reconciliation, declared
+  sticky/first-wins invariants, single-opportunity checkout reservation.
+  Never sees card data or raw payloads. Not a payment processor. Published
+  as 0.1.1; 0.x API remains unstable. Optional.
 - [Mail](https://github.com/pegma-dev/mail): @pegma/mail — transactional
   mail: provider ports and an outbox pattern that owns NO store (jobs
   commit in the caller's transaction, the audit precedent). Published as

@@ -59,11 +59,23 @@ export function planStage(repo: string, plan: string | undefined): Promise<strin
   return hit;
 }
 
+/** True when a fetched Stage paragraph still claims the packages are unpublished. */
+export function stageClaimsUnpublished(stage: string | null): boolean {
+  if (!stage) return false;
+  return /\b(?:unpublished|not published)\b/.test(stage.toLowerCase());
+}
+
 function statusFromStage(stage: string | null, fallback: ComponentStatus): ComponentStatus {
   if (!stage) return fallback;
 
+  // Dated registry already records a publish; a Stage line that still says
+  // unpublished is stale (plans update in their own repos). Do not downgrade.
+  if (stageClaimsUnpublished(stage) && fallback === 'published') {
+    return 'published';
+  }
+
   const normalized = stage.toLowerCase();
-  const saysUnpublished = /\b(?:unpublished|not published)\b/.test(normalized);
+  const saysUnpublished = stageClaimsUnpublished(stage);
 
   if (
     !saysUnpublished &&
@@ -79,13 +91,30 @@ function statusFromStage(stage: string | null, fallback: ComponentStatus): Compo
   return fallback;
 }
 
+/**
+ * Combine a fetched Stage paragraph with the dated registry snapshot.
+ * When the snapshot is `published` and the plan still says unpublished,
+ * drop the Stage text so pages fall back to the snapshot `now` line.
+ */
+export function resolveCompiledStage(
+  snapshotStatus: ComponentStatus,
+  stage: string | null,
+): { readonly status: ComponentStatus; readonly stage: string | null } {
+  const status = statusFromStage(stage, snapshotStatus);
+  if (stageClaimsUnpublished(stage) && snapshotStatus === 'published') {
+    return { status: 'published', stage: null };
+  }
+  return { status, stage };
+}
+
 export async function compileComponentStatus(
   component: PegmaComponent,
 ): Promise<PegmaComponent & { readonly stage: string | null }> {
-  const stage = await planStage(component.repo, component.plan);
+  const fetched = await planStage(component.repo, component.plan);
+  const { status, stage } = resolveCompiledStage(component.status, fetched);
   return {
     ...component,
     stage,
-    status: statusFromStage(stage, component.status),
+    status,
   };
 }

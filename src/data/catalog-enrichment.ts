@@ -90,6 +90,48 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
     // Distinct from record `storage` so generic storage plans do not pull R2/Blob.
     capabilityTags: ['storage_blobs', 'cloudflare', 'azure'],
   },
+  'cache-core': {
+    dependencies: [
+      { componentId: 'spine', kind: 'requires', note: 'Injected Clock and Logger' },
+    ],
+    adapters: [
+      {
+        id: 'memory',
+        packageName: '@pegma/cache-core',
+        host: 'memory',
+        when: 'Tests and local sketches; not a durability claim',
+      },
+      {
+        id: 'redis',
+        packageName: '@pegma/cache-redis',
+        host: 'other',
+        when: 'Generic Redis (ioredis) behind the cache port',
+      },
+      {
+        id: 'azure-redis',
+        packageName: '@pegma/cache-azure-redis',
+        host: 'azure',
+        when: 'Azure Cache for Redis; thin composition of cache-redis',
+      },
+      {
+        id: 'elasticache',
+        packageName: '@pegma/cache-elasticache',
+        host: 'other',
+        when: 'Amazon ElastiCache; thin composition of cache-redis',
+      },
+      {
+        id: 'upstash-redis',
+        packageName: '@pegma/cache-upstash-redis',
+        host: 'other',
+        when: 'Upstash Redis REST client behind the same port',
+      },
+    ],
+    hostMustProvide: [
+      'Chosen adapter binding (Redis URL, Azure cache, ElastiCache, Upstash, or memory)',
+      'Explicit fail-open vs fail-closed policy — fail-open computes, it does not accumulate',
+    ],
+    capabilityTags: ['cache', 'azure'],
+  },
   'authorization-core': {
     dependencies: [
       { componentId: 'spine', kind: 'requires' },
@@ -176,6 +218,40 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
     ],
     capabilityTags: ['mail_transactional'],
   },
+  'billing-core': {
+    dependencies: [
+      { componentId: 'spine', kind: 'requires' },
+      {
+        componentId: 'storage-core',
+        kind: 'requires',
+        note: 'Ledger collections over an injected Store',
+      },
+      {
+        componentId: 'webhooks',
+        kind: 'composes_with',
+        note: 'Receipt dedup; this ledger owns ordering, not delivery identity',
+      },
+      {
+        componentId: 'authorization-core',
+        kind: 'composes_with',
+        note: 'What a subscription grants is Authorization Core; this is what it is',
+      },
+    ],
+    adapters: [
+      {
+        id: 'stripe',
+        packageName: '@pegma/billing-stripe',
+        host: 'other',
+        when: 'Stripe event and subscription snapshot translation; host verifies signatures',
+      },
+    ],
+    hostMustProvide: [
+      'Storage binding for the ledger',
+      'Provider checkout/portal flows — this package is not a payment processor',
+      'Webhook authenticity (signature verification stays with the host)',
+    ],
+    capabilityTags: ['billing'],
+  },
   identity: {
     dependencies: [
       { componentId: 'spine', kind: 'requires' },
@@ -224,6 +300,55 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
       'Storage binding when using the durable tier',
     ],
     capabilityTags: ['rate_limit_durable', 'rate_limit_memory'],
+  },
+  'flags-core': {
+    dependencies: [
+      { componentId: 'spine', kind: 'requires', note: 'Injected Clock and Logger' },
+    ],
+    adapters: [
+      {
+        id: 'static',
+        packageName: '@pegma/flags-static',
+        host: 'memory',
+        when: 'Tests and local development; in-memory map, not a control plane',
+      },
+      {
+        id: 'azure-appconfig',
+        packageName: '@pegma/flags-azure-appconfig',
+        host: 'azure',
+        when: 'Azure App Configuration; adapter translates, does not evaluate targeting rules',
+      },
+      {
+        id: 'aws-appconfig',
+        packageName: '@pegma/flags-aws-appconfig',
+        host: 'other',
+        when: 'AWS AppConfig; already-evaluated values only',
+      },
+      {
+        id: 'cloudflare-flagship',
+        packageName: '@pegma/flags-cloudflare-flagship',
+        host: 'cloudflare',
+        when: 'Cloudflare Flagship; already-evaluated *Details results',
+      },
+      {
+        id: 'flagd',
+        packageName: '@pegma/flags-flagd',
+        host: 'other',
+        when: 'flagd / OpenFeature detail translation',
+      },
+      {
+        id: 'launchdarkly',
+        packageName: '@pegma/flags-launchdarkly',
+        host: 'other',
+        when: 'LaunchDarkly adapter; no vendor SDK in application code',
+      },
+    ],
+    hostMustProvide: [
+      'A constructed client at the composition root — no ambient getClient()',
+      'EvaluationContext (targeting key; optional principal, tenant, environment)',
+      'Chosen provider adapter; the provider owns targeting rules',
+    ],
+    capabilityTags: ['flags', 'cloudflare', 'azure'],
   },
   'logger-adapters': {
     dependencies: [

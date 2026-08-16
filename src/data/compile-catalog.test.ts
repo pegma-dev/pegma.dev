@@ -4,7 +4,7 @@ import {
   compileCompositionCatalog,
 } from './compile-catalog';
 import { CATALOG_SCHEMA_VERSION } from './catalog-schema';
-import { components } from './components';
+import { components, SNAPSHOT_DATE } from './components';
 import { RECIPE_BACKLOG } from './recipe-backlog';
 
 const FIXED_AT = '2026-07-29T00:00:00.000Z';
@@ -31,6 +31,41 @@ function compile(npm: Record<string, string | null>) {
 }
 
 describe('compileCompositionCatalog', () => {
+  it('lists sixteen registry components including published cache, flags, and billing', () => {
+    expect(SNAPSHOT_DATE).toBe('2026-08-15');
+    expect(components).toHaveLength(16);
+    const byRepo = Object.fromEntries(components.map((c) => [c.repo, c]));
+    expect(byRepo['cache-core']?.status).toBe('published');
+    expect(byRepo['cache-core']?.packages).toEqual([
+      '@pegma/cache-core',
+      '@pegma/cache-conformance',
+      '@pegma/cache-redis',
+      '@pegma/cache-azure-redis',
+      '@pegma/cache-elasticache',
+      '@pegma/cache-upstash-redis',
+    ]);
+    expect(byRepo['flags-core']?.status).toBe('published');
+    expect(byRepo['flags-core']?.packages).toEqual([
+      '@pegma/flags-contracts',
+      '@pegma/flags-core',
+      '@pegma/flags-static',
+      '@pegma/flags-azure-appconfig',
+      '@pegma/flags-aws-appconfig',
+      '@pegma/flags-cloudflare-flagship',
+      '@pegma/flags-flagd',
+      '@pegma/flags-launchdarkly',
+    ]);
+    expect(byRepo['billing-core']?.status).toBe('published');
+    expect(byRepo['billing-core']?.packages).toEqual([
+      '@pegma/billing-core',
+      '@pegma/billing-stripe',
+    ]);
+    expect(byRepo['billing-core']?.now).toMatch(/0\.1\.1/);
+    expect(byRepo['billing-core']?.now).not.toMatch(/unpublished|nothing extracted|planned/i);
+    expect(byRepo['cache-core']?.now).not.toMatch(/unpublished/i);
+    expect(byRepo['flags-core']?.now).not.toMatch(/unpublished/i);
+  });
+
   it('emits schema 0.1.0 with one entry per registry component', async () => {
     clearNpmVersionCache();
     const catalog = await compile({
@@ -137,5 +172,80 @@ describe('compileCompositionCatalog', () => {
       expect.arrayContaining(['memory', 'azure-tables', 'cloudflare-d1']),
     );
     expect(storage.capabilityTags).toContain('storage');
+  });
+
+  it('drops stale unpublished Stage text when the snapshot is already published', async () => {
+    clearNpmVersionCache();
+    const catalog = await compileCompositionCatalog({
+      generatedAt: FIXED_AT,
+      stageByRepo: {
+        ...NO_STAGES,
+        'cache-core':
+          'Phase 5 — Upstash Redis adapter, in-tree, unpublished. Packages are 0.1.1 and not published.',
+        'flags-core':
+          'Phase 3 vendor adapters implemented in-tree; unpublished. Public API unstable (0.x).',
+        'billing-core':
+          'Phase 4 — Stripe adapter in-tree. Nothing is published. (0.1.1, unpublished.)',
+      },
+      npmLookup: fakeNpm({
+        '@pegma/cache-core': '0.1.1',
+        '@pegma/cache-conformance': '0.1.1',
+        '@pegma/cache-redis': '0.1.1',
+        '@pegma/cache-azure-redis': '0.1.1',
+        '@pegma/cache-elasticache': '0.1.1',
+        '@pegma/cache-upstash-redis': '0.1.1',
+        '@pegma/flags-contracts': '0.1.1',
+        '@pegma/flags-core': '0.1.1',
+        '@pegma/flags-static': '0.1.1',
+        '@pegma/flags-azure-appconfig': '0.1.1',
+        '@pegma/flags-aws-appconfig': '0.1.1',
+        '@pegma/flags-cloudflare-flagship': '0.1.1',
+        '@pegma/flags-flagd': '0.1.1',
+        '@pegma/flags-launchdarkly': '0.1.1',
+        '@pegma/billing-core': '0.1.1',
+        '@pegma/billing-stripe': '0.1.1',
+      }),
+    });
+
+    expect(catalog.snapshotDate).toBe('2026-08-15');
+    expect(catalog.components).toHaveLength(16);
+
+    for (const id of ['cache-core', 'flags-core', 'billing-core'] as const) {
+      const entry = catalog.components.find((c) => c.id === id)!;
+      expect(entry.status).toBe('published');
+      expect(entry.stage).toBeUndefined();
+      expect(entry.now).toBeDefined();
+      expect(entry.now).not.toMatch(/unpublished/i);
+      expect(entry.publishUsability).toBe('usable');
+      expect(entry.packages.every((p) => p.published && p.version === '0.1.1')).toBe(
+        true,
+      );
+    }
+
+    const billing = catalog.components.find((c) => c.id === 'billing-core')!;
+    expect(billing.packages.map((p) => p.name)).toEqual([
+      '@pegma/billing-core',
+      '@pegma/billing-stripe',
+    ]);
+    expect(billing.capabilityTags).toContain('billing');
+
+    const cache = catalog.components.find((c) => c.id === 'cache-core')!;
+    expect(cache.adapters.map((a) => a.id)).toEqual(
+      expect.arrayContaining(['memory', 'redis', 'azure-redis', 'elasticache', 'upstash-redis']),
+    );
+    expect(cache.capabilityTags).toContain('cache');
+
+    const flags = catalog.components.find((c) => c.id === 'flags-core')!;
+    expect(flags.adapters.map((a) => a.id)).toEqual(
+      expect.arrayContaining([
+        'static',
+        'azure-appconfig',
+        'aws-appconfig',
+        'cloudflare-flagship',
+        'flagd',
+        'launchdarkly',
+      ]),
+    );
+    expect(flags.capabilityTags).toContain('flags');
   });
 });

@@ -56,6 +56,9 @@ export type CapabilityTag =
   | 'storage'
   /** Opaque object/blob bytes (storage-blobs); distinct from record storage. */
   | 'storage_blobs'
+  | 'cache'
+  | 'flags'
+  | 'billing'
   | 'audit'
   | 'mail_transactional'
   | 'rate_limit_durable'
