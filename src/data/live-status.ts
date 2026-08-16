@@ -59,28 +59,35 @@ export function planStage(repo: string, plan: string | undefined): Promise<strin
   return hit;
 }
 
-/** True when a fetched Stage paragraph still claims the packages are unpublished. */
+/**
+ * True when a fetched Stage paragraph claims the packages are unpublished.
+ * Includes "Nothing is published" — that phrase is not a positive publish signal.
+ */
 export function stageClaimsUnpublished(stage: string | null): boolean {
   if (!stage) return false;
-  return /\b(?:unpublished|not published)\b/.test(stage.toLowerCase());
+  return /\b(?:unpublished|not published|nothing is published)\b/.test(
+    stage.toLowerCase(),
+  );
 }
 
-function statusFromStage(stage: string | null, fallback: ComponentStatus): ComponentStatus {
-  if (!stage) return fallback;
+/**
+ * Positive publish phrasing. "Nothing is published" must not match: the
+ * unpublished detector runs first, and `is published` also uses a lookbehind
+ * so a leftover `\bis published\b` cannot treat the negation as a publish.
+ */
+const PUBLISHED_SIGNAL =
+  /(?<!nothing )\b(?:is published|published as|published at|on npm|first public)\b/;
 
-  // Dated registry already records a publish; a Stage line that still says
-  // unpublished is stale (plans update in their own repos). Do not downgrade.
-  if (stageClaimsUnpublished(stage) && fallback === 'published') {
-    return 'published';
-  }
+export function statusFromStage(
+  stage: string | null,
+  fallback: ComponentStatus,
+): ComponentStatus {
+  if (!stage) return fallback;
 
   const normalized = stage.toLowerCase();
   const saysUnpublished = stageClaimsUnpublished(stage);
 
-  if (
-    !saysUnpublished &&
-    /\b(?:is published|published as|published at|on npm|first public)\b/.test(normalized)
-  ) {
+  if (!saysUnpublished && PUBLISHED_SIGNAL.test(normalized)) {
     return 'published';
   }
 
@@ -91,30 +98,13 @@ function statusFromStage(stage: string | null, fallback: ComponentStatus): Compo
   return fallback;
 }
 
-/**
- * Combine a fetched Stage paragraph with the dated registry snapshot.
- * When the snapshot is `published` and the plan still says unpublished,
- * drop the Stage text so pages fall back to the snapshot `now` line.
- */
-export function resolveCompiledStage(
-  snapshotStatus: ComponentStatus,
-  stage: string | null,
-): { readonly status: ComponentStatus; readonly stage: string | null } {
-  const status = statusFromStage(stage, snapshotStatus);
-  if (stageClaimsUnpublished(stage) && snapshotStatus === 'published') {
-    return { status: 'published', stage: null };
-  }
-  return { status, stage };
-}
-
 export async function compileComponentStatus(
   component: PegmaComponent,
 ): Promise<PegmaComponent & { readonly stage: string | null }> {
-  const fetched = await planStage(component.repo, component.plan);
-  const { status, stage } = resolveCompiledStage(component.status, fetched);
+  const stage = await planStage(component.repo, component.plan);
   return {
     ...component,
     stage,
-    status,
+    status: statusFromStage(stage, component.status),
   };
 }

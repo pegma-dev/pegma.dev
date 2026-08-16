@@ -12,7 +12,7 @@
 import { components, SNAPSHOT_DATE, type ComponentStatus } from './components';
 import { enrichmentFor } from './catalog-enrichment';
 import { RECIPE_BACKLOG } from './recipe-backlog';
-import { compileComponentStatus, resolveCompiledStage } from './live-status';
+import { compileComponentStatus, statusFromStage } from './live-status';
 import {
   CATALOG_SCHEMA_VERSION,
   type CatalogComponent,
@@ -131,11 +131,12 @@ export async function compileCompositionCatalog(
   const compiled =
     options.stageByRepo !== undefined
       ? components.map((component) => {
-          const { status, stage } = resolveCompiledStage(
-            component.status,
-            options.stageByRepo![component.repo] ?? null,
-          );
-          return { ...component, stage, status };
+          const stage = options.stageByRepo![component.repo] ?? null;
+          return {
+            ...component,
+            stage,
+            status: statusFromStage(stage, component.status),
+          };
         })
       : await Promise.all(components.map(compileComponentStatus));
   const catalogComponents: CatalogComponent[] = [];

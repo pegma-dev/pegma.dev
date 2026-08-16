@@ -3,11 +3,7 @@
  * snapshot. Build-time aggregation adds the Stage paragraph from each
  * repository's docs/PROJECT_PLAN.md when available; pages prefer that `stage`
  * field over `now`, so these facts stay useful during a fetch failure.
- *
- * Exception: when this snapshot marks a component `published` and the fetched
- * Stage line still says unpublished, compile drops the Stage text and keeps
- * the snapshot `now` (cache-core, flags-core, and billing-core until those
- * plans are updated).
+ * Fetched plans win disagreements; do not discard a successful Stage fetch.
  */
 
 export type ComponentStatus = 'published' | 'in development' | 'planned';

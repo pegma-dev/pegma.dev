@@ -174,18 +174,21 @@ describe('compileCompositionCatalog', () => {
     expect(storage.capabilityTags).toContain('storage');
   });
 
-  it('drops stale unpublished Stage text when the snapshot is already published', async () => {
+  it('keeps a fetched unpublished Stage paragraph instead of forcing the snapshot', async () => {
     clearNpmVersionCache();
+    const cacheStage =
+      'Phase 5 — Upstash Redis adapter, in-tree, unpublished. Packages are 0.1.1 and not published.';
+    const flagsStage =
+      'Phase 3 vendor adapters implemented in-tree; unpublished. Public API unstable (0.x).';
+    const billingStage =
+      'Phase 4 — Stripe adapter in-tree. Nothing is published. (0.1.1, unpublished.)';
     const catalog = await compileCompositionCatalog({
       generatedAt: FIXED_AT,
       stageByRepo: {
         ...NO_STAGES,
-        'cache-core':
-          'Phase 5 — Upstash Redis adapter, in-tree, unpublished. Packages are 0.1.1 and not published.',
-        'flags-core':
-          'Phase 3 vendor adapters implemented in-tree; unpublished. Public API unstable (0.x).',
-        'billing-core':
-          'Phase 4 — Stripe adapter in-tree. Nothing is published. (0.1.1, unpublished.)',
+        'cache-core': cacheStage,
+        'flags-core': flagsStage,
+        'billing-core': billingStage,
       },
       npmLookup: fakeNpm({
         '@pegma/cache-core': '0.1.1',
@@ -210,32 +213,26 @@ describe('compileCompositionCatalog', () => {
     expect(catalog.snapshotDate).toBe('2026-08-15');
     expect(catalog.components).toHaveLength(16);
 
-    for (const id of ['cache-core', 'flags-core', 'billing-core'] as const) {
-      const entry = catalog.components.find((c) => c.id === id)!;
-      expect(entry.status).toBe('published');
-      expect(entry.stage).toBeUndefined();
-      expect(entry.now).toBeDefined();
-      expect(entry.now).not.toMatch(/unpublished/i);
-      expect(entry.publishUsability).toBe('usable');
-      expect(entry.packages.every((p) => p.published && p.version === '0.1.1')).toBe(
-        true,
-      );
-    }
-
+    const cache = catalog.components.find((c) => c.id === 'cache-core')!;
+    const flags = catalog.components.find((c) => c.id === 'flags-core')!;
     const billing = catalog.components.find((c) => c.id === 'billing-core')!;
+
+    expect(cache.stage).toBe(cacheStage);
+    expect(flags.stage).toBe(flagsStage);
+    expect(billing.stage).toBe(billingStage);
+    expect(cache.status).toBe('in_development');
+    expect(flags.status).toBe('in_development');
+    expect(billing.status).toBe('in_development');
+    expect(billing.publishUsability).toBe('usable');
     expect(billing.packages.map((p) => p.name)).toEqual([
       '@pegma/billing-core',
       '@pegma/billing-stripe',
     ]);
     expect(billing.capabilityTags).toContain('billing');
-
-    const cache = catalog.components.find((c) => c.id === 'cache-core')!;
     expect(cache.adapters.map((a) => a.id)).toEqual(
       expect.arrayContaining(['memory', 'redis', 'azure-redis', 'elasticache', 'upstash-redis']),
     );
     expect(cache.capabilityTags).toContain('cache');
-
-    const flags = catalog.components.find((c) => c.id === 'flags-core')!;
     expect(flags.adapters.map((a) => a.id)).toEqual(
       expect.arrayContaining([
         'static',
