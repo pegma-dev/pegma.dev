@@ -21,27 +21,28 @@ const EVAL_NPM: Record<string, string | null> = {
   '@pegma/spine': '0.1.1',
   '@pegma/storage-core': '0.4.0',
   '@pegma/storage-azure-tables': '0.4.0',
-  '@pegma/storage-cloudflare-d1': '0.4.0',
+  '@pegma/storage-cloudflare-d1': '0.4.1',
   '@pegma/storage-blobs': '0.1.0',
   '@pegma/storage-azure-blob': '0.1.0',
   '@pegma/storage-cloudflare-r2': '0.1.0',
   '@pegma/storage-s3': '0.1.0',
-  '@pegma/authorization-contracts': '0.1.2',
-  '@pegma/authorization-core': '0.1.2',
-  '@pegma/authorization-policy': '0.1.2',
-  '@pegma/authorization-auth0': '0.1.2',
-  '@pegma/authorization-stripe': '0.1.2',
-  '@pegma/authorization-storage': '0.1.2',
-  '@pegma/authorization-tokens': '0.1.2',
-  '@pegma/authorization-identity': '0.1.2',
-  '@pegma/audit': '0.1.0',
-  '@pegma/support-desk-contracts': '0.1.0',
-  '@pegma/support-desk-core': '0.1.0',
-  '@pegma/support-desk-application': '0.1.0',
-  '@pegma/support-desk-templates': '0.1.0',
-  '@pegma/webhooks': '0.1.0',
-  '@pegma/sessions': '0.1.0',
-  '@pegma/mail': '0.1.0',
+  '@pegma/authorization-contracts': '0.4.0',
+  '@pegma/authorization-core': '0.4.0',
+  '@pegma/authorization-policy': '0.4.0',
+  '@pegma/authorization-auth0': '0.4.0',
+  '@pegma/authorization-entra': '0.4.0',
+  '@pegma/authorization-stripe': '0.4.0',
+  '@pegma/authorization-storage': '0.4.0',
+  '@pegma/authorization-tokens': '0.4.0',
+  '@pegma/authorization-identity': '0.4.0',
+  '@pegma/audit': '0.2.0',
+  '@pegma/support-desk-contracts': '0.1.1',
+  '@pegma/support-desk-core': '0.1.1',
+  '@pegma/support-desk-application': '0.1.1',
+  '@pegma/support-desk-templates': '0.1.1',
+  '@pegma/webhooks': '0.1.1',
+  '@pegma/sessions': '0.2.0',
+  '@pegma/mail': '0.1.1',
   '@pegma/billing-core': '0.1.1',
   '@pegma/billing-stripe': '0.1.1',
   '@pegma/cache-core': '0.1.1',
@@ -58,13 +59,13 @@ const EVAL_NPM: Record<string, string | null> = {
   '@pegma/flags-cloudflare-flagship': '0.1.1',
   '@pegma/flags-flagd': '0.1.1',
   '@pegma/flags-launchdarkly': '0.1.1',
-  '@pegma/identity': '0.1.0',
-  '@pegma/rate-limit': '0.1.0',
+  '@pegma/identity': '0.1.2',
+  '@pegma/rate-limit': '0.2.0',
   '@pegma/logger-tee': '0.1.1',
   '@pegma/logger-applicationinsights': '0.1.1',
   '@pegma/logger-cloudflare': '0.1.1',
   '@pegma/logger-datadog': '0.1.1',
-  '@pegma/health': '0.1.1',
+  '@pegma/health': '0.2.0',
 };
 
 async function compileEvalCatalog(): Promise<CompositionCatalog> {
@@ -93,6 +94,7 @@ describe('assembly eval harness (Phase 5)', () => {
         'no-passwords',
         'passkey-accounts-workers',
         'static-brochure',
+        'support-desk-email-code',
       ].sort(),
     );
   });
@@ -116,6 +118,7 @@ describe('assembly eval harness (Phase 5)', () => {
     expect(byId['passkey-accounts-workers']?.pass).toBe(false);
     expect(byId['health-endpoint-only']?.pass).toBe(false);
     expect(byId['no-passwords']?.pass).toBe(false);
+    expect(byId['support-desk-email-code']?.pass).toBe(false);
     expect(report.passRate).toBeGreaterThan(0);
     expect(report.passRate).toBeLessThan(1);
   });
