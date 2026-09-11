@@ -138,6 +138,12 @@ describe('compileCompositionCatalog', () => {
     expect(outbox.fixture.citation).toContain(
       'recipes/storage-audit-mail-outbox',
     );
+    const bench = catalog.recipes.find((r) => r.id === 'support-queue-slice')!;
+    expect(bench.fixture).toMatchObject({
+      kind: 'recipe_package',
+      status: 'green',
+    });
+    expect(bench.fixture.citation).toContain('recipes/bench-ticket');
     for (const recipe of catalog.recipes) {
       expect(recipe.intent).not.toMatch(/retiregolden/i);
     }
@@ -152,6 +158,7 @@ describe('compileCompositionCatalog', () => {
       'cf-passkey-accounts',
       'storage-audit-mail-outbox',
       'static-brochure-minimal',
+      'support-queue-slice',
     ]);
     const pendingOrNone = catalog.recipes.filter((r) => !greenIds.has(r.id));
     for (const recipe of pendingOrNone) {
@@ -169,7 +176,12 @@ describe('compileCompositionCatalog', () => {
     const storage = catalog.components.find((c) => c.id === 'storage-core')!;
     expect(storage.dependencies.some((d) => d.componentId === 'spine')).toBe(true);
     expect(storage.adapters.map((a) => a.id)).toEqual(
-      expect.arrayContaining(['memory', 'azure-tables', 'cloudflare-d1']),
+      expect.arrayContaining([
+        'memory',
+        'azure-tables',
+        'cloudflare-d1',
+        'dynamodb',
+      ]),
     );
     expect(storage.capabilityTags).toContain('storage');
   });

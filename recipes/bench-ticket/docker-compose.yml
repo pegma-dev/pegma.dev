@@ -1,0 +1,36 @@
+name: bench-ticket
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: recipes/bench-ticket/Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      BENCH_TICKET_ORIGIN: http://localhost:8787
+      BENCH_TICKET_MAIL_CATCHER: mailpit
+      MAILPIT_SMTP_HOST: mailpit
+      MAILPIT_SMTP_PORT: "1025"
+      BENCH_TICKET_EMAIL_FROM: bench-ticket@localhost
+      # 32 bytes of 0x0b, base64. Local demo only — never reuse in a cloud deploy.
+      BENCH_TICKET_EMAIL_CODE_SECRET_BASE64: CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws=
+    depends_on:
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "8025:8025"
+      - "1025:1025"

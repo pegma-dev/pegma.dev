@@ -84,6 +84,20 @@ deferred).
 | **capabilityTags** | `static_host` only (not bare `cloudflare` — host-tag alone must not select this scaffold) |
 | **Fixture** | green — [`recipes/scaffold-cf-minimal/`](../../recipes/scaffold-cf-minimal/) |
 
+### P7 — `support-queue-slice` (Bench Ticket)
+
+| | |
+| --- | --- |
+| **Intent** | A fictional makerspace helpdesk (“Bench Ticket”) runs a small support-desk site with first-party email-code login, sessions, mail to a catcher, and ticket create/list/reply. |
+| **Packages (published)** | `@pegma/identity`, `@pegma/sessions`, `@pegma/mail`, `@pegma/rate-limit`, `@pegma/health`, `@pegma/support-desk-*`, `@pegma/storage-core`, `@pegma/spine` |
+| **Adapters** | memory (local Docker); `storage-cloudflare-d1`; `storage-azure-tables`; forthcoming `storage-dynamodb` |
+| **Host must provide** | HTTP, cookies, injected Store, mail catcher, email-code secret |
+| **Non-goals** | Auth0/Entra/Cognito, Stripe, production email, passkeys-required login |
+| **Anti-patterns** | Treating Support Desk as hosted SaaS; giving Audit/Mail their own store |
+| **requiresPublished** | identity, sessions, mail, rate-limit, health, support-desk, storage-core, spine, authorization-core |
+| **Fixture** | green — [`recipes/bench-ticket/`](../../recipes/bench-ticket/) |
+| **Runbooks** | `/runbooks` (Local Docker, Cloudflare, Azure, AWS) |
+
 ## Deferred (missing package or fixture)
 
 Do not offer for production assembly until required packages are on npm and a
@@ -96,14 +110,6 @@ CI-tested fixture is green.
 | **Intent** | A fictional donation platform (“Copper Plate”) records inbound provider webhook receipts with idempotent dedup, poison quarantine, and retention — receipts hold ids and counters, never payloads. |
 | **Blocks** | CI-tested synthetic fixture not yet built |
 | **Anti-patterns** | Exactly-once claims; storing full payloads in the receipt ledger; ordering guarantees |
-
-### D2 — `support-queue-slice` (when Support Desk packages are published)
-
-| | |
-| --- | --- |
-| **Intent** | A fictional maker-space helpdesk (“Bench Ticket”) runs a composable support queue for web and email with permission-checked agents and outbox-backed mail. |
-| **Blocks** | support-desk packages unpublished |
-| **Anti-patterns** | Treating Support Desk as hosted SaaS; AI on ticket bodies before the host documents egress |
 
 ## Explicitly out of backlog (non-goals)
 

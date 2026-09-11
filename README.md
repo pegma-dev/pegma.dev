@@ -27,6 +27,9 @@ retiregolden.org, runs the stack on Azure).
   Identity and its Authorization adapter remain fail-closed injected ports
   until their first exact public versions can replace the release boundary in
   `worker/src/identity-runtime.ts`.
+- **Environment runbooks** for a synthetic Bench Ticket demo (email-code
+  identity, sessions, mail catcher, support desk, health):
+  [https://pegma.dev/runbooks](https://pegma.dev/runbooks).
 
 ## Local development
 

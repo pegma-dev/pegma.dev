@@ -3,6 +3,7 @@ import Base from '../layouts/Base.astro';
 import { RECIPE_BACKLOG } from '../data/recipe-backlog';
 import northshelfComposition from '../../recipes/cf-passkey-accounts/composition.ts?raw';
 import yardLoanComposition from '../../recipes/storage-audit-mail-outbox/composition.ts?raw';
+import benchTicketComposition from '../../recipes/bench-ticket/composition.ts?raw';
 
 /* Examples are LIFTED FROM REAL CODE, per the site's hard rule — each block
    cites its source. Do not invent example code for this page. */
@@ -129,6 +130,10 @@ const yardLoanExcerpt = excerptFunction(
   yardLoanComposition,
   'checkoutEquipment',
 );
+const benchTicketExcerpt = excerptFunction(
+  benchTicketComposition,
+  'createBenchTicketComposition',
+);
 
 const greenRecipes = RECIPE_BACKLOG.filter((r) => r.fixture.status === 'green');
 const pendingRecipes = RECIPE_BACKLOG.filter(
@@ -154,7 +159,9 @@ const pendingRecipes = RECIPE_BACKLOG.filter(
       <a href="/catalog.json"><code>catalog.json</code></a>. Agents should fetch the
       catalog rather than inventing package sets — these examples assume your agent
       has the assembly skill and catalog installed;
-      the <a href="/start">get-started page</a> covers that setup.
+      the <a href="/start">get-started page</a> covers that setup. One-shot
+      environment runbooks for the Bench Ticket demo live
+      at <a href="/runbooks">/runbooks</a>.
     </p>
   </section>
 
@@ -228,6 +235,25 @@ const pendingRecipes = RECIPE_BACKLOG.filter(
       <a
         href="https://github.com/pegma-dev/pegma.dev/blob/main/recipes/storage-audit-mail-outbox/composition.ts"
         >recipes/storage-audit-mail-outbox/composition.ts</a
+      >
+    </p>
+  </section>
+
+  <section class="example" id="support-queue-slice">
+    <h2>Support desk with email-code login</h2>
+    <p>
+      <strong>Bench Ticket</strong> (synthetic): first-party Identity email-code
+      (not Auth0/Entra/passkeys-required), Sessions, Support Desk create/list/reply,
+      Health, and mail to a catcher. Tests inject memory; environment runbooks
+      inject D1, Azure Tables, or <code>@pegma/storage-dynamodb</code> (requires
+      the storage-core adapter PR to be merged).
+      See <a href="/runbooks">environment runbooks</a>.
+    </p>
+    <pre><code>{benchTicketExcerpt}</code></pre>
+    <p class="source">
+      Source:{' '}
+      <a href="https://github.com/pegma-dev/pegma.dev/blob/main/recipes/bench-ticket/composition.ts"
+        >recipes/bench-ticket/composition.ts</a
       >
     </p>
   </section>

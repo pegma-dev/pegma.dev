@@ -11,5 +11,6 @@
     "isolatedModules": true,
     "types": ["node"]
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts"],
+  "exclude": ["**/*.d1.test.ts"]
 }

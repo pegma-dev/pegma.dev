@@ -81,4 +81,16 @@ export const ASSEMBLY_EVAL_CASES: readonly AssemblyEvalCase[] = [
     mustNotRecommendSubstrings: ['password'],
     mustSurfaceRefusalSubstrings: ['password'],
   },
+  {
+    id: 'support-desk-email-code',
+    prompt:
+      'Small support desk with first-party email-code login. No Stripe, no Auth0, no passwords.',
+    capabilityTags: ['support_queue', 'accounts', 'email_codes'],
+    mustPrimaryRecipeId: 'support-queue-slice',
+    mustIncludePackageNames: [
+      '@pegma/identity',
+      '@pegma/support-desk-application',
+    ],
+    mustNotRecommendSubstrings: ['stripe', 'auth0', 'password'],
+  },
 ];

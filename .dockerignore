@@ -1,0 +1,10 @@
+node_modules
+.git
+.astro
+dist
+coverage
+.wrangler
+worker/.dev.vars
+*.tsbuildinfo
+.env
+.env.*
