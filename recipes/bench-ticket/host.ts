@@ -67,6 +67,15 @@ export function createBenchTicketNodeHandler() {
   };
 }
 
+/** Cookie headers must join with `; `; other multi-value headers use `, `. */
+export function joinIncomingHeader(
+  name: string,
+  value: string | readonly string[],
+): string {
+  if (typeof value === 'string') return value;
+  return name.toLowerCase() === 'cookie' ? value.join('; ') : value.join(', ');
+}
+
 async function requestFromNode(
   req: IncomingMessage,
   origin: string,
@@ -75,8 +84,7 @@ async function requestFromNode(
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
     if (value === undefined) continue;
-    if (Array.isArray(value)) headers.set(name, value.join(', '));
-    else headers.set(name, value);
+    headers.set(name, joinIncomingHeader(name, value));
   }
   const method = req.method ?? 'GET';
   if (method === 'GET' || method === 'HEAD') {

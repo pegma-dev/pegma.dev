@@ -25,15 +25,23 @@ export interface BenchTicketEnv {
   readonly BENCH_TICKET_ORIGIN: string;
 }
 
-let cached: ReturnType<typeof createBenchTicketComposition> | undefined;
-let cachedOrigin: string | undefined;
+let cached:
+  | {
+      readonly key: string;
+      readonly composition: ReturnType<typeof createBenchTicketComposition>;
+    }
+  | undefined;
+
+function compositionCacheKey(env: BenchTicketEnv): string {
+  return `${env.BENCH_TICKET_ORIGIN}\n${env.BENCH_TICKET_EMAIL_CODE_SECRET_BASE64}`;
+}
 
 function compositionFor(env: BenchTicketEnv) {
-  if (cached && cachedOrigin === env.BENCH_TICKET_ORIGIN) {
-    return cached;
+  const key = compositionCacheKey(env);
+  if (cached && cached.key === key) {
+    return cached.composition;
   }
-  cachedOrigin = env.BENCH_TICKET_ORIGIN;
-  cached = createBenchTicketComposition({
+  const composition = createBenchTicketComposition({
     store: createCloudflareD1Store({
       database: env.BENCH_TICKET_DB,
       createSchemaIfMissing: true,
@@ -46,7 +54,8 @@ function compositionFor(env: BenchTicketEnv) {
       renderer: createBenchTicketMailRenderer(),
     },
   });
-  return cached;
+  cached = { key, composition };
+  return composition;
 }
 
 export default {

@@ -90,14 +90,26 @@ const PAGE_HTML = `<!doctype html>
         document.getElementById('who').textContent = me.principalId;
         const listed = await api('/api/tickets');
         const root = document.getElementById('tickets');
-        root.innerHTML = '';
+        root.replaceChildren();
         for (const row of listed.tickets) {
           const el = document.createElement('div');
           el.className = 'ticket';
-          el.innerHTML = '<strong>#' + row.number + '</strong> ' + row.subject +
-            ' <span class="muted">' + row.status + '</span>' +
-            '<div><textarea data-reply="' + row.id + '" placeholder="Reply"></textarea>' +
-            '<button type="button" data-send="' + row.id + '">Reply</button></div>';
+          const title = document.createElement('strong');
+          title.textContent = '#' + row.number;
+          const subject = document.createTextNode(' ' + row.subject + ' ');
+          const status = document.createElement('span');
+          status.className = 'muted';
+          status.textContent = String(row.status);
+          const replyWrap = document.createElement('div');
+          const textarea = document.createElement('textarea');
+          textarea.dataset.reply = String(row.id);
+          textarea.placeholder = 'Reply';
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.dataset.send = String(row.id);
+          button.textContent = 'Reply';
+          replyWrap.append(textarea, button);
+          el.append(title, subject, status, replyWrap);
           root.appendChild(el);
         }
         root.onclick = async (event) => {
@@ -185,6 +197,14 @@ function json(
   });
 }
 
+function decodeUriComponentSafe(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 function parseCookies(header: string | null): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
@@ -193,7 +213,10 @@ function parseCookies(header: string | null): Record<string, string> {
     if (idx < 0) continue;
     const key = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
-    if (key.length > 0) out[key] = decodeURIComponent(value);
+    if (key.length === 0) continue;
+    const decoded = decodeUriComponentSafe(value);
+    if (decoded === null) continue;
+    out[key] = decoded;
   }
   return out;
 }
@@ -373,9 +396,11 @@ export async function handleBenchTicketRequest(
     if (method === 'GET' && ticketMatch) {
       const principalId = await currentPrincipal(request, composition);
       if (!principalId) return json(401, { error: 'unauthenticated' });
+      const ticketId = decodeUriComponentSafe(ticketMatch[1] ?? '');
+      if (ticketId === null) return json(400, { error: 'invalid_ticket_id' });
       const view = await composition.support.readCustomerTicket(
         composition.customerAccess(principalId),
-        decodeURIComponent(ticketMatch[1] ?? ''),
+        ticketId,
       );
       return json(200, view);
     }
@@ -384,13 +409,15 @@ export async function handleBenchTicketRequest(
     if (method === 'POST' && replyMatch) {
       const principalId = await currentPrincipal(request, composition);
       if (!principalId) return json(401, { error: 'unauthenticated' });
+      const ticketId = decodeUriComponentSafe(replyMatch[1] ?? '');
+      if (ticketId === null) return json(400, { error: 'invalid_ticket_id' });
       const body = await readJson(request);
       const replied = await composition.support.replyToCustomerTicket(
         composition.customerAccess(principalId),
         {
           commandId: mintId(),
           correlationId: mintId(),
-          ticketId: decodeURIComponent(replyMatch[1] ?? ''),
+          ticketId,
           messageId: mintId(),
           body: String(body.body ?? ''),
         },
