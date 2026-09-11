@@ -28,6 +28,14 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+export function parseMailpitSmtpPort(raw: string | undefined): number {
+  const parsed = Number.parseInt(raw ?? '1025', 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error('MAILPIT_SMTP_PORT must be an integer 1–65535');
+  }
+  return parsed;
+}
+
 function mailDelivery() {
   const renderer = createBenchTicketMailRenderer();
   const reconciliation = createCatcherReconciliation();
@@ -42,7 +50,7 @@ function mailDelivery() {
   return {
     provider: createMailpitSmtpProvider({
       host: process.env.MAILPIT_SMTP_HOST ?? '127.0.0.1',
-      port: Number.parseInt(process.env.MAILPIT_SMTP_PORT ?? '1025', 10),
+      port: parseMailpitSmtpPort(process.env.MAILPIT_SMTP_PORT),
       from: process.env.BENCH_TICKET_EMAIL_FROM ?? 'bench-ticket@localhost',
     }),
     reconciliation,

@@ -73,6 +73,9 @@ function smtpDialog(
 export function createMailpitSmtpProvider(
   options: MailpitSmtpOptions,
 ): MailProvider {
+  if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) {
+    throw new Error('Mailpit SMTP port must be an integer 1–65535');
+  }
   return {
     async send(request) {
       const subject = headerSafe(request.mail.subject);

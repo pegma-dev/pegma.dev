@@ -40,7 +40,7 @@ pnpm install --frozen-lockfile
 | Blob container | `bench-ticket-blobs` |
 | Container Apps env | `cae-bench-ticket` |
 | Container app | `ca-bench-ticket` |
-| Email-code secret | `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` |
+| Email-code secret | Container App **secret** `email-code-hmac`, injected as `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` |
 
 ## 3. Create Azure resources
 
@@ -104,6 +104,8 @@ docker push "$IMAGE"
 az containerapp env create -g rg-bench-ticket -n cae-bench-ticket -l eastus
 
 # First create without origin, then set origin from the assigned FQDN.
+# The HMAC is a Container Apps secret (`secretref:`), not a plaintext env
+# var — `az containerapp show` must not print it.
 az containerapp create \
   -g rg-bench-ticket \
   -n ca-bench-ticket \
@@ -112,9 +114,10 @@ az containerapp create \
   --ingress external \
   --target-port 8787 \
   --registry-server "${ACR}.azurecr.io" \
+  --secrets "email-code-hmac=$SECRET" \
   --env-vars \
     BENCH_TICKET_MAIL_CATCHER=console \
-    BENCH_TICKET_EMAIL_CODE_SECRET_BASE64="$SECRET" \
+    BENCH_TICKET_EMAIL_CODE_SECRET_BASE64=secretref:email-code-hmac \
     AZURE_STORAGE_ACCOUNT="$ACCOUNT" \
     AZURE_STORAGE_ACCOUNT_KEY="$KEY" \
     PORT=8787
@@ -151,6 +154,7 @@ Then the same begin / copy 8-digit code from logs / finish / file ticket / reply
 | `TableNotFound` | `az storage table create --name pegma --connection-string "$CONN"` |
 | Health 503 / storage fail | Confirm `AZURE_STORAGE_ACCOUNT` / `AZURE_STORAGE_ACCOUNT_KEY` on the container app: `az containerapp show -g rg-bench-ticket -n ca-bench-ticket`. |
 | Origin invalid / finish 400 | `BENCH_TICKET_ORIGIN` must be `https://<fqdn>` with no path. `az containerapp update … --set-env-vars BENCH_TICKET_ORIGIN=…` |
+| HMAC printed by `az containerapp show` | Recreate it as `--secrets email-code-hmac=…` and `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64=secretref:email-code-hmac`. Do not put the value in `--env-vars`. |
 | No code in logs | `az containerapp logs show … --follow` **before** calling begin. `BENCH_TICKET_MAIL_CATCHER` must be `console`. |
 | Building image fails on `tsx` | Image must `pnpm install` **before** `NODE_ENV=production` (the checked-in Dockerfile already does). |
 

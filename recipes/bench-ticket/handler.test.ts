@@ -1,5 +1,6 @@
 import { fixedClock } from '@pegma/spine';
 import { createMemoryStore } from '@pegma/storage-core';
+import { SupportDeskQueueCapacityError } from '@pegma/support-desk-application';
 import { describe, expect, it } from 'vitest';
 import {
   BENCH_TICKET,
@@ -216,5 +217,51 @@ describe('Bench Ticket HTTP host', () => {
     );
     expect(view.status).toBe(400);
     expect(await view.json()).toEqual({ error: 'invalid_ticket_id' });
+  });
+
+  it('maps SupportDeskQueueCapacityError to 503, not 500', async () => {
+    const mail = recordingMail();
+    const composition = createBenchTicketComposition({
+      store: createMemoryStore(),
+      origin: ORIGIN,
+      emailCodeSecretBase64: TEST_SECRET,
+      mailDelivery: mail,
+      clock: fixedClock('2026-09-11T12:00:00.000Z'),
+    });
+    const begin = await handleBenchTicketRequest(
+      new Request(`${ORIGIN}/api/auth/begin`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'member@bench.example', flow: 'create' }),
+      }),
+      composition,
+    );
+    const started = (await begin.json()) as { codeHandle: string };
+    const codeMatch = /Your Bench Ticket code is (\d{8})/.exec(mail.sent[0]?.subject ?? '');
+    const finish = await handleBenchTicketRequest(
+      new Request(`${ORIGIN}/api/auth/finish`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          flow: 'create',
+          codeHandle: started.codeHandle,
+          code: codeMatch?.[1],
+        }),
+      }),
+      composition,
+    );
+    const cookie = cookieFrom(finish);
+    const support = composition.support as unknown as {
+      listCustomerTickets: () => Promise<never>;
+    };
+    support.listCustomerTickets = async () => {
+      throw new SupportDeskQueueCapacityError('physical_rows', 1);
+    };
+    const listed = await handleBenchTicketRequest(
+      new Request(`${ORIGIN}/api/tickets`, { headers: { cookie } }),
+      composition,
+    );
+    expect(listed.status).toBe(503);
+    expect(await listed.json()).toEqual({ error: 'queue_unavailable' });
   });
 });

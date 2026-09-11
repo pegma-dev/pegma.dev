@@ -8,6 +8,7 @@ import {
   SupportDeskConflictError,
   SupportDeskLimitError,
   SupportDeskNotFoundError,
+  SupportDeskQueueCapacityError,
 } from '@pegma/support-desk-application';
 import type { PrincipalId } from '@pegma/spine';
 import {
@@ -265,6 +266,9 @@ function mapError(error: unknown): Response {
   }
   if (error instanceof SupportDeskConflictError) {
     return json(409, { error: 'conflict' });
+  }
+  if (error instanceof SupportDeskQueueCapacityError) {
+    return json(503, { error: 'queue_unavailable' });
   }
   if (error instanceof SupportDeskLimitError) {
     return json(413, { error: 'limit_exceeded' });
