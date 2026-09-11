@@ -71,6 +71,7 @@ decision:
 Index (short): `https://pegma.dev/llms.txt`  
 Human stack pages: `https://pegma.dev/stack`  
 Recipe index: `https://pegma.dev/examples`  
+Environment runbooks: `https://pegma.dev/runbooks`  
 This skill (judgment only): `https://pegma.dev/skill.md`  
 Optional MCP (same catalog facts): `https://pegma.dev/api/mcp`
 

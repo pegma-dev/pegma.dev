@@ -1,0 +1,22 @@
+{
+  "name": "bench-ticket",
+  "main": "worker.ts",
+  "compatibility_date": "2026-07-28",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "BENCH_TICKET_DB",
+      "database_name": "bench-ticket",
+      "database_id": "REPLACE_AFTER_D1_CREATE"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BENCH_TICKET_BLOBS",
+      "bucket_name": "bench-ticket-blobs"
+    }
+  ],
+  "vars": {
+    "BENCH_TICKET_ORIGIN": "https://bench-ticket.REPLACE.workers.dev"
+  }
+}

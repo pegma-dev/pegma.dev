@@ -52,6 +52,13 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
         host: 'cloudflare',
         when: 'Cloudflare Workers/Pages with D1',
       },
+      {
+        id: 'dynamodb',
+        packageName: '@pegma/storage-dynamodb',
+        host: 'other',
+        when:
+          'AWS-hosted apps using DynamoDB. Requires pegma-dev/storage-core#7 to be merged; factory is createDynamoDbStore. Not yet on npm.',
+      },
     ],
     hostMustProvide: [
       'Chosen adapter binding (D1 database, Azure connection, or memory for tests)',

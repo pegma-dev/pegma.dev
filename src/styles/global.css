@@ -657,3 +657,28 @@ th {
   color: var(--slate);
   margin-top: 0.4rem;
 }
+
+/* Environment runbooks (MarkdownDoc layout) */
+.runbook h1 {
+  font-size: 2rem;
+  letter-spacing: -0.03em;
+  margin: 0 0 0.75rem;
+}
+.runbook h2 {
+  margin-top: 2rem;
+}
+.runbook h3 {
+  margin-top: 1.4rem;
+  font-size: 1.05rem;
+}
+.runbook ul,
+.runbook ol {
+  padding-left: 1.25rem;
+}
+.runbook li {
+  margin: 0.35rem 0;
+}
+.runbook > p:first-of-type {
+  font-size: 1.15rem;
+  color: var(--slate);
+}

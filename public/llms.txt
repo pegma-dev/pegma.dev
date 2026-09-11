@@ -117,6 +117,18 @@ status, design decisions, and non-goals.
   `get_recipe`, `plan_composition`. Public catalog facts only; no private data
   plane; no auth for reads. Config notes: https://pegma.dev/skill
 
+## Environment runbooks (agents)
+
+One-shot a small support-desk demo (Bench Ticket: email-code identity, sessions,
+mail catcher, storage, health). No Stripe, Auth0, Entra, or production email.
+
+- Index: https://pegma.dev/runbooks
+- Local Docker (template): https://pegma.dev/runbooks/local-docker
+- Cloudflare (D1 + R2): https://pegma.dev/runbooks/cloudflare
+- Azure (Tables + Blob): https://pegma.dev/runbooks/azure
+- AWS (DynamoDB via forthcoming `@pegma/storage-dynamodb`): https://pegma.dev/runbooks/aws
+- Fixture: https://github.com/pegma-dev/pegma.dev/tree/main/recipes/bench-ticket
+
 ## Scaffold (agents)
 
 - Minimal Cloudflare-shaped composition root (Glass Wing synthetic scaffold):
@@ -132,8 +144,11 @@ status, design decisions, and non-goals.
 - [Roadmap](https://pegma.dev/roadmap): the aggregate view; status compiled
   at build time from the repos' plans.
 - [Examples](https://pegma.dev/examples): composition recipes with CI-tested
-  fixtures under recipes/ (P1 accounts, P2 audit/mail outbox) plus snippets
-  lifted from package READMEs; each block cites its source.
+  fixtures under recipes/ (P1 accounts, P2 audit/mail outbox, Bench Ticket
+  support queue) plus snippets lifted from package READMEs; each block cites
+  its source.
+- [Runbooks](https://pegma.dev/runbooks): one-shot Local Docker, Cloudflare,
+  Azure, and AWS environments for the Bench Ticket demo.
 - [Skill](https://pegma.dev/skill): install notes for the assembly skill.
 - [Account](https://pegma.dev/account): the static shell for pegma.dev's
   D1-backed first-party Identity reference consumer. The Worker pins the exact
