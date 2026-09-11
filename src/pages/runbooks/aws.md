@@ -48,7 +48,7 @@ pnpm install --frozen-lockfile
 | DynamoDB table | `bench-ticket` (every Storage Core collection shares one table) |
 | S3 bucket | `bench-ticket-blobs-<account-id>` (globally unique) |
 | App Runner / container service | `bench-ticket` |
-| Email-code secret | Secrets Manager `bench-ticket/email-code-hmac`, injected as runtime secret `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` |
+| Email-code secret | Secrets Manager `bench-ticket/email-code-hmac`, injected via App Runner `RuntimeEnvironmentSecrets` (or ECS `secrets`) as `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` |
 
 The adapter README’s table schema is `pk` (HASH) + `sk` (RANGE), on-demand billing. Mirror Azure: **one table for every collection**, not one table per collection.
 
@@ -143,14 +143,14 @@ Create an App Runner service (or ECS/Fargate) with:
 | --- | --- |
 | `PORT` | `8787` (plaintext env) |
 | `BENCH_TICKET_MAIL_CATCHER` | `console` (plaintext env) |
-| `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` | **runtime secret** from Secrets Manager `bench-ticket/email-code-hmac` — not a plaintext env var |
+| `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` | **`RuntimeEnvironmentSecrets`** from Secrets Manager `bench-ticket/email-code-hmac` (ARN as the map value) — not `RuntimeEnvironmentVariables` |
 | `BENCH_TICKET_TABLE` | `bench-ticket` (plaintext env) |
 | `AWS_REGION` | `us-east-1` (plaintext env) |
 | `BENCH_TICKET_ORIGIN` | `https://<assigned-host>` (plaintext env; set after first URL exists, then redeploy) |
 
-The process still reads `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` from its environment at runtime. Inject that name from Secrets Manager / SSM (App Runner runtime environment secrets, or an ECS `secrets` entry). Do not put `$SECRET` in `RuntimeEnvironmentVariables` or a task-definition `environment` block — `DescribeService` and `describe-task-definition` return those values.
+The process still reads `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` from its environment at runtime. On App Runner, put the Secrets Manager ARN in `ImageConfiguration.RuntimeEnvironmentSecrets` (API field; CLI: nested under `--source-configuration` / `--cli-input-json`). That map is distinct from `RuntimeEnvironmentVariables`. On ECS/Fargate, use a task-definition `secrets` entry. Do not put `$SECRET` in `RuntimeEnvironmentVariables` or a task-definition `environment` block — `DescribeService` and `describe-task-definition` return those values.
 
-Give the task role DynamoDB access to table `bench-ticket`, `s3:GetObject`/`PutObject` on the blob bucket, and `secretsmanager:GetSecretValue` on `bench-ticket/email-code-hmac`. Do not put AWS keys in the image.
+Give the App Runner instance role (or ECS task role) DynamoDB access to table `bench-ticket`, `s3:GetObject`/`PutObject` on the blob bucket, and `secretsmanager:GetSecretValue` on `bench-ticket/email-code-hmac`. Do not put AWS keys in the image.
 
 ## 6. Verify
 
@@ -173,7 +173,7 @@ Follow logs with the platform’s tail (`aws logs tail … --follow` or App Runn
 | `ResourceNotFoundException` | `aws dynamodb describe-table --table-name bench-ticket`. Recreate using `pk` HASH + `sk` RANGE. |
 | Health 503 / storage fail | IAM: the task role needs DynamoDB on that table. `aws dynamodb scan --table-name bench-ticket --max-items 1`. |
 | Origin invalid / finish 400 | `BENCH_TICKET_ORIGIN` must be the public HTTPS origin with no path. |
-| HMAC printed by `DescribeService` / task definition | Recreate it as a Secrets Manager runtime secret (`bench-ticket/email-code-hmac`). Do not put the value in plaintext env vars. |
+| HMAC printed by `DescribeService` / task definition | Recreate it as `RuntimeEnvironmentSecrets` (Secrets Manager ARN) or an ECS `secrets` entry. Do not put the value in `RuntimeEnvironmentVariables`. |
 | No code in logs | Tail logs **before** begin. `BENCH_TICKET_MAIL_CATCHER=console`. |
 | Temptation to use Cognito | Stop. This demo is `@pegma/identity` email-code only. |
 
