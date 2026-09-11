@@ -104,8 +104,9 @@ docker push "$IMAGE"
 az containerapp env create -g rg-bench-ticket -n cae-bench-ticket -l eastus
 
 # First create without origin, then set origin from the assigned FQDN.
-# The HMAC is a Container Apps secret (`secretref:`), not a plaintext env
-# var — `az containerapp show` must not print it.
+# HMAC is a Container Apps secret, not a plaintext env var:
+# `--secrets email-code-hmac=…` plus `secretref:email-code-hmac`.
+# `az containerapp show` returns the secret *name* and `secretRef`, not the value.
 az containerapp create \
   -g rg-bench-ticket \
   -n ca-bench-ticket \
