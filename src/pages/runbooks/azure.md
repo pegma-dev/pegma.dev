@@ -41,6 +41,7 @@ pnpm install --frozen-lockfile
 | Container Apps env | `cae-bench-ticket` |
 | Container app | `ca-bench-ticket` |
 | Email-code secret | Container App **secret** `email-code-hmac`, injected as `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64` |
+| Storage account key | Container App **secret** `storage-key`, injected as `AZURE_STORAGE_ACCOUNT_KEY` |
 
 ## 3. Create Azure resources
 
@@ -104,9 +105,9 @@ docker push "$IMAGE"
 az containerapp env create -g rg-bench-ticket -n cae-bench-ticket -l eastus
 
 # First create without origin, then set origin from the assigned FQDN.
-# HMAC is a Container Apps secret, not a plaintext env var:
-# `--secrets email-code-hmac=…` plus `secretref:email-code-hmac`.
-# `az containerapp show` returns the secret *name* and `secretRef`, not the value.
+# HMAC and the storage account key are Container Apps secrets, not plaintext env:
+# `--secrets email-code-hmac=… storage-key=…` plus `secretref:`.
+# `az containerapp show` returns the secret *name* and `secretRef`, not the values.
 az containerapp create \
   -g rg-bench-ticket \
   -n ca-bench-ticket \
@@ -115,12 +116,12 @@ az containerapp create \
   --ingress external \
   --target-port 8787 \
   --registry-server "${ACR}.azurecr.io" \
-  --secrets "email-code-hmac=$SECRET" \
+  --secrets "email-code-hmac=$SECRET" "storage-key=$KEY" \
   --env-vars \
     BENCH_TICKET_MAIL_CATCHER=console \
     BENCH_TICKET_EMAIL_CODE_SECRET_BASE64=secretref:email-code-hmac \
     AZURE_STORAGE_ACCOUNT="$ACCOUNT" \
-    AZURE_STORAGE_ACCOUNT_KEY="$KEY" \
+    AZURE_STORAGE_ACCOUNT_KEY=secretref:storage-key \
     PORT=8787
 
 FQDN=$(az containerapp show -g rg-bench-ticket -n ca-bench-ticket --query properties.configuration.ingress.fqdn -o tsv)
@@ -153,9 +154,9 @@ Then the same begin / copy 8-digit code from logs / finish / file ticket / reply
 | `az account show` fails | `az login` |
 | Storage account name taken | Add a longer suffix; Azure storage names are global and lowercase. |
 | `TableNotFound` | `az storage table create --name pegma --connection-string "$CONN"` |
-| Health 503 / storage fail | Confirm `AZURE_STORAGE_ACCOUNT` / `AZURE_STORAGE_ACCOUNT_KEY` on the container app: `az containerapp show -g rg-bench-ticket -n ca-bench-ticket`. |
+| Health 503 / storage fail | Confirm `AZURE_STORAGE_ACCOUNT` and that `AZURE_STORAGE_ACCOUNT_KEY` is `secretref:storage-key` (not the key value): `az containerapp show -g rg-bench-ticket -n ca-bench-ticket`. Re-list the key with `az storage account keys list` if you must recover it. |
 | Origin invalid / finish 400 | `BENCH_TICKET_ORIGIN` must be `https://<fqdn>` with no path. `az containerapp update … --set-env-vars BENCH_TICKET_ORIGIN=…` |
-| HMAC printed by `az containerapp show` | Recreate it as `--secrets email-code-hmac=…` and `BENCH_TICKET_EMAIL_CODE_SECRET_BASE64=secretref:email-code-hmac`. Do not put the value in `--env-vars`. |
+| HMAC or storage key printed by `az containerapp show` | Recreate them as `--secrets email-code-hmac=… storage-key=…` and `secretref:`. Do not put either value in `--env-vars`. |
 | No code in logs | `az containerapp logs show … --follow` **before** calling begin. `BENCH_TICKET_MAIL_CATCHER` must be `console`. |
 | Building image fails on `tsx` | Image must `pnpm install` **before** `NODE_ENV=production` (the checked-in Dockerfile already does). |
 
