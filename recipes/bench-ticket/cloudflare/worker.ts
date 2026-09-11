@@ -32,11 +32,11 @@ let cached:
     }
   | undefined;
 
-function compositionCacheKey(env: BenchTicketEnv): string {
+export function compositionCacheKey(env: BenchTicketEnv): string {
   return `${env.BENCH_TICKET_ORIGIN}\n${env.BENCH_TICKET_EMAIL_CODE_SECRET_BASE64}`;
 }
 
-function compositionFor(env: BenchTicketEnv) {
+export function compositionFor(env: BenchTicketEnv) {
   const key = compositionCacheKey(env);
   if (cached && cached.key === key) {
     return cached.composition;
