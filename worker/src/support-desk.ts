@@ -220,7 +220,13 @@ export function createAdminMutationLimiter(
   store: Store,
   clock: Clock = systemClock,
 ): DurableRateLimiter {
-  return durableLimiter(store, 'pegma.admin.role.mutate', 30, 60 * 60_000, clock);
+  return durableLimiter(
+    store,
+    'pegma.admin.role.mutate',
+    30,
+    60 * 60_000,
+    clock,
+  );
 }
 
 /**
@@ -239,6 +245,48 @@ export function createAdminLookupLimiter(
     60 * 60_000,
     clock,
   );
+}
+
+function createSupportLimiters(store: Store, clock: Clock) {
+  return {
+    createLimiter: durableLimiter(
+      store,
+      SUPPORT_CREATE_LIMIT_POLICY,
+      10,
+      60 * 60_000,
+      clock,
+    ),
+    replyLimiter: durableLimiter(
+      store,
+      SUPPORT_REPLY_LIMIT_POLICY,
+      30,
+      60 * 60_000,
+      clock,
+    ),
+  };
+}
+
+/** Maintenance does not need Identity, HTTP APIs, roles, or ticket commands. */
+export function createProductionSupportMaintenanceRuntime(
+  env: SupportRuntimeEnv,
+) {
+  const store = createCloudflareD1Store({
+    database: env.IDENTITY_DB,
+    createSchemaIfMissing: false,
+  });
+  const clock = systemClock;
+  const { createLimiter, replyLimiter } = createSupportLimiters(store, clock);
+  return {
+    store,
+    clock,
+    terminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
+    limiters: [
+      createLimiter,
+      replyLimiter,
+      createAdminMutationLimiter(store, clock),
+      createAdminLookupLimiter(store, clock),
+    ],
+  };
 }
 
 /**
@@ -265,12 +313,9 @@ export function createSupportRuntime(
 ): SupportRuntime {
   const store = options.store;
   const clock = options.clock ?? systemClock;
-  const createLimiter =
-    options.createLimiter ??
-    durableLimiter(store, SUPPORT_CREATE_LIMIT_POLICY, 10, 60 * 60_000, clock);
-  const replyLimiter =
-    options.replyLimiter ??
-    durableLimiter(store, SUPPORT_REPLY_LIMIT_POLICY, 30, 60 * 60_000, clock);
+  const defaults = createSupportLimiters(store, clock);
+  const createLimiter = options.createLimiter ?? defaults.createLimiter;
+  const replyLimiter = options.replyLimiter ?? defaults.replyLimiter;
 
   const application = createSupportDeskApplication({
     store,

@@ -59,6 +59,88 @@ describe('githubLatestToFacts', () => {
 });
 
 describe('runReleaseReconciliation', () => {
+  it('bounds scheduled fetches, survives a failed shard, and certifies only a full cycle', async () => {
+    const store = createMemoryStore();
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 404 }),
+    );
+    const start = Date.parse('2026-10-15T12:00:00Z');
+    const run = (scheduledTime: number) =>
+      runReleaseReconciliation({
+        store,
+        logger,
+        config,
+        scheduledTime,
+        fetchImpl,
+      });
+    await run(start);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]![0])).toContain(
+      `/repositories/${SPINE_ID}/`,
+    );
+    expect(
+      (await readReleaseOpsState(store)).lastSuccessfulReconciliationAt,
+    ).toBeNull();
+    fetchImpl.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await run(start + 60_000);
+    expect(
+      (await readReleaseOpsState(store)).lastSuccessfulReconciliationAt,
+    ).toBeNull();
+    await run(start + 60_000);
+    expect(
+      (await readReleaseOpsState(store)).lastSuccessfulReconciliationAt,
+    ).toBe(new Date(start).toISOString());
+    expect(String(fetchImpl.mock.calls[2]![0])).toContain(
+      `/repositories/${WEBHOOKS_ID}/`,
+    );
+    await run(start + 2 * 60_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+    // A later cycle cannot borrow a successful observation from the prior one.
+    await run(start + 6 * 60 * 60_000);
+    expect(
+      (await readReleaseOpsState(store)).lastSuccessfulReconciliationAt,
+    ).toBe(new Date(start).toISOString());
+    await run(start + 6 * 60 * 60_000 + 60_000);
+    expect(
+      (await readReleaseOpsState(store)).lastSuccessfulReconciliationAt,
+    ).toBe(new Date(start + 6 * 60 * 60_000).toISOString());
+    // A delayed replay cannot move the full-catalog health marker backwards.
+    await run(start);
+    expect(
+      (await readReleaseOpsState(store)).lastSuccessfulReconciliationAt,
+    ).toBe(new Date(start + 6 * 60 * 60_000).toISOString());
+  });
+
+  it('preserves concurrent shard progress and webhook ETag invalidation', async () => {
+    const store = createMemoryStore();
+    const { invalidateReleaseRepositoryEtag } =
+      await import('./release-ops-state');
+    const start = Date.parse('2026-10-15T12:00:00Z');
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).includes(SPINE_ID))
+        await invalidateReleaseRepositoryEtag(store, SPINE_ID);
+      return Response.json(webhooksLatest, { headers: { etag: 'new-etag' } });
+    };
+    await Promise.all(
+      [0, 1].map((slot) =>
+        runReleaseReconciliation({
+          store,
+          logger,
+          config,
+          scheduledTime: start + slot * 60_000,
+          fetchImpl,
+        }),
+      ),
+    );
+    const ops = await readReleaseOpsState(store);
+    expect(ops.repositoryEtags[SPINE_ID]).toBeUndefined();
+    expect(ops.repositoryEtags[WEBHOOKS_ID]).toBe('new-etag');
+    expect(ops.lastSuccessfulReconciliationAt).toBe(
+      new Date(start).toISOString(),
+    );
+  });
+
   it('backfills stable releases and records success markers', async () => {
     const store = createMemoryStore();
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
@@ -140,12 +222,14 @@ describe('runReleaseReconciliation', () => {
         })) as unknown as typeof fetch,
     });
 
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      expect(headers.get('If-None-Match')).toBe('"etag-1"');
-      // Simulate unpublish of the only stable release.
-      return new Response('Not Found', { status: 404 });
-    });
+    const fetchImpl = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        expect(headers.get('If-None-Match')).toBe('"etag-1"');
+        // Simulate unpublish of the only stable release.
+        return new Response('Not Found', { status: 404 });
+      },
+    );
 
     const summary = await runReleaseReconciliation({
       store,
@@ -207,7 +291,10 @@ describe('runReleaseReconciliation', () => {
       config: { allowedRepositoryIds: new Set([WEBHOOKS_ID]) },
       now: NOW,
       fetchImpl: (async () =>
-        new Response(null, { status: 304, headers: { ETag: '"etag-1"' } })) as unknown as typeof fetch,
+        new Response(null, {
+          status: 304,
+          headers: { ETag: '"etag-1"' },
+        })) as unknown as typeof fetch,
     });
 
     expect(summary.notModified).toBe(1);
@@ -286,9 +373,8 @@ describe('runReleaseReconciliation', () => {
         observedAt: '2026-07-28T11:00:00.000Z',
       },
     }));
-    const { invalidateReleaseRepositoryEtag } = await import(
-      './release-ops-state'
-    );
+    const { invalidateReleaseRepositoryEtag } =
+      await import('./release-ops-state');
     await invalidateReleaseRepositoryEtag(store, WEBHOOKS_ID);
 
     // Missed delete of B: GitHub is A again. Without ETag invalidation this

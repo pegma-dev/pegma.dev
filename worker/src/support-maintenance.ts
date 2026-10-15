@@ -20,7 +20,8 @@ export interface SupportMaintenanceRuntime {
   readonly terminalRetentionMilliseconds?: number;
 }
 
-const PAGE_LIMIT = 50;
+// Queue repair can read and update several records for one ticket.
+const PAGE_LIMIT = 1;
 
 export const SUPPORT_MAINTENANCE_TASKS = [
   'queue_repair',

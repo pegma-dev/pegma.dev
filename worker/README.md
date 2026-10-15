@@ -157,8 +157,11 @@ Passkey removal stays disabled until an email-code recovery implementation is
 live. This deliberately avoids a last-factor lockout in the passkey-only
 configuration.
 
-The one-minute Cron trigger runs Mail send and reconciliation only. A separate
-`1-59 * * * *` trigger runs one cleanup lane per invocation: challenge cleanup,
+Separate Cron triggers run Mail send every minute and reconciliation every
+minute except minute zero (at most a two-minute reconciliation gap). Each
+invocation processes at most one operation, retaining its own scan cursor.
+Idle runs do not import an unused HMAC key; secret validation remains eager. A separate
+`0-58 * * * *` trigger runs one cleanup lane per invocation: challenge cleanup,
 email-operation repair, Mail retention, expired Sessions, each of the four
 Identity rate-limit policies, Support queue repair/inactive sweep, and each of
 the four Support/Admin rate-limit policies. The 14 lanes rotate using the
@@ -166,7 +169,9 @@ scheduled UTC time, including across hour boundaries, so each runs every
 14–15 minutes. This gives cleanup its own invocation CPU budget instead of
 combining every task under the Workers Free 10 ms limit. Authentication and
 rate-limit checks still enforce expiry on access; cleanup only reclaims or
-repairs stored data.
+repairs stored data. Paged Identity and Support cleanup also consumes at most
+one record per invocation. Support cleanup composes only storage, its clock,
+and limiters; it does not build Identity, roles, or HTTP handlers.
 
 Each run reads its cursor record once, merges successful lane results into a
 single conditional update, and skips unchanged cursors (including empty
@@ -260,19 +265,38 @@ webhook secret in the same maintenance window.
 `GITHUB_ALLOWED_REPOSITORY_IDS` (comma-separated numeric IDs). Names are display
 data only; IDs are the allowlist authority.
 
-**Schedules:** `* * * * *` runs Identity Mail send/reconciliation.
-`1-59 * * * *` runs one rotating Identity or Support cleanup lane.
-`0 */6 * * *` runs
-GitHub release reconciliation only (public `/repos/{owner}/{repo}/releases/latest`
-with conditional ETags, bounded timeouts/bodies). Reconciliation is also the
-initial backfill path; it never fabricates `@pegma/webhooks` receipt rows.
+**Schedules:** `* * * * *` runs Identity Mail send.
+`1-59 * * * *` independently runs Mail reconciliation, skipping minute zero.
+`0-58 * * * *` runs one rotating Identity or Support cleanup lane.
+`0-59 */6 * * *` reconciles one GitHub repository per invocation, using the
+scheduled UTC minute as the slot in the allowlisted catalog. The current
+13-repository catalog completes in minutes 0�12 of each six-hour window;
+remaining slots return without database or GitHub I/O. The 60-slot capacity is
+checked in code. Fetches use stable numeric repository IDs, conditional ETags,
+and bounded timeouts/bodies. Full-catalog backfill remains available explicitly.
 
-After deploying maintenance changes, check invocation CPU times and outcomes
-for both mail and cleanup triggers in Workers Observability. Local D1 tests
-verify cursor writes and dispatch, but do not enforce Cloudflare's production
-CPU limit. A busy mail page or large cleanup page can still require smaller
-pages or Workers Paid; reducing cron frequency alone does not raise the
-per-invocation allowance.
+Each successful scheduled shard records its scheduled timestamp durably in the
+existing operations collection. Global reconciliation health advances only
+when every currently allowlisted catalog repository has succeeded in that
+six-hour cycle. Failed or missing shards keep the prior full-catalog success;
+concurrent shards merge progress and preserve webhook ETag invalidation.
+Existing records decode missing per-repository progress as empty. No D1 schema
+migration is required, and reconciliation never fabricates webhook receipts.
+
+After deploying maintenance changes, check CPU distributions and resource-limit
+outcomes for all four triggers, including populated mail pages and release
+200/304 responses. Local D1 tests prove bounded page progress and delivery
+idempotency, not Cloudflare's production CPU accounting. These changes target
+the Workers Free 10 ms allowance; they cannot guarantee an absolute CPU ceiling.
+
+One-record pages trade throughput for headroom: mail scans at most 60 send and 59 reconciliation operation
+records per hour, including retained terminal records. A full scan
+must remain comfortably shorter than the email-code lifetime; inspect scan
+backlogs as usage grows. Cleanup pages advance once per lane every 14�15
+minutes. The published Sessions and rate-limit packages still expose
+whole-partition sweeps, so their work grows with partition size. Sustained
+backlogs need indexed discovery and paginated component APIs, or a larger CPU
+allowance. Reducing frequency alone does not raise the per-invocation limit.
 
 **Organization webhook (Phase E):** create one org webhook subscribed only to
 `release` events, payload URL `https://pegma.dev/api/webhooks/github/releases`,

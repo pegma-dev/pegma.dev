@@ -3,6 +3,7 @@ import {
   createHmacEmailCodeProtector,
   createIdentity,
   type Identity,
+  type EmailCodeProtector,
   type MailProvider,
   type MailReconciliationPort,
   type MailWorker,
@@ -91,6 +92,18 @@ function durableLimiter(
   );
 }
 
+/** Keep key validation eager, but import HMAC only when code work needs it. */
+function deferredEmailCodeProtector(secret: Uint8Array): EmailCodeProtector {
+  let protector: EmailCodeProtector | undefined;
+  const get = () => (protector ??= createHmacEmailCodeProtector(secret));
+  return {
+    deriveCode: (handleHash) => get().deriveCode(handleHash),
+    verifier: (handleHash, code) => get().verifier(handleHash, code),
+    matches: (expected, handleHash, code) =>
+      get().matches(expected, handleHash, code),
+  };
+}
+
 /**
  * Production composition for pegma.dev's first-party Identity provider.
  *
@@ -159,7 +172,7 @@ export function createIdentityRuntime(
     origins: ['https://pegma.dev'],
     registrationLimiter,
     authenticationLimiter,
-    emailCodeProtector: createHmacEmailCodeProtector(
+    emailCodeProtector: deferredEmailCodeProtector(
       emailCodeSecret(options.emailCodeSecretBase64),
     ),
     emailCodeRequestLimiter,
@@ -167,29 +180,25 @@ export function createIdentityRuntime(
   });
 
   const resendKey =
-    typeof options.resendApiKey === 'string' &&
-    options.resendApiKey.length > 0
+    typeof options.resendApiKey === 'string' && options.resendApiKey.length > 0
       ? options.resendApiKey
       : null;
-  const delivery =
-    !options.emailEnabled
-      ? null
-      : options.mailDelivery ??
-        (resendKey === null
-          ? null
-          : (() => {
-              const ports = createResendMailPorts({
-                apiKey: resendKey,
-                from: options.emailFrom,
-                ...(options.fetch === undefined
-                  ? {}
-                  : { fetch: options.fetch }),
-              });
-              return {
-                ...ports,
-                classifyFailure: classifyResendFailure,
-              };
-            })());
+  const delivery = !options.emailEnabled
+    ? null
+    : (options.mailDelivery ??
+      (resendKey === null
+        ? null
+        : (() => {
+            const ports = createResendMailPorts({
+              apiKey: resendKey,
+              from: options.emailFrom,
+              ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+            });
+            return {
+              ...ports,
+              classifyFailure: classifyResendFailure,
+            };
+          })()));
   const mailWorker =
     delivery === null
       ? null

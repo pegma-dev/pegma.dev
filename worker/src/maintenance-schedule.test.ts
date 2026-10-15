@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { MAIL_CRON, CLEANUP_CRON, cleanupLaneAt } from './maintenance-schedule';
+import {
+  MAIL_CRON,
+  MAIL_RECONCILE_CRON,
+  CLEANUP_CRON,
+  cleanupLaneAt,
+} from './maintenance-schedule';
 import {
   RELEASE_RECONCILIATION_CRON,
   runReleaseReconciliation,
@@ -16,6 +21,12 @@ vi.mock('./identity-runtime', () => ({
   createProductionIdentityRuntime: () => ({ sessions: {}, identity: {} }),
 }));
 vi.mock('./support-desk', () => ({
+  createProductionSupportMaintenanceRuntime: () => ({
+    store: {},
+    clock: {},
+    limiters: [{}, {}, {}, {}],
+    terminalRetentionMilliseconds: 1,
+  }),
   createProductionSupportRuntime: () => ({
     store: {},
     clock: {},
@@ -67,8 +78,8 @@ describe('maintenance dispatch', () => {
         }),
       );
     }
-    expect(cleanupLaneAt(Date.parse('2026-10-15T12:00:00Z'))).toEqual(
-      cleanupLaneAt(Date.parse('2026-10-15T11:59:00Z')),
+    expect(cleanupLaneAt(Date.parse('2026-10-15T11:59:00Z'))).toEqual(
+      cleanupLaneAt(Date.parse('2026-10-15T11:58:00Z')),
     );
   });
 
@@ -80,6 +91,7 @@ describe('maintenance dispatch', () => {
     const crons = JSON.parse(config.match(/"crons":\s*(\[[^\]]*\])/)![1]!);
     expect(crons).toEqual([
       MAIL_CRON,
+      MAIL_RECONCILE_CRON,
       CLEANUP_CRON,
       RELEASE_RECONCILIATION_CRON,
     ]);
@@ -90,7 +102,18 @@ describe('maintenance dispatch', () => {
     expect(runIdentityMaintenance).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
       expect.anything(),
-      { tasks: ['mail_send', 'mail_reconcile'] },
+      { tasks: ['mail_send'] },
+    );
+    expect(runSupportMaintenance).not.toHaveBeenCalled();
+    expect(runReleaseReconciliation).not.toHaveBeenCalled();
+  });
+
+  it('reconciles mail in its own invocation every minute', async () => {
+    await scheduled(MAIL_RECONCILE_CRON, Date.parse('2026-10-15T12:01:00Z'));
+    expect(runIdentityMaintenance).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.anything(),
+      { tasks: ['mail_reconcile'] },
     );
     expect(runSupportMaintenance).not.toHaveBeenCalled();
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
@@ -101,7 +124,7 @@ describe('maintenance dispatch', () => {
     const start = Date.parse('2026-10-15T23:53:00Z');
     for (let minute = 0; minute < 15; minute++) {
       const time = start + minute * 60_000;
-      if (new Date(time).getUTCMinutes() === 0) continue;
+      if (new Date(time).getUTCMinutes() === 59) continue;
       const lane = cleanupLaneAt(time);
       lanes.push(JSON.stringify(lane));
       vi.clearAllMocks();
@@ -143,7 +166,11 @@ describe('maintenance dispatch', () => {
       Date.parse('2026-10-15T12:00:00Z'),
     );
     await scheduled('unknown', Date.parse('2026-10-15T12:00:00Z'));
-    expect(runReleaseReconciliation).toHaveBeenCalledTimes(1);
+    expect(runReleaseReconciliation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scheduledTime: Date.parse('2026-10-15T12:00:00Z'),
+      }),
+    );
     expect(runIdentityMaintenance).not.toHaveBeenCalled();
     expect(runSupportMaintenance).not.toHaveBeenCalled();
   });
