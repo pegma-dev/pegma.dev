@@ -125,6 +125,166 @@ function fixture() {
 }
 
 describe('Identity maintenance', () => {
+  it('does no bookmark I/O or failure logging when only disabled mail tasks are selected', async () => {
+    const value = fixture();
+    const collection = vi.spyOn(value.runtime.store, 'collection');
+    await runIdentityMaintenance(
+      { ...value.runtime, mailWorker: null },
+      value.logger,
+      {
+        tasks: ['mail_send', 'mail_reconcile', 'mail_retention'],
+      },
+    );
+    expect(collection).not.toHaveBeenCalled();
+    expect(value.logger.log).not.toHaveBeenCalled();
+    expect(value.sendPage).not.toHaveBeenCalled();
+    expect(value.reconciliationPage).not.toHaveBeenCalled();
+    expect(value.mailSweep).not.toHaveBeenCalled();
+  });
+
+  it('logs an invalid limiter selection instead of silently skipping cleanup', async () => {
+    const value = fixture();
+    await runIdentityMaintenance(value.runtime, value.logger, {
+      tasks: ['rate_limits'],
+      limiterIndex: 1,
+    });
+    expect(value.limiterSweep).not.toHaveBeenCalled();
+    expect(value.logger.log).toHaveBeenCalledExactlyOnceWith(
+      'error',
+      'identity.maintenance_failed',
+      { task: 'rate_limits', error: 'RangeError' },
+    );
+  });
+
+  it('identifies cursor-save failures and replays from the prior durable bookmark', async () => {
+    const value = fixture();
+    const collection = value.runtime.store.collection;
+    let fail = true;
+    vi.spyOn(value.runtime.store, 'collection').mockImplementation(
+      (definition) => {
+        const target = collection(definition);
+        return {
+          ...target,
+          update: (...args) => {
+            if (fail)
+              return Promise.reject(new Error('cursor write unavailable'));
+            return target.update(...args);
+          },
+        };
+      },
+    );
+    await runIdentityMaintenance(value.runtime, value.logger, {
+      tasks: ['mail_send'],
+    });
+    expect(value.logger.log).toHaveBeenCalledWith(
+      'error',
+      'identity.maintenance_failed',
+      { task: 'cursors', error: 'Error' },
+    );
+    fail = false;
+    await runIdentityMaintenance(value.runtime, value.logger, {
+      tasks: ['mail_send'],
+    });
+    expect(value.sendPage).toHaveBeenNthCalledWith(2, { limit: 5 });
+    await runIdentityMaintenance(value.runtime, value.logger, {
+      tasks: ['mail_send'],
+    });
+    expect(value.sendPage).toHaveBeenNthCalledWith(3, {
+      limit: 5,
+      cursor: 'send-next',
+    });
+  });
+
+  it('still runs cursor-independent hygiene if the bookmark read fails', async () => {
+    const value = fixture();
+    const collection = value.runtime.store.collection;
+    vi.spyOn(value.runtime.store, 'collection').mockImplementation(
+      (definition) => {
+        const target = collection(definition);
+        return definition.name === 'pegma-dev-maintenance'
+          ? {
+              ...target,
+              get: async () => {
+                throw new Error('bookmark unavailable');
+              },
+            }
+          : target;
+      },
+    );
+    await runIdentityMaintenance(value.runtime, value.logger);
+    expect(value.limiterSweep).toHaveBeenCalledTimes(1);
+    expect(value.purgeExpired).toHaveBeenCalledTimes(1);
+    expect(value.challengeSweep).not.toHaveBeenCalled();
+    expect(value.logger.log).toHaveBeenCalledWith(
+      'error',
+      'identity.maintenance_failed',
+      { task: 'challenges', error: 'Error' },
+    );
+  });
+
+  it('runs only mail on the minute path and does not write idle cursors', async () => {
+    const value = fixture();
+    value.sendPage.mockResolvedValue({
+      examined: 0,
+      results: [],
+      nextCursor: null,
+    });
+    value.reconciliationPage.mockResolvedValue({
+      examined: 0,
+      results: [],
+      nextCursor: null,
+    });
+    const collection = value.runtime.store.collection;
+    const writes = vi.fn();
+    const reads = vi.fn();
+    vi.spyOn(value.runtime.store, 'collection').mockImplementation(
+      (definition) => {
+        const target = collection(definition);
+        return {
+          ...target,
+          get: (...args) => {
+            reads();
+            return target.get(...args);
+          },
+          update: (...args) => {
+            writes();
+            return target.update(...args);
+          },
+        };
+      },
+    );
+
+    await runIdentityMaintenance(value.runtime, value.logger, {
+      tasks: ['mail_send', 'mail_reconcile'],
+    });
+
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(writes).not.toHaveBeenCalled();
+    expect(value.sendPage).toHaveBeenCalledTimes(1);
+    expect(value.reconciliationPage).toHaveBeenCalledTimes(1);
+    expect(value.challengeSweep).not.toHaveBeenCalled();
+    expect(value.operationSweep).not.toHaveBeenCalled();
+    expect(value.mailSweep).not.toHaveBeenCalled();
+    expect(value.limiterSweep).not.toHaveBeenCalled();
+    expect(value.purgeExpired).not.toHaveBeenCalled();
+    expect(value.logger.log).not.toHaveBeenCalled();
+  });
+
+  it('sweeps just the selected rate-limit policy', async () => {
+    const value = fixture();
+    const other = {
+      ...value.runtime.limiters[0]!,
+      sweep: vi.fn(async () => ({ scanned: 0, deleted: 0 })),
+    };
+    await runIdentityMaintenance(
+      { ...value.runtime, limiters: [...value.runtime.limiters, other] },
+      value.logger,
+      { tasks: ['rate_limits'], limiterIndex: 1 },
+    );
+    expect(value.limiterSweep).not.toHaveBeenCalled();
+    expect(other.sweep).toHaveBeenCalledTimes(1);
+  });
+
   it('persists independent cursors and runs every hygiene lane', async () => {
     const value = fixture();
 

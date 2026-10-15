@@ -184,7 +184,8 @@ Durable rate-limit policies (separate from Identity):
 - `pegma.admin.role.mutate` (assign / revoke, 30/h per operator)
 - `pegma.admin.principal.lookup` (directory lookups, 120/h per operator)
 
-All four are swept by the same scheduled maintenance run.
+All four are swept by the same rotating cleanup schedule, one policy per
+invocation.
 
 ## Site pages
 
@@ -198,8 +199,12 @@ All four are swept by the same scheduled maintenance run.
 
 ## Maintenance and health
 
-Minute cron runs Support Desk queue repair and inactive projection sweep with
-independent cursors, plus Support Desk rate-limit sweeps. Mail send for support
+The separate cleanup cron (`1-59 * * * *`) runs one rotating task per
+invocation, including Support Desk queue repair, inactive projection sweep,
+and each Support/Admin rate-limit policy. Each task runs every 14–15 minutes,
+with independent queue cursors and no writes for unchanged bookmarks.
+Identity Mail send/reconciliation keeps its own one-minute invocation.
+Mail send for support
 notifications is deferred (templates are defined; create/reply/staff reply omit
 notification for this host surface).
 

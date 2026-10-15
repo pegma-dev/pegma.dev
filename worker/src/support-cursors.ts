@@ -13,8 +13,7 @@ import {
  * bookmarks.
  */
 export type SupportCursorName =
-  | 'queueRepairCursor'
-  | 'queueInactiveSweepCursor';
+  'queueRepairCursor' | 'queueInactiveSweepCursor';
 
 interface SupportMaintenanceRecord {
   readonly partition: StoredValue;
@@ -63,18 +62,42 @@ export async function readSupportCursor(
   return record === null ? undefined : cursor(record[name]);
 }
 
+export async function readSupportCursors(
+  store: Store,
+): Promise<SupportMaintenanceRecord | null> {
+  return store.collection(maintenance).get(KEY);
+}
+
+export async function saveSupportCursors(
+  store: Store,
+  changes: Partial<Record<SupportCursorName, string | null>>,
+): Promise<void> {
+  if (Object.keys(changes).length === 0) return;
+  await store.collection(maintenance).update(KEY, (current) => {
+    if (
+      Object.entries(changes).every(
+        ([name, next]) =>
+          (current?.[name as SupportCursorName] ?? null) === next,
+      )
+    ) {
+      return { action: 'keep' };
+    }
+    return {
+      action: 'write',
+      value: {
+        ...(current ?? emptyRecord()),
+        ...changes,
+        partition: KEY.partition,
+        id: KEY.id,
+      },
+    };
+  });
+}
+
 export async function saveSupportCursor(
   store: Store,
   name: SupportCursorName,
   next: string | null,
 ): Promise<void> {
-  await store.collection(maintenance).update(KEY, (current) => ({
-    action: 'write',
-    value: {
-      ...(current ?? emptyRecord()),
-      partition: KEY.partition,
-      id: KEY.id,
-      [name]: next,
-    },
-  }));
+  await saveSupportCursors(store, { [name]: next });
 }

@@ -7,6 +7,7 @@ import type { Identity, MailWorker } from '@pegma/identity';
 import type { DurableRateLimiter } from '@pegma/rate-limit';
 import type { SessionStore } from '@pegma/sessions';
 import type { Logger } from '@pegma/spine';
+import { selectMaintenanceLimiters } from './maintenance-limiters';
 
 export interface IdentityMaintenanceRuntime {
   readonly store: Store;
@@ -17,6 +18,23 @@ export interface IdentityMaintenanceRuntime {
   readonly mailWorker: MailWorker | null;
   readonly limiters: readonly DurableRateLimiter[];
   readonly sessions: SessionStore;
+}
+
+export const IDENTITY_MAINTENANCE_TASKS = [
+  'challenges',
+  'email_operations',
+  'rate_limits',
+  'sessions',
+  'mail_send',
+  'mail_reconcile',
+  'mail_retention',
+] as const;
+export type IdentityMaintenanceTask =
+  (typeof IDENTITY_MAINTENANCE_TASKS)[number];
+
+export interface IdentityMaintenanceOptions {
+  readonly tasks?: readonly IdentityMaintenanceTask[];
+  readonly limiterIndex?: number;
 }
 
 interface MaintenanceRecord {
@@ -77,28 +95,29 @@ function emptyRecord(): MaintenanceRecord {
   };
 }
 
-async function readCursor(
+async function saveCursors(
   store: Store,
-  name: CursorName,
-): Promise<string | undefined> {
-  const record = await store.collection(maintenance).get(KEY);
-  return record === null ? undefined : cursor(record[name]);
-}
-
-async function saveCursor(
-  store: Store,
-  name: CursorName,
-  next: string | null,
+  changes: Partial<Record<CursorName, string | null>>,
 ): Promise<void> {
-  await store.collection(maintenance).update(KEY, (current) => ({
-    action: 'write',
-    value: {
-      ...(current ?? emptyRecord()),
-      partition: KEY.partition,
-      id: KEY.id,
-      [name]: next,
-    },
-  }));
+  if (Object.keys(changes).length === 0) return;
+  await store.collection(maintenance).update(KEY, (current) => {
+    if (
+      Object.entries(changes).every(
+        ([name, next]) => (current?.[name as CursorName] ?? null) === next,
+      )
+    ) {
+      return { action: 'keep' };
+    }
+    return {
+      action: 'write',
+      value: {
+        ...(current ?? emptyRecord()),
+        partition: KEY.partition,
+        id: KEY.id,
+        ...changes,
+      },
+    };
+  });
 }
 
 async function runTask(
@@ -108,7 +127,6 @@ async function runTask(
 ): Promise<void> {
   try {
     await task();
-    logger.log('info', 'identity.maintenance_completed', { task: name });
   } catch (error) {
     logger.log('error', 'identity.maintenance_failed', {
       task: name,
@@ -120,90 +138,109 @@ async function runTask(
 export async function runIdentityMaintenance(
   runtime: IdentityMaintenanceRuntime,
   logger: Logger,
+  options: IdentityMaintenanceOptions = {},
 ): Promise<void> {
-  const tasks: Promise<void>[] = [
-    runTask(logger, 'challenges', async () => {
-      const prior = await readCursor(runtime.store, 'challengeCursor');
-      const result = await runtime.identity.sweepChallenges(100, prior);
-      await saveCursor(
-        runtime.store,
-        'challengeCursor',
-        result.hasMore ? result.cursor : null,
+  // Read once and merge only successful lanes in one conditional update. The
+  // former five concurrent writers retried against the same cursor row.
+  const selected = (options.tasks ?? IDENTITY_MAINTENANCE_TASKS).filter(
+    (name) => runtime.mailWorker !== null || !name.startsWith('mail_'),
+  );
+  const needsCursor = (name: IdentityMaintenanceTask) =>
+    name !== 'sessions' && name !== 'rate_limits';
+  const snapshot = selected.some(needsCursor)
+    ? await runtime.store
+        .collection(maintenance)
+        .get(KEY)
+        .then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        )
+    : { ok: true as const, value: null };
+  const prior = snapshot.ok ? snapshot.value : null;
+  const changes: Partial<Record<CursorName, string | null>> = {};
+  const saveCursor = (name: CursorName, next: string | null): void => {
+    if ((prior?.[name] ?? null) !== next) changes[name] = next;
+  };
+  const tasks: Record<IdentityMaintenanceTask, () => Promise<void>> = {
+    challenges: async () => {
+      const previous = cursor(prior?.challengeCursor ?? null);
+      const result = await runtime.identity.sweepChallenges(100, previous);
+      saveCursor('challengeCursor', result.hasMore ? result.cursor : null);
+    },
+    email_operations: async () => {
+      const previous = cursor(prior?.emailOperationCursor ?? null);
+      const result = await runtime.identity.sweepEmailOperations(100, previous);
+      saveCursor('emailOperationCursor', result.hasMore ? result.cursor : null);
+    },
+    rate_limits: async () => {
+      const limiters = selectMaintenanceLimiters(
+        runtime.limiters,
+        options.limiterIndex,
       );
-    }),
-    runTask(logger, 'email_operations', async () => {
-      const prior = await readCursor(runtime.store, 'emailOperationCursor');
-      const result = await runtime.identity.sweepEmailOperations(100, prior);
-      await saveCursor(
-        runtime.store,
-        'emailOperationCursor',
-        result.hasMore ? result.cursor : null,
-      );
-    }),
-    runTask(logger, 'rate_limits', async () => {
-      await Promise.all(runtime.limiters.map((limiter) => limiter.sweep()));
-    }),
-    runTask(logger, 'sessions', async () => {
+      await Promise.all(limiters.map((limiter) => limiter.sweep()));
+    },
+    sessions: async () => {
       await runtime.sessions.purgeExpired();
-    }),
-  ];
-
-  const mailWorker = runtime.mailWorker;
-  if (mailWorker !== null) {
-    tasks.push(
-      runTask(logger, 'mail_send', async () => {
-        const prior = await readCursor(runtime.store, 'mailSendCursor');
-        const result = await mailWorker.runSendPage({
-          limit: MAIL_PROVIDER_PAGE_LIMIT,
-          ...(prior === undefined ? {} : { cursor: prior }),
+    },
+    mail_send: async () => {
+      const mailWorker = runtime.mailWorker;
+      if (mailWorker === null) return;
+      const previous = cursor(prior?.mailSendCursor ?? null);
+      const result = await mailWorker.runSendPage({
+        limit: MAIL_PROVIDER_PAGE_LIMIT,
+        ...(previous === undefined ? {} : { cursor: previous }),
+      });
+      const terminal = result.results.filter(
+        (entry) => entry.status === 'dead_letter',
+      ).length;
+      if (terminal > 0) {
+        logger.log('error', 'identity.mail_terminal', {
+          lane: 'send',
+          count: terminal,
         });
-        const terminal = result.results.filter(
-          (entry) => entry.status === 'dead_letter',
-        ).length;
-        if (terminal > 0) {
-          logger.log('error', 'identity.mail_terminal', {
-            lane: 'send',
-            count: terminal,
-          });
-        }
-        await saveCursor(runtime.store, 'mailSendCursor', result.nextCursor);
-      }),
-      runTask(logger, 'mail_reconcile', async () => {
-        const prior = await readCursor(runtime.store, 'mailReconcileCursor');
-        const result = await mailWorker.runReconciliationPage({
-          limit: MAIL_PROVIDER_PAGE_LIMIT,
-          ...(prior === undefined ? {} : { cursor: prior }),
+      }
+      saveCursor('mailSendCursor', result.nextCursor);
+    },
+    mail_reconcile: async () => {
+      const mailWorker = runtime.mailWorker;
+      if (mailWorker === null) return;
+      const previous = cursor(prior?.mailReconcileCursor ?? null);
+      const result = await mailWorker.runReconciliationPage({
+        limit: MAIL_PROVIDER_PAGE_LIMIT,
+        ...(previous === undefined ? {} : { cursor: previous }),
+      });
+      const terminal = result.results.filter(
+        (entry) =>
+          entry.status === 'dead_letter' || entry.status === 'terminal_unknown',
+      ).length;
+      if (terminal > 0) {
+        logger.log('error', 'identity.mail_terminal', {
+          lane: 'reconcile',
+          count: terminal,
         });
-        const terminal = result.results.filter(
-          (entry) =>
-            entry.status === 'dead_letter' ||
-            entry.status === 'terminal_unknown',
-        ).length;
-        if (terminal > 0) {
-          logger.log('error', 'identity.mail_terminal', {
-            lane: 'reconcile',
-            count: terminal,
-          });
-        }
-        await saveCursor(
-          runtime.store,
-          'mailReconcileCursor',
-          result.nextCursor,
-        );
+      }
+      saveCursor('mailReconcileCursor', result.nextCursor);
+    },
+    mail_retention: async () => {
+      if (runtime.mailWorker === null) return;
+      const previous = cursor(prior?.mailSweepCursor ?? null);
+      const result = await runtime.identity.sweepMail({
+        limit: 100,
+        ...(previous === undefined ? {} : { cursor: previous }),
+        terminalBefore: new Date(
+          Date.now() - 7 * 24 * 60 * 60_000,
+        ).toISOString(),
+      });
+      saveCursor('mailSweepCursor', result.nextCursor);
+    },
+  };
+  await Promise.all(
+    selected.map((name) =>
+      runTask(logger, name, async () => {
+        if (needsCursor(name) && !snapshot.ok) throw snapshot.error;
+        await tasks[name]();
       }),
-      runTask(logger, 'mail_retention', async () => {
-        const prior = await readCursor(runtime.store, 'mailSweepCursor');
-        const result = await runtime.identity.sweepMail({
-          limit: 100,
-          ...(prior === undefined ? {} : { cursor: prior }),
-          terminalBefore: new Date(
-            Date.now() - 7 * 24 * 60 * 60_000,
-          ).toISOString(),
-        });
-        await saveCursor(runtime.store, 'mailSweepCursor', result.nextCursor);
-      }),
-    );
-  }
-
-  await Promise.all(tasks);
+    ),
+  );
+  await runTask(logger, 'cursors', () => saveCursors(runtime.store, changes));
 }

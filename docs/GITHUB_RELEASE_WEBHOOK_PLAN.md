@@ -1,5 +1,10 @@
 # GitHub Release Webhook Plan
 
+The dated phase records below describe the configuration deployed at each
+milestone. For the current Mail/cleanup/reconciliation schedules, use
+[Worker operations](../worker/README.md) and
+[`worker/wrangler.jsonc`](../worker/wrangler.jsonc).
+
 ## Status
 
 **Stage:** Phase E activated and first real stable publish observed
@@ -57,7 +62,7 @@ webhook, redelivery, recon, and rollback.
 - Gates: `npm run check`, `npm test` (108 + 1 D1), `npm run build` on
   `origin/main` before deploy.
 - Secret: `GITHUB_WEBHOOK_SECRET` installed via Wrangler (not in git/Actions).
-- Deploy: Worker version `52d03e76-b69a-42c8-9d63-bcb6316e33f3` on
+- Deploy (2026-07-29 configuration): Worker version `52d03e76-b69a-42c8-9d63-bcb6316e33f3` on
   `pegma.dev/api/*` with crons `* * * * *` and `0 */6 * * *`.
 - Smoke: operator signed `ping` → 204; unsigned POST → 401; health
   `githubReleases.ingestionConfigured=true`; `GET /api/releases` schema

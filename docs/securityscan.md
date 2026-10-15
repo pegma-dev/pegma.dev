@@ -3,6 +3,12 @@
 Point-in-time security review per the `security-scan` skill. Date: 2026-07-29.
 Read-only review; this report is the only file created.
 
+Schedule descriptions below record the configuration reviewed on that date.
+For the current Mail and rotating cleanup schedule, see
+[Worker maintenance](../worker/README.md#identity-composition) and
+[`worker/wrangler.jsonc`](../worker/wrangler.jsonc). This note does not update
+or rerun the historical security assessment.
+
 ## Phase 0 — Recon
 
 ### Stack

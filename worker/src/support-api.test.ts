@@ -488,6 +488,69 @@ describe('support error mapping', () => {
 });
 
 describe('support maintenance cursors', () => {
+  it('logs invalid limiter selections and still sweeps policies when bookmark reads fail', async () => {
+    const { store, runtime } = fixture();
+    const log = { log: vi.fn() };
+    const sweeps = runtime.limiters.map((limiter) =>
+      vi.spyOn(limiter, 'sweep'),
+    );
+    await runSupportMaintenance(
+      { store, clock, limiters: runtime.limiters },
+      log,
+      { tasks: ['rate_limits'], limiterIndex: runtime.limiters.length },
+    );
+    expect(log.log).toHaveBeenCalledExactlyOnceWith(
+      'error',
+      'support.maintenance_failed',
+      { task: 'rate_limits', error: 'RangeError' },
+    );
+    log.log.mockClear();
+    const collection = store.collection;
+    vi.spyOn(store, 'collection').mockImplementation((definition) => {
+      const target = collection(definition);
+      return definition.name === 'pegma-dev-support-maintenance'
+        ? {
+            ...target,
+            get: async () => {
+              throw new Error('bookmark unavailable');
+            },
+          }
+        : target;
+    });
+    await runSupportMaintenance(
+      { store, clock, limiters: runtime.limiters },
+      log,
+    );
+    for (const sweep of sweeps) expect(sweep).toHaveBeenCalledTimes(1);
+    for (const task of ['queue_repair', 'queue_inactive_sweep']) {
+      expect(log.log).toHaveBeenCalledWith(
+        'error',
+        'support.maintenance_failed',
+        { task, error: 'Error' },
+      );
+    }
+  });
+
+  it('sweeps only the selected support policy without reading queue bookmarks', async () => {
+    const { store, runtime } = fixture();
+    const sweeps = runtime.limiters.map((limiter) =>
+      vi.spyOn(limiter, 'sweep'),
+    );
+    const collection = vi.spyOn(store, 'collection');
+    await runSupportMaintenance(
+      { store, clock, limiters: runtime.limiters },
+      logger,
+      { tasks: ['rate_limits'], limiterIndex: 1 },
+    );
+    expect(sweeps[0]).not.toHaveBeenCalled();
+    expect(sweeps[1]).toHaveBeenCalledTimes(1);
+    expect(
+      collection.mock.calls.some(
+        ([definition]) => definition.name === 'pegma-dev-support-maintenance',
+      ),
+    ).toBe(false);
+  });
+
   it('persists independent queue cursors and runs repair/sweep', async () => {
     const { store, runtime } = fixture();
     await saveSupportCursor(store, 'queueRepairCursor', 'cursor-repair-1');
