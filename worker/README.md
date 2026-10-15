@@ -157,11 +157,23 @@ Passkey removal stays disabled until an email-code recovery implementation is
 live. This deliberately avoids a last-factor lockout in the passkey-only
 configuration.
 
-The one-minute Cron trigger advances independently persisted cursors for
-challenge, email-operation, Mail send, Mail reconciliation, and terminal
-retention scans. It also purges expired Sessions and sweeps all four durable
-rate-limit policies. Replaying a cursor after a crash is safe because claims
-and deletions are conditional. Dead-letter and terminal-unknown Mail remains
+The one-minute Cron trigger runs Mail send and reconciliation only. A separate
+`1-59 * * * *` trigger runs one cleanup lane per invocation: challenge cleanup,
+email-operation repair, Mail retention, expired Sessions, each of the four
+Identity rate-limit policies, Support queue repair/inactive sweep, and each of
+the four Support/Admin rate-limit policies. The 14 lanes rotate using the
+scheduled UTC time, including across hour boundaries, so each runs every
+14–15 minutes. This gives cleanup its own invocation CPU budget instead of
+combining every task under the Workers Free 10 ms limit. Authentication and
+rate-limit checks still enforce expiry on access; cleanup only reclaims or
+repairs stored data.
+
+Each run reads its cursor record once, merges successful lane results into a
+single conditional update, and skips unchanged cursors (including empty
+pages). Identity and Support retain independent collections and bookmarks.
+Routine per-lane success logs are omitted; invocation logs and error/terminal
+Mail logs remain enabled. Replaying a cursor after a crash is safe because
+claims and deletions are conditional. Dead-letter and terminal-unknown Mail remains
 in D1 for operator inspection until explicitly acknowledged. Email delivery
 must remain disabled until the host also has an authenticated, audited
 operator acknowledgement workflow; this Worker intentionally exposes no
@@ -179,7 +191,7 @@ via AccessContext defaults (not a paid entitlement). Categories:
 marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/{ticketId}`.
 
 Create and reply use durable rate limits `pegma.support.ticket.create` and
-`pegma.support.ticket.reply`. Minute maintenance runs queue repair and
+`pegma.support.ticket.reply`. Rotating cleanup runs queue repair and
 inactive projection sweep with independent cursors. Notifications on
 create/reply are omitted in this slice; Pegma templates are composed for a
 later mail activation. Health lists Support Desk package detail without
@@ -240,10 +252,19 @@ webhook secret in the same maintenance window.
 `GITHUB_ALLOWED_REPOSITORY_IDS` (comma-separated numeric IDs). Names are display
 data only; IDs are the allowlist authority.
 
-**Schedules:** `* * * * *` runs Identity maintenance only. `0 */6 * * *` runs
+**Schedules:** `* * * * *` runs Identity Mail send/reconciliation.
+`1-59 * * * *` runs one rotating Identity or Support cleanup lane.
+`0 */6 * * *` runs
 GitHub release reconciliation only (public `/repos/{owner}/{repo}/releases/latest`
 with conditional ETags, bounded timeouts/bodies). Reconciliation is also the
 initial backfill path; it never fabricates `@pegma/webhooks` receipt rows.
+
+After deploying maintenance changes, check invocation CPU times and outcomes
+for both mail and cleanup triggers in Workers Observability. Local D1 tests
+verify cursor writes and dispatch, but do not enforce Cloudflare's production
+CPU limit. A busy mail page or large cleanup page can still require smaller
+pages or Workers Paid; reducing cron frequency alone does not raise the
+per-invocation allowance.
 
 **Organization webhook (Phase E):** create one org webhook subscribed only to
 `release` events, payload URL `https://pegma.dev/api/webhooks/github/releases`,

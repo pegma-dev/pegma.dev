@@ -39,6 +39,7 @@ import {
   type SupportRuntimeEnv,
 } from './support-desk';
 import { runSupportMaintenance } from './support-maintenance';
+import { MAIL_CRON, CLEANUP_CRON, cleanupLaneAt } from './maintenance-schedule';
 import { createPegmaMcpHandler } from './mcp-server';
 import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 
@@ -49,7 +50,10 @@ type AppEnv = Env &
   SupportRuntimeEnv &
   CatalogFetchEnv;
 
-function createSupportHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>) {
+function createSupportHandler(
+  env: AppEnv,
+  logger: ReturnType<typeof createAppLogger>,
+) {
   const identityRuntime = createProductionIdentityRuntime(env, logger);
   const supportRuntime = createProductionSupportRuntime(env, {
     sessions: identityRuntime.sessions,
@@ -368,8 +372,8 @@ export default {
     ctx: ExecutionContext,
   ): void {
     const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
-    // Dispatch by cron expression so six-hour release reconciliation stays
-    // independent of one-minute Identity maintenance.
+    // Each cron has its own invocation CPU budget. Never combine all cleanup
+    // with the time-sensitive mail path on Workers Free.
     if (controller.cron === RELEASE_RECONCILIATION_CRON) {
       ctx.waitUntil(
         (async () => {
@@ -394,60 +398,88 @@ export default {
       return;
     }
 
-    ctx.waitUntil(
-      (async () => {
-        try {
-          await runIdentityMaintenance(
-            createProductionIdentityRuntime(env, logger),
-            logger,
-          );
-        } catch (error) {
-          logger.log('error', 'identity.maintenance_unavailable', {
-            error: error instanceof Error ? error.name : 'unknown',
-          });
-        }
-      })(),
-    );
+    const cleanup =
+      controller.cron === CLEANUP_CRON
+        ? cleanupLaneAt(controller.scheduledTime)
+        : null;
+    if (controller.cron !== MAIL_CRON && cleanup === null) {
+      logger.log('warn', 'maintenance.unknown_cron', { cron: controller.cron });
+      return;
+    }
 
-    ctx.waitUntil(
-      (async () => {
-        try {
-          const identityRuntime = createProductionIdentityRuntime(env, logger);
-          const supportRuntime = createProductionSupportRuntime(env, {
-            sessions: identityRuntime.sessions,
-            identity: identityRuntime.identity,
-            identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
-            logger,
-          });
-          await runSupportMaintenance(
-            {
-              store: supportRuntime.store,
-              clock: supportRuntime.clock,
-              // The admin mutation limiter joins the sweep: without it,
-              // expired pegma.admin.role.mutate counters would sit in D1
-              // forever.
-              limiters: [
-                ...supportRuntime.limiters,
-                createAdminMutationLimiter(
-                  supportRuntime.store,
-                  supportRuntime.clock,
-                ),
-                createAdminLookupLimiter(
-                  supportRuntime.store,
-                  supportRuntime.clock,
-                ),
-              ],
-              terminalRetentionMilliseconds:
-                supportRuntime.terminalRetentionMilliseconds,
-            },
-            logger,
-          );
-        } catch (error) {
-          logger.log('error', 'support.maintenance_unavailable', {
-            error: error instanceof Error ? error.name : 'unknown',
-          });
-        }
-      })(),
-    );
+    if (cleanup === null || cleanup.kind === 'identity')
+      ctx.waitUntil(
+        (async () => {
+          try {
+            await runIdentityMaintenance(
+              createProductionIdentityRuntime(env, logger),
+              logger,
+              cleanup === null
+                ? { tasks: ['mail_send', 'mail_reconcile'] }
+                : {
+                    tasks: [cleanup.task],
+                    ...(cleanup.limiterIndex === undefined
+                      ? {}
+                      : { limiterIndex: cleanup.limiterIndex }),
+                  },
+            );
+          } catch (error) {
+            logger.log('error', 'identity.maintenance_unavailable', {
+              error: error instanceof Error ? error.name : 'unknown',
+            });
+          }
+        })(),
+      );
+
+    if (cleanup?.kind === 'support')
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const identityRuntime = createProductionIdentityRuntime(
+              env,
+              logger,
+            );
+            const supportRuntime = createProductionSupportRuntime(env, {
+              sessions: identityRuntime.sessions,
+              identity: identityRuntime.identity,
+              identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+              logger,
+            });
+            await runSupportMaintenance(
+              {
+                store: supportRuntime.store,
+                clock: supportRuntime.clock,
+                // The admin mutation limiter joins the sweep: without it,
+                // expired pegma.admin.role.mutate counters would sit in D1
+                // forever.
+                limiters: [
+                  ...supportRuntime.limiters,
+                  createAdminMutationLimiter(
+                    supportRuntime.store,
+                    supportRuntime.clock,
+                  ),
+                  createAdminLookupLimiter(
+                    supportRuntime.store,
+                    supportRuntime.clock,
+                  ),
+                ],
+                terminalRetentionMilliseconds:
+                  supportRuntime.terminalRetentionMilliseconds,
+              },
+              logger,
+              {
+                tasks: [cleanup.task],
+                ...(cleanup.limiterIndex === undefined
+                  ? {}
+                  : { limiterIndex: cleanup.limiterIndex }),
+              },
+            );
+          } catch (error) {
+            logger.log('error', 'support.maintenance_unavailable', {
+              error: error instanceof Error ? error.name : 'unknown',
+            });
+          }
+        })(),
+      );
   },
 } satisfies ExportedHandler<AppEnv>;

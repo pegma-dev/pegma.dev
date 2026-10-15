@@ -488,6 +488,26 @@ describe('support error mapping', () => {
 });
 
 describe('support maintenance cursors', () => {
+  it('sweeps only the selected support policy without reading queue bookmarks', async () => {
+    const { store, runtime } = fixture();
+    const sweeps = runtime.limiters.map((limiter) =>
+      vi.spyOn(limiter, 'sweep'),
+    );
+    const collection = vi.spyOn(store, 'collection');
+    await runSupportMaintenance(
+      { store, clock, limiters: runtime.limiters },
+      logger,
+      { tasks: ['rate_limits'], limiterIndex: 1 },
+    );
+    expect(sweeps[0]).not.toHaveBeenCalled();
+    expect(sweeps[1]).toHaveBeenCalledTimes(1);
+    expect(
+      collection.mock.calls.some(
+        ([definition]) => definition.name === 'pegma-dev-support-maintenance',
+      ),
+    ).toBe(false);
+  });
+
   it('persists independent queue cursors and runs repair/sweep', async () => {
     const { store, runtime } = fixture();
     await saveSupportCursor(store, 'queueRepairCursor', 'cursor-repair-1');
