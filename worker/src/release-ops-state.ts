@@ -245,6 +245,11 @@ export async function mergeReleaseRepositoryEtagUpdates(
     const reconciled = { ...base.repositoryReconciledAt };
     let completedAt = markSuccessAt ?? base.lastSuccessfulReconciliationAt;
     if (scheduled !== undefined) {
+      // Progress is meaningful only for the current catalog. ETag epochs are
+      // deliberately retained separately: they fence concurrent webhooks.
+      for (const id of Object.keys(reconciled)) {
+        if (!scheduled.repositoryIds.includes(id)) delete reconciled[id];
+      }
       for (const id of scheduled.succeeded) {
         reconciled[id] = Math.max(reconciled[id] ?? 0, scheduled.scheduledTime);
       }

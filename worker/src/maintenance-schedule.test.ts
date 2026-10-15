@@ -97,6 +97,29 @@ describe('maintenance dispatch', () => {
     ]);
   });
 
+  it('advances each cleanup lane exactly once per eligible tick in the configured cron', () => {
+    // Read eligibility from the actual cron, rather than hard-coding the
+    // skipped minute independently of the configuration under test.
+    const match = /^(\d+)-(\d+) \* \* \* \*$/.exec(CLEANUP_CRON);
+    expect(match).not.toBeNull();
+    const first = Number(match![1]);
+    const last = Number(match![2]);
+    const start = Date.parse('2026-10-15T00:00:00Z');
+    const observed: string[] = [];
+    for (let minute = 0; minute < 2 * 24 * 60; minute++) {
+      const time = start + minute * 60_000;
+      const utcMinute = new Date(time).getUTCMinutes();
+      if (utcMinute >= first && utcMinute <= last) {
+        observed.push(JSON.stringify(cleanupLaneAt(time)));
+      }
+    }
+    const cycle = observed.slice(0, 14);
+    expect(new Set(cycle).size).toBe(14);
+    for (let index = 0; index < observed.length; index++) {
+      expect(observed[index]).toBe(cycle[index % cycle.length]);
+    }
+  });
+
   it('keeps mail minute-by-minute without running cleanup or releases', async () => {
     await scheduled(MAIL_CRON, Date.parse('2026-10-15T12:00:00Z'));
     expect(runIdentityMaintenance).toHaveBeenCalledExactlyOnceWith(

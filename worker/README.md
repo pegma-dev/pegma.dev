@@ -270,7 +270,7 @@ data only; IDs are the allowlist authority.
 `0-58 * * * *` runs one rotating Identity or Support cleanup lane.
 `0-59 */6 * * *` reconciles one GitHub repository per invocation, using the
 scheduled UTC minute as the slot in the allowlisted catalog. The current
-13-repository catalog completes in minutes 0�12 of each six-hour window;
+13-repository catalog completes in minutes 0-12 of each six-hour window;
 remaining slots return without database or GitHub I/O. The 60-slot capacity is
 checked in code. Fetches use stable numeric repository IDs, conditional ETags,
 and bounded timeouts/bodies. Full-catalog backfill remains available explicitly.
@@ -292,7 +292,7 @@ the Workers Free 10 ms allowance; they cannot guarantee an absolute CPU ceiling.
 One-record pages trade throughput for headroom: mail scans at most 60 send and 59 reconciliation operation
 records per hour, including retained terminal records. A full scan
 must remain comfortably shorter than the email-code lifetime; inspect scan
-backlogs as usage grows. Cleanup pages advance once per lane every 14�15
+backlogs as usage grows. Cleanup pages advance once per lane every 14-15
 minutes. The published Sessions and rate-limit packages still expose
 whole-partition sweeps, so their work grows with partition size. Sustained
 backlogs need indexed discovery and paginated component APIs, or a larger CPU
