@@ -171,6 +171,14 @@ repairs stored data.
 Each run reads its cursor record once, merges successful lane results into a
 single conditional update, and skips unchanged cursors (including empty
 pages). Identity and Support retain independent collections and bookmarks.
+The D1 adapter retries conditional updates up to three times, re-reading the
+current record before merging the changed fields, including when Mail and
+cleanup invocations overlap. Cursor-save failures are logged as
+`identity.maintenance_failed` or `support.maintenance_failed` with task
+`cursors`; the next invocation replays the page from its prior bookmark.
+These bookmarks optimize scans rather than commit domain work: Mail leases,
+provider idempotency keys, receipts, and conditional cleanup writes remain
+durable independently of the cursor save.
 Routine per-lane success logs are omitted; invocation logs and error/terminal
 Mail logs remain enabled. Replaying a cursor after a crash is safe because
 claims and deletions are conditional. Dead-letter and terminal-unknown Mail remains

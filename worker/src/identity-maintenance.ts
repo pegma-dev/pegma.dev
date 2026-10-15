@@ -7,6 +7,7 @@ import type { Identity, MailWorker } from '@pegma/identity';
 import type { DurableRateLimiter } from '@pegma/rate-limit';
 import type { SessionStore } from '@pegma/sessions';
 import type { Logger } from '@pegma/spine';
+import { selectMaintenanceLimiters } from './maintenance-limiters';
 
 export interface IdentityMaintenanceRuntime {
   readonly store: Store;
@@ -141,7 +142,9 @@ export async function runIdentityMaintenance(
 ): Promise<void> {
   // Read once and merge only successful lanes in one conditional update. The
   // former five concurrent writers retried against the same cursor row.
-  const selected = options.tasks ?? IDENTITY_MAINTENANCE_TASKS;
+  const selected = (options.tasks ?? IDENTITY_MAINTENANCE_TASKS).filter(
+    (name) => runtime.mailWorker !== null || !name.startsWith('mail_'),
+  );
   const needsCursor = (name: IdentityMaintenanceTask) =>
     name !== 'sessions' && name !== 'rate_limits';
   const snapshot = selected.some(needsCursor)
@@ -170,13 +173,10 @@ export async function runIdentityMaintenance(
       saveCursor('emailOperationCursor', result.hasMore ? result.cursor : null);
     },
     rate_limits: async () => {
-      const limiters =
-        options.limiterIndex === undefined
-          ? runtime.limiters
-          : runtime.limiters.slice(
-              options.limiterIndex,
-              options.limiterIndex + 1,
-            );
+      const limiters = selectMaintenanceLimiters(
+        runtime.limiters,
+        options.limiterIndex,
+      );
       await Promise.all(limiters.map((limiter) => limiter.sweep()));
     },
     sessions: async () => {
@@ -242,5 +242,5 @@ export async function runIdentityMaintenance(
       }),
     ),
   );
-  await saveCursors(runtime.store, changes);
+  await runTask(logger, 'cursors', () => saveCursors(runtime.store, changes));
 }

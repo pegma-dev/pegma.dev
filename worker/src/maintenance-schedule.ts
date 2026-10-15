@@ -42,5 +42,6 @@ export function cleanupLaneAt(scheduledTime: number): CleanupLane {
   const minute = Math.floor(scheduledTime / 60_000);
   // Count only eligible minutes so skipping minute zero never skips a lane.
   const tick = minute - Math.floor(minute / 60) - 1;
-  return CLEANUP_LANES[tick % CLEANUP_LANES.length]!;
+  const length = CLEANUP_LANES.length;
+  return CLEANUP_LANES[((tick % length) + length) % length]!;
 }

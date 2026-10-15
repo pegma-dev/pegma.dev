@@ -11,6 +11,7 @@ import {
   type SupportCursorName,
 } from './support-cursors';
 import { SUPPORT_TERMINAL_RETENTION_MS } from './support-desk';
+import { selectMaintenanceLimiters } from './maintenance-limiters';
 
 export interface SupportMaintenanceRuntime {
   readonly store: Store;
@@ -99,13 +100,10 @@ export async function runSupportMaintenance(
       save('queueInactiveSweepCursor', result.nextCursor);
     },
     rate_limits: async () => {
-      const limiters =
-        options.limiterIndex === undefined
-          ? runtime.limiters
-          : runtime.limiters.slice(
-              options.limiterIndex,
-              options.limiterIndex + 1,
-            );
+      const limiters = selectMaintenanceLimiters(
+        runtime.limiters,
+        options.limiterIndex,
+      );
       await Promise.all(limiters.map((limiter) => limiter.sweep()));
     },
   };
@@ -118,5 +116,7 @@ export async function runSupportMaintenance(
       }),
     ),
   );
-  await saveSupportCursors(runtime.store, changes);
+  await runTask(logger, 'cursors', () =>
+    saveSupportCursors(runtime.store, changes),
+  );
 }

@@ -54,6 +54,24 @@ async function scheduled(cron: string, time: number) {
 describe('maintenance dispatch', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('returns a lane at minute zero and for timestamps around the Unix epoch', () => {
+    for (const time of [
+      -60_000,
+      0,
+      60_000,
+      Date.parse('2026-10-15T12:00:00Z'),
+    ]) {
+      expect(cleanupLaneAt(time)).toEqual(
+        expect.objectContaining({
+          kind: expect.stringMatching(/^(identity|support)$/),
+        }),
+      );
+    }
+    expect(cleanupLaneAt(Date.parse('2026-10-15T12:00:00Z'))).toEqual(
+      cleanupLaneAt(Date.parse('2026-10-15T11:59:00Z')),
+    );
+  });
+
   it('keeps the deployed cron expressions aligned with the dispatcher', () => {
     const config = readFileSync(
       new URL('../wrangler.jsonc', import.meta.url),

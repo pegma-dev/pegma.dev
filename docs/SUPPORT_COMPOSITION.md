@@ -184,7 +184,8 @@ Durable rate-limit policies (separate from Identity):
 - `pegma.admin.role.mutate` (assign / revoke, 30/h per operator)
 - `pegma.admin.principal.lookup` (directory lookups, 120/h per operator)
 
-All four are swept by the same scheduled maintenance run.
+All four are swept by the same rotating cleanup schedule, one policy per
+invocation.
 
 ## Site pages
 

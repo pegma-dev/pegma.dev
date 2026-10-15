@@ -8,21 +8,61 @@ import {
   type IdentityMaintenanceRuntime,
 } from './identity-maintenance';
 import { runSupportMaintenance } from './support-maintenance';
-import { createIdentityRuntime } from './identity-runtime';
+import {
+  createIdentityRuntime,
+  createProductionIdentityRuntime,
+} from './identity-runtime';
+import {
+  createProductionSupportRuntime,
+  createAdminMutationLimiter,
+  createAdminLookupLimiter,
+} from './support-desk';
+import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
+import { cleanupLaneAt } from './maintenance-schedule';
 
 const logger: Logger = { log: vi.fn() };
+/** Semantically matches worker/migrations/0001_pegma_storage.sql. */
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS RECORDS (
+  partition_key TEXT NOT NULL,
+  row_key TEXT NOT NULL,
+  record_json TEXT,
+  version INTEGER NOT NULL,
+  deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+  PRIMARY KEY (partition_key, row_key)
+) STRICT`,
+  `CREATE TABLE IF NOT EXISTS PEGMA_STORAGE_D1_TX_GUARD (
+  reason TEXT NOT NULL
+) STRICT`,
+  `CREATE TRIGGER IF NOT EXISTS PEGMA_STORAGE_D1_TX_ABORT_EXISTS
+BEFORE INSERT ON PEGMA_STORAGE_D1_TX_GUARD
+WHEN NEW.reason = 'exists'
+BEGIN
+  SELECT RAISE(ABORT, 'PEGMA_STORAGE_D1_TX_EXISTS');
+END`,
+  `CREATE TRIGGER IF NOT EXISTS PEGMA_STORAGE_D1_TX_ABORT_MISSING
+BEFORE INSERT ON PEGMA_STORAGE_D1_TX_GUARD
+WHEN NEW.reason = 'missing'
+BEGIN
+  SELECT RAISE(ABORT, 'PEGMA_STORAGE_D1_TX_MISSING');
+END`,
+  `CREATE TRIGGER IF NOT EXISTS PEGMA_STORAGE_D1_TX_ABORT_CHANGED
+BEFORE INSERT ON PEGMA_STORAGE_D1_TX_GUARD
+WHEN NEW.reason = 'changed'
+BEGIN
+  SELECT RAISE(ABORT, 'PEGMA_STORAGE_D1_TX_CHANGED');
+END`,
+] as const;
+
 beforeAll(async () => {
-  await env.IDENTITY_DB.prepare(
-    `CREATE TABLE IF NOT EXISTS RECORDS (
-    partition_key TEXT NOT NULL, row_key TEXT NOT NULL, record_json TEXT,
-    version INTEGER NOT NULL, deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
-    PRIMARY KEY (partition_key, row_key)
-  ) STRICT`,
-  ).run();
+  for (const statement of SCHEMA_STATEMENTS) {
+    await env.IDENTITY_DB.prepare(statement).run();
+  }
 });
 beforeEach(async () => {
   vi.clearAllMocks();
   await env.IDENTITY_DB.prepare('DELETE FROM RECORDS').run();
+  await env.IDENTITY_DB.prepare('DELETE FROM PEGMA_STORAGE_D1_TX_GUARD').run();
 });
 
 function fixture() {
@@ -78,6 +118,104 @@ function fixture() {
 }
 
 describe('maintenance cursor writes over D1', () => {
+  it('covers every limiter in the real production compositions', () => {
+    const identity = createProductionIdentityRuntime(
+      {
+        ...env,
+        IDENTITY_EMAIL_CODE_SECRET_BASE64: btoa(
+          String.fromCharCode(...new Uint8Array(32).fill(7)),
+        ),
+      },
+      logger,
+    );
+    const support = createProductionSupportRuntime(env, {
+      identity: identity.identity,
+      sessions: identity.sessions,
+      identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+      logger,
+    });
+    const supportLimiters = [
+      ...support.limiters,
+      createAdminMutationLimiter(support.store),
+      createAdminLookupLimiter(support.store),
+    ];
+    const lanes = Array.from({ length: 14 }, (_, index) =>
+      cleanupLaneAt(Date.parse('2026-10-15T12:01:00Z') + index * 60_000),
+    );
+    for (const [kind, limiters] of [
+      ['identity', identity.limiters],
+      ['support', supportLimiters],
+    ] as const) {
+      const indices = lanes
+        .filter((lane) => lane.kind === kind && lane.task === 'rate_limits')
+        .map((lane) => lane.limiterIndex)
+        .sort();
+      expect(indices).toEqual(limiters.map((_, index) => index));
+    }
+  });
+
+  it('retries an overlapping mail/cleanup CAS conflict and preserves both sets of cursors', async () => {
+    const { store, runtime } = fixture();
+    await runIdentityMaintenance(runtime, logger);
+    vi.mocked(runtime.identity.sweepChallenges).mockResolvedValue({
+      inspected: 0,
+      pulled: 0,
+      deleted: 0,
+      rejected: 0,
+      hasMore: true,
+      cursor: 'challenge-after-overlap',
+    });
+    vi.mocked(runtime.mailWorker!.runSendPage).mockResolvedValue({
+      examined: 0,
+      results: [],
+      nextCursor: 'send-after-overlap',
+    });
+    let decisions = 0;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const collection = store.collection;
+    vi.spyOn(store, 'collection').mockImplementation((definition) => {
+      const target = collection(definition);
+      return {
+        ...target,
+        update: (key, decide, options) =>
+          target.update(
+            key,
+            async (current) => {
+              decisions++;
+              if (decisions === 2) release();
+              if (decisions <= 2) await ready;
+              return decide(current);
+            },
+            options,
+          ),
+      };
+    });
+    await Promise.all([
+      runIdentityMaintenance(runtime, logger, {
+        tasks: ['mail_send', 'mail_reconcile'],
+      }),
+      runIdentityMaintenance(runtime, logger, { tasks: ['challenges'] }),
+    ]);
+    expect(decisions).toBe(3);
+    const row = await env.IDENTITY_DB.prepare(
+      "SELECT record_json, version FROM RECORDS WHERE partition_key = 'pegma-dev-maintenance:identity'",
+    ).first<{ record_json: string; version: number }>();
+    expect(row?.version).toBe(3);
+    expect(JSON.parse(row!.record_json)).toMatchObject({
+      mailSendCursor: 'send-after-overlap',
+      challengeCursor: 'challenge-after-overlap',
+      mailReconcileCursor: 'reconcile-next',
+    });
+    expect(logger.log).not.toHaveBeenCalledWith(
+      'error',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it('keeps the real published mail workers idle without writes or provider calls', async () => {
     const { store } = fixture();
     const send = vi.fn(async () => {
