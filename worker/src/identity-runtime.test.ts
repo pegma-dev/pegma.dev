@@ -39,6 +39,30 @@ function mutation(path: string, body: unknown): Request {
 }
 
 describe('published Identity composition', () => {
+  it('avoids importing an unused email HMAC key on idle maintenance', async () => {
+    const imported = vi.spyOn(crypto.subtle, 'importKey');
+    try {
+      const runtime = createIdentityRuntime(
+        options({ emailEnabled: true, resendApiKey: 're_test_secret' }),
+        logger,
+      );
+      await runtime.identity.sweepChallenges(1);
+      await runtime.identity.sweepEmailOperations(1);
+      await runtime.mailWorker!.runSendPage({ limit: 1 });
+      await runtime.mailWorker!.runReconciliationPage({ limit: 1 });
+      expect(imported).not.toHaveBeenCalled();
+      const response = await runtime.api(
+        mutation('/api/identity/email-code/account/options', {
+          email: 'lazy@example.test',
+        }),
+      );
+      expect(response.status).toBe(200);
+      expect(imported).toHaveBeenCalledTimes(1);
+    } finally {
+      imported.mockRestore();
+    }
+  });
+
   it('composes Identity, the claims adapter, Sessions, and the account API', async () => {
     const runtime = createIdentityRuntime(options(), logger);
     const user = await runtime.identity.provisionVerifiedUser({

@@ -16,6 +16,7 @@ import {
   createProductionSupportRuntime,
   createAdminMutationLimiter,
   createAdminLookupLimiter,
+  createProductionSupportMaintenanceRuntime,
 } from './support-desk';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { cleanupLaneAt } from './maintenance-schedule';
@@ -118,6 +119,60 @@ function fixture() {
 }
 
 describe('maintenance cursor writes over D1', () => {
+  it('drains real mail jobs one per tick and resumes safely after wrapping', async () => {
+    const { store } = fixture();
+    const send = vi.fn(async () => ({
+      providerMessageRef: crypto.randomUUID(),
+    }));
+    const runtime = createIdentityRuntime(
+      {
+        store,
+        emailCodeSecretBase64: btoa(
+          String.fromCharCode(...new Uint8Array(32).fill(7)),
+        ),
+        emailFrom: 'Pegma <identity@pegma.dev>',
+        emailEnabled: true,
+        mailDelivery: {
+          provider: { send },
+          reconciliation: { reconcile: async () => ({ status: 'unknown' }) },
+          classifyFailure: () => 'unavailable',
+        },
+      },
+      logger,
+    );
+    for (let index = 0; index < 3; index++) {
+      const response = await runtime.api(
+        new Request(
+          'https://pegma.dev/api/identity/email-code/account/options',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Origin: 'https://pegma.dev',
+              'Sec-Fetch-Site': 'same-origin',
+              'CF-Connecting-IP': '192.0.2.1',
+            },
+            body: JSON.stringify({
+              email: `maintenance-${index}@example.test`,
+            }),
+          },
+        ),
+      );
+      expect(response.status).toBe(200);
+    }
+    for (let tick = 0; tick < 6; tick++) {
+      const before = send.mock.calls.length;
+      await runIdentityMaintenance(runtime, logger, { tasks: ['mail_send'] });
+      expect(send.mock.calls.length - before).toBeLessThanOrEqual(1);
+    }
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(logger.log).not.toHaveBeenCalledWith(
+      'error',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it('covers every limiter in the real production compositions', () => {
     const identity = createProductionIdentityRuntime(
       {
@@ -139,6 +194,9 @@ describe('maintenance cursor writes over D1', () => {
       createAdminMutationLimiter(support.store),
       createAdminLookupLimiter(support.store),
     ];
+    expect(
+      createProductionSupportMaintenanceRuntime(env).limiters,
+    ).toHaveLength(supportLimiters.length);
     const lanes = Array.from({ length: 14 }, (_, index) =>
       cleanupLaneAt(Date.parse('2026-10-15T12:01:00Z') + index * 60_000),
     );

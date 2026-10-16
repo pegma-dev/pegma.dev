@@ -55,10 +55,9 @@ type CursorName =
   | 'mailSweepCursor';
 
 const KEY = { partition: 'identity', id: 'maintenance' } as const;
-// Each provider call has a 10-second timeout and workers process a page
-// sequentially. Five keeps a worst-case I/O lane inside the one-minute cadence
-// and far below Cloudflare's scheduled-handler wall limit.
-const MAIL_PROVIDER_PAGE_LIMIT = 5;
+// A record can require several conditional writes and a provider call. Bound
+// CPU work as well as I/O; durable cursors continue the scan on the next tick.
+const MAINTENANCE_PAGE_LIMIT = 1;
 const maintenance = defineCollection<MaintenanceRecord>({
   name: 'pegma-dev-maintenance',
   key: (value) => ({
@@ -164,12 +163,18 @@ export async function runIdentityMaintenance(
   const tasks: Record<IdentityMaintenanceTask, () => Promise<void>> = {
     challenges: async () => {
       const previous = cursor(prior?.challengeCursor ?? null);
-      const result = await runtime.identity.sweepChallenges(100, previous);
+      const result = await runtime.identity.sweepChallenges(
+        MAINTENANCE_PAGE_LIMIT,
+        previous,
+      );
       saveCursor('challengeCursor', result.hasMore ? result.cursor : null);
     },
     email_operations: async () => {
       const previous = cursor(prior?.emailOperationCursor ?? null);
-      const result = await runtime.identity.sweepEmailOperations(100, previous);
+      const result = await runtime.identity.sweepEmailOperations(
+        MAINTENANCE_PAGE_LIMIT,
+        previous,
+      );
       saveCursor('emailOperationCursor', result.hasMore ? result.cursor : null);
     },
     rate_limits: async () => {
@@ -187,7 +192,7 @@ export async function runIdentityMaintenance(
       if (mailWorker === null) return;
       const previous = cursor(prior?.mailSendCursor ?? null);
       const result = await mailWorker.runSendPage({
-        limit: MAIL_PROVIDER_PAGE_LIMIT,
+        limit: MAINTENANCE_PAGE_LIMIT,
         ...(previous === undefined ? {} : { cursor: previous }),
       });
       const terminal = result.results.filter(
@@ -206,7 +211,7 @@ export async function runIdentityMaintenance(
       if (mailWorker === null) return;
       const previous = cursor(prior?.mailReconcileCursor ?? null);
       const result = await mailWorker.runReconciliationPage({
-        limit: MAIL_PROVIDER_PAGE_LIMIT,
+        limit: MAINTENANCE_PAGE_LIMIT,
         ...(previous === undefined ? {} : { cursor: previous }),
       });
       const terminal = result.results.filter(
@@ -225,7 +230,7 @@ export async function runIdentityMaintenance(
       if (runtime.mailWorker === null) return;
       const previous = cursor(prior?.mailSweepCursor ?? null);
       const result = await runtime.identity.sweepMail({
-        limit: 100,
+        limit: MAINTENANCE_PAGE_LIMIT,
         ...(previous === undefined ? {} : { cursor: previous }),
         terminalBefore: new Date(
           Date.now() - 7 * 24 * 60 * 60_000,

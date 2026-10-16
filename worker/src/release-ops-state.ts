@@ -20,6 +20,8 @@ export interface ReleaseOpsState {
    * cannot restore a stale ETag after a concurrent webhook projection.
    */
   readonly repositoryEtagEpochs: Readonly<Record<string, number>>;
+  /** Successful scheduled observations, used to certify a complete cycle. */
+  readonly repositoryReconciledAt: Readonly<Record<string, number>>;
 }
 
 type EncodedReleaseOpsState = {
@@ -27,6 +29,7 @@ type EncodedReleaseOpsState = {
   readonly lastSuccessfulReconciliationAt: StoredValue;
   readonly repositoryEtagsJson: StoredValue;
   readonly repositoryEtagEpochsJson: StoredValue;
+  readonly repositoryReconciledAtJson: StoredValue;
 };
 
 function opsKey(): EntityKey {
@@ -38,17 +41,29 @@ function encodeStringMap(map: Readonly<Record<string, string>>): string {
 }
 
 function decodeStringMap(value: StoredValue): Record<string, string> {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 32_768) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 32_768
+  ) {
     return {};
   }
   try {
     const parsed: unknown = JSON.parse(value);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
       return {};
     }
     const result: Record<string, string> = {};
     for (const [key, entry] of Object.entries(parsed)) {
-      if (typeof entry === 'string' && entry.length > 0 && entry.length <= 512) {
+      if (
+        typeof entry === 'string' &&
+        entry.length > 0 &&
+        entry.length <= 512
+      ) {
         result[key] = entry;
       }
     }
@@ -63,17 +78,29 @@ function encodeEpochMap(map: Readonly<Record<string, number>>): string {
 }
 
 function decodeEpochMap(value: StoredValue): Record<string, number> {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 32_768) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 32_768
+  ) {
     return {};
   }
   try {
     const parsed: unknown = JSON.parse(value);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
       return {};
     }
     const result: Record<string, number> = {};
     for (const [key, entry] of Object.entries(parsed)) {
-      if (typeof entry === 'number' && Number.isSafeInteger(entry) && entry >= 0) {
+      if (
+        typeof entry === 'number' &&
+        Number.isSafeInteger(entry) &&
+        entry >= 0
+      ) {
         result[key] = entry;
       }
     }
@@ -89,6 +116,7 @@ function encode(value: ReleaseOpsState): EncodedReleaseOpsState {
     lastSuccessfulReconciliationAt: value.lastSuccessfulReconciliationAt,
     repositoryEtagsJson: encodeStringMap(value.repositoryEtags),
     repositoryEtagEpochsJson: encodeEpochMap(value.repositoryEtagEpochs),
+    repositoryReconciledAtJson: encodeEpochMap(value.repositoryReconciledAt),
   };
 }
 
@@ -106,6 +134,9 @@ function decode(record: StoredRecord): ReleaseOpsState {
     repositoryEtagEpochs: decodeEpochMap(
       record['repositoryEtagEpochsJson'] ?? null,
     ),
+    repositoryReconciledAt: decodeEpochMap(
+      record['repositoryReconciledAtJson'] ?? null,
+    ),
   };
 }
 
@@ -122,9 +153,12 @@ const EMPTY: ReleaseOpsState = {
   lastSuccessfulReconciliationAt: null,
   repositoryEtags: {},
   repositoryEtagEpochs: {},
+  repositoryReconciledAt: {},
 };
 
-export async function readReleaseOpsState(store: Store): Promise<ReleaseOpsState> {
+export async function readReleaseOpsState(
+  store: Store,
+): Promise<ReleaseOpsState> {
   const current = await store.collection(releaseOpsCollection()).get(opsKey());
   return current ?? EMPTY;
 }
@@ -159,13 +193,15 @@ export async function markReleaseWebhookSuccess(
   store: Store,
   at: string,
 ): Promise<void> {
-  await store.collection(releaseOpsCollection()).update(opsKey(), (current) => ({
-    action: 'write',
-    value: {
-      ...(current ?? EMPTY),
-      lastSuccessfulWebhookAt: at,
-    },
-  }));
+  await store
+    .collection(releaseOpsCollection())
+    .update(opsKey(), (current) => ({
+      action: 'write',
+      value: {
+        ...(current ?? EMPTY),
+        lastSuccessfulWebhookAt: at,
+      },
+    }));
 }
 
 /** One repository ETag update conditioned on the epoch observed at fetch time. */
@@ -185,6 +221,11 @@ export async function mergeReleaseRepositoryEtagUpdates(
   store: Store,
   updates: readonly ConditionalEtagUpdate[],
   markSuccessAt: string | null,
+  scheduled?: {
+    readonly repositoryIds: readonly string[];
+    readonly succeeded: readonly string[];
+    readonly scheduledTime: number;
+  },
 ): Promise<void> {
   await store.collection(releaseOpsCollection()).update(opsKey(), (current) => {
     const base = current ?? EMPTY;
@@ -201,14 +242,45 @@ export async function mergeReleaseRepositoryEtagUpdates(
         etags[update.repositoryId] = update.etag;
       }
     }
+    const reconciled = { ...base.repositoryReconciledAt };
+    let completedAt = markSuccessAt ?? base.lastSuccessfulReconciliationAt;
+    if (scheduled !== undefined) {
+      // Progress is meaningful only for the current catalog. ETag epochs are
+      // deliberately retained separately: they fence concurrent webhooks.
+      for (const id of Object.keys(reconciled)) {
+        if (!scheduled.repositoryIds.includes(id)) delete reconciled[id];
+      }
+      for (const id of scheduled.succeeded) {
+        reconciled[id] = Math.max(reconciled[id] ?? 0, scheduled.scheduledTime);
+      }
+      const cycleStart =
+        Math.floor(scheduled.scheduledTime / (6 * 60 * 60_000)) *
+        6 *
+        60 *
+        60_000;
+      if (
+        scheduled.repositoryIds.length > 0 &&
+        scheduled.repositoryIds.every(
+          (id) => (reconciled[id] ?? -1) >= cycleStart,
+        )
+      ) {
+        // The oldest successful shard certifies the full catalog. Late retries
+        // must neither regress health nor let one successful repo hide failures.
+        const oldest = Math.min(
+          ...scheduled.repositoryIds.map((id) => reconciled[id]!),
+        );
+        if (completedAt === null || oldest > Date.parse(completedAt))
+          completedAt = new Date(oldest).toISOString();
+      }
+    }
     return {
       action: 'write',
       value: {
         ...base,
         repositoryEtags: etags,
         repositoryEtagEpochs: epochs,
-        lastSuccessfulReconciliationAt:
-          markSuccessAt ?? base.lastSuccessfulReconciliationAt,
+        repositoryReconciledAt: reconciled,
+        lastSuccessfulReconciliationAt: completedAt,
       },
     };
   });

@@ -185,12 +185,12 @@ describe('Identity maintenance', () => {
     await runIdentityMaintenance(value.runtime, value.logger, {
       tasks: ['mail_send'],
     });
-    expect(value.sendPage).toHaveBeenNthCalledWith(2, { limit: 5 });
+    expect(value.sendPage).toHaveBeenNthCalledWith(2, { limit: 1 });
     await runIdentityMaintenance(value.runtime, value.logger, {
       tasks: ['mail_send'],
     });
     expect(value.sendPage).toHaveBeenNthCalledWith(3, {
-      limit: 5,
+      limit: 1,
       cursor: 'send-next',
     });
   });
@@ -293,20 +293,20 @@ describe('Identity maintenance', () => {
 
     expect(value.challengeSweep).toHaveBeenNthCalledWith(
       2,
-      100,
+      1,
       'challenge-next',
     );
     expect(value.operationSweep).toHaveBeenNthCalledWith(
       2,
-      100,
+      1,
       'operation-next',
     );
     expect(value.sendPage).toHaveBeenNthCalledWith(2, {
-      limit: 5,
+      limit: 1,
       cursor: 'send-next',
     });
     expect(value.reconciliationPage).toHaveBeenNthCalledWith(2, {
-      limit: 5,
+      limit: 1,
     });
     expect(value.mailSweep).toHaveBeenCalledTimes(2);
     expect(value.limiterSweep).toHaveBeenCalledTimes(2);

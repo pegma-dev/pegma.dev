@@ -21,8 +21,8 @@ import {
 } from './release-projection';
 import type { ComponentRelease } from './component-release';
 
-/** Cron expression for six-hour release reconciliation (not identity). */
-export const RELEASE_RECONCILIATION_CRON = '0 */6 * * *';
+/** One repository per minute during each six-hour reconciliation window. */
+export const RELEASE_RECONCILIATION_CRON = '0-59 */6 * * *';
 
 const GITHUB_API = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -47,6 +47,8 @@ export interface RunReleaseReconciliationOptions {
   readonly config: ReleaseReconciliationConfig;
   readonly now?: string;
   readonly fetchImpl?: typeof fetch;
+  /** Cron timestamp selects one catalog slot; omit for explicit full backfill. */
+  readonly scheduledTime?: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -178,16 +180,15 @@ async function clearCurrentRelease(
   throw new Error('Release clear conflicted repeatedly.');
 }
 
-async function reconcileOneRepository(
-  options: {
-    readonly store: Store;
-    readonly entry: ReleaseCatalogEntry;
-    readonly etag: string | undefined;
-    readonly observedAt: string;
-    readonly fetchImpl: typeof fetch;
-  },
-): Promise<{
-  readonly outcome: 'upserted' | 'cleared' | 'not_modified' | 'unchanged' | 'failed';
+async function reconcileOneRepository(options: {
+  readonly store: Store;
+  readonly entry: ReleaseCatalogEntry;
+  readonly etag: string | undefined;
+  readonly observedAt: string;
+  readonly fetchImpl: typeof fetch;
+}): Promise<{
+  readonly outcome:
+    'upserted' | 'cleared' | 'not_modified' | 'unchanged' | 'failed';
   readonly etag: string | undefined;
 }> {
   const { store, entry, observedAt, fetchImpl } = options;
@@ -283,9 +284,26 @@ export async function runReleaseReconciliation(
   const { store, logger, config } = options;
   const observedAt = options.now ?? new Date().toISOString();
   const fetchImpl = options.fetchImpl ?? fetch;
-  const catalog = allowedReleaseCatalog(config.allowedRepositoryIds);
+  const fullCatalog = allowedReleaseCatalog(config.allowedRepositoryIds);
+  if (options.scheduledTime !== undefined && fullCatalog.length > 60)
+    throw new RangeError('Release catalog exceeds scheduled slots.');
+  if (
+    options.scheduledTime !== undefined &&
+    (!Number.isFinite(new Date(options.scheduledTime).getTime()) ||
+      options.scheduledTime < 0)
+  )
+    throw new RangeError('Invalid release schedule timestamp.');
+  const slot =
+    options.scheduledTime === undefined
+      ? undefined
+      : new Date(options.scheduledTime).getUTCMinutes();
+  const catalog =
+    slot === undefined ? fullCatalog : fullCatalog.slice(slot, slot + 1);
+  if (slot !== undefined && catalog.length === 0)
+    return { examined: 0, upserted: 0, cleared: 0, notModified: 0, failed: 0 };
   // Epoch-conditioned ETag updates so a concurrent webhook invalidation wins.
   const etagUpdates: ConditionalEtagUpdate[] = [];
+  const succeeded: string[] = [];
 
   let examined = 0;
   let upserted = 0;
@@ -300,11 +318,7 @@ export async function runReleaseReconciliation(
     const expectedEpoch = live.repositoryEtagEpochs[entry.repositoryId] ?? 0;
     let result: {
       readonly outcome:
-        | 'upserted'
-        | 'cleared'
-        | 'not_modified'
-        | 'unchanged'
-        | 'failed';
+        'upserted' | 'cleared' | 'not_modified' | 'unchanged' | 'failed';
       readonly etag: string | undefined;
     };
     try {
@@ -323,7 +337,10 @@ export async function runReleaseReconciliation(
 
     if (result.outcome === 'failed') {
       failed += 1;
-    } else if (result.outcome === 'cleared') {
+    } else {
+      succeeded.push(entry.repositoryId);
+    }
+    if (result.outcome === 'cleared') {
       cleared += 1;
       etagUpdates.push({
         repositoryId: entry.repositoryId,
@@ -332,7 +349,7 @@ export async function runReleaseReconciliation(
       });
     } else if (result.outcome === 'not_modified') {
       notModified += 1;
-    } else {
+    } else if (result.outcome !== 'failed') {
       if (result.outcome === 'upserted') {
         upserted += 1;
       }
@@ -354,8 +371,21 @@ export async function runReleaseReconciliation(
 
   // Persist success only when every repository completed without failure so
   // health "stale" stays honest. Merge ETag updates for successful repos.
+  const scheduled =
+    options.scheduledTime === undefined
+      ? undefined
+      : {
+          repositoryIds: fullCatalog.map((entry) => entry.repositoryId),
+          succeeded,
+          scheduledTime: options.scheduledTime,
+        };
   if (summary.failed === 0) {
-    await mergeReleaseRepositoryEtagUpdates(store, etagUpdates, observedAt);
+    await mergeReleaseRepositoryEtagUpdates(
+      store,
+      etagUpdates,
+      scheduled === undefined ? observedAt : null,
+      scheduled,
+    );
     logger.log('info', 'release_reconciliation.completed', {
       examined: summary.examined,
       upserted: summary.upserted,
@@ -363,7 +393,12 @@ export async function runReleaseReconciliation(
       notModified: summary.notModified,
     });
   } else {
-    await mergeReleaseRepositoryEtagUpdates(store, etagUpdates, null);
+    await mergeReleaseRepositoryEtagUpdates(
+      store,
+      etagUpdates,
+      null,
+      scheduled,
+    );
     logger.log('error', 'release_reconciliation.partial_failure', {
       examined: summary.examined,
       upserted: summary.upserted,

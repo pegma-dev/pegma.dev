@@ -34,12 +34,18 @@ import {
   createAdminLookupLimiter,
   createAdminMutationLimiter,
   createProductionSupportRuntime,
+  createProductionSupportMaintenanceRuntime,
   probeSupportStore,
   supportHealthProbeEnabled,
   type SupportRuntimeEnv,
 } from './support-desk';
 import { runSupportMaintenance } from './support-maintenance';
-import { MAIL_CRON, CLEANUP_CRON, cleanupLaneAt } from './maintenance-schedule';
+import {
+  MAIL_CRON,
+  MAIL_RECONCILE_CRON,
+  CLEANUP_CRON,
+  cleanupLaneAt,
+} from './maintenance-schedule';
 import { createPegmaMcpHandler } from './mcp-server';
 import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 
@@ -387,6 +393,7 @@ export default {
               store: createProductionStore(env),
               logger,
               config: releasesConfig,
+              scheduledTime: controller.scheduledTime,
             });
           } catch (error) {
             logger.log('error', 'release_reconciliation.unavailable', {
@@ -402,7 +409,11 @@ export default {
       controller.cron === CLEANUP_CRON
         ? cleanupLaneAt(controller.scheduledTime)
         : null;
-    if (controller.cron !== MAIL_CRON && cleanup === null) {
+    if (
+      controller.cron !== MAIL_CRON &&
+      controller.cron !== MAIL_RECONCILE_CRON &&
+      cleanup === null
+    ) {
       logger.log('warn', 'maintenance.unknown_cron', { cron: controller.cron });
       return;
     }
@@ -415,7 +426,13 @@ export default {
               createProductionIdentityRuntime(env, logger),
               logger,
               cleanup === null
-                ? { tasks: ['mail_send', 'mail_reconcile'] }
+                ? {
+                    tasks: [
+                      controller.cron === MAIL_CRON
+                        ? 'mail_send'
+                        : 'mail_reconcile',
+                    ],
+                  }
                 : {
                     tasks: [cleanup.task],
                     ...(cleanup.limiterIndex === undefined
@@ -435,37 +452,8 @@ export default {
       ctx.waitUntil(
         (async () => {
           try {
-            const identityRuntime = createProductionIdentityRuntime(
-              env,
-              logger,
-            );
-            const supportRuntime = createProductionSupportRuntime(env, {
-              sessions: identityRuntime.sessions,
-              identity: identityRuntime.identity,
-              identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
-              logger,
-            });
             await runSupportMaintenance(
-              {
-                store: supportRuntime.store,
-                clock: supportRuntime.clock,
-                // The admin mutation limiter joins the sweep: without it,
-                // expired pegma.admin.role.mutate counters would sit in D1
-                // forever.
-                limiters: [
-                  ...supportRuntime.limiters,
-                  createAdminMutationLimiter(
-                    supportRuntime.store,
-                    supportRuntime.clock,
-                  ),
-                  createAdminLookupLimiter(
-                    supportRuntime.store,
-                    supportRuntime.clock,
-                  ),
-                ],
-                terminalRetentionMilliseconds:
-                  supportRuntime.terminalRetentionMilliseconds,
-              },
+              createProductionSupportMaintenanceRuntime(env),
               logger,
               {
                 tasks: [cleanup.task],

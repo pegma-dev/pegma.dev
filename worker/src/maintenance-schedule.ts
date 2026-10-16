@@ -2,9 +2,10 @@ import type { IdentityMaintenanceTask } from './identity-maintenance';
 import type { SupportMaintenanceTask } from './support-maintenance';
 
 export const MAIL_CRON = '* * * * *';
-// A separate invocation gives cleanup its own CPU allowance. Skip minute zero
-// (also used by release reconciliation), while rotating through 14 small lanes.
-export const CLEANUP_CRON = '1-59 * * * *';
+// Skip minute zero so every trigger has a distinct schedule.
+export const MAIL_RECONCILE_CRON = '1-59 * * * *';
+// Cleanup skips minute 59 and rotates through 14 small lanes.
+export const CLEANUP_CRON = '0-58 * * * *';
 
 type CleanupLane =
   | {
@@ -40,8 +41,8 @@ const CLEANUP_LANES: readonly CleanupLane[] = [
 /** Deterministic across cold starts, delayed delivery, and UTC hour boundaries. */
 export function cleanupLaneAt(scheduledTime: number): CleanupLane {
   const minute = Math.floor(scheduledTime / 60_000);
-  // Count only eligible minutes so skipping minute zero never skips a lane.
-  const tick = minute - Math.floor(minute / 60) - 1;
+  // Count only eligible minutes so skipping minute 59 never skips a lane.
+  const tick = minute - Math.floor((minute + 1) / 60);
   const length = CLEANUP_LANES.length;
   return CLEANUP_LANES[((tick % length) + length) % length]!;
 }

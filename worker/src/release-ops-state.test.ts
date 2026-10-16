@@ -10,6 +10,33 @@ import {
 } from './release-ops-state';
 
 describe('release ops state', () => {
+  it('prunes removed progress without discarding active progress or ETag fences', async () => {
+    const store = createMemoryStore();
+    const start = Date.parse('2026-10-15T12:00:00Z');
+    await markReleaseWebhookSuccess(store, new Date(start).toISOString());
+    await invalidateReleaseRepositoryEtag(store, 'removed');
+    await mergeReleaseRepositoryEtagUpdates(store, [], null, {
+      repositoryIds: ['active', 'removed'],
+      succeeded: ['active', 'removed'],
+      scheduledTime: start,
+    });
+    await mergeReleaseRepositoryEtagUpdates(store, [], null, {
+      repositoryIds: ['active', 'added'],
+      succeeded: ['added'],
+      scheduledTime: start + 60_000,
+    });
+    const ops = await readReleaseOpsState(store);
+    expect(ops.repositoryReconciledAt).toEqual({
+      active: start,
+      added: start + 60_000,
+    });
+    expect(ops.repositoryEtagEpochs).toEqual({ removed: 1 });
+    expect(ops.lastSuccessfulWebhookAt).toBe(new Date(start).toISOString());
+    expect(ops.lastSuccessfulReconciliationAt).toBe(
+      new Date(start).toISOString(),
+    );
+  });
+
   it('records webhook and reconciliation markers independently', async () => {
     const store = createMemoryStore();
     await markReleaseWebhookSuccess(store, '2026-07-28T10:00:00.000Z');
@@ -27,9 +54,7 @@ describe('release ops state', () => {
 
     const ops = await readReleaseOpsState(store);
     expect(ops.lastSuccessfulWebhookAt).toBe('2026-07-28T10:00:00.000Z');
-    expect(ops.lastSuccessfulReconciliationAt).toBe(
-      '2026-07-28T12:00:00.000Z',
-    );
+    expect(ops.lastSuccessfulReconciliationAt).toBe('2026-07-28T12:00:00.000Z');
     expect(ops.repositoryEtags).toEqual({ '1313911960': '"etag"' });
   });
 
@@ -55,9 +80,7 @@ describe('release ops state', () => {
     const ops = await readReleaseOpsState(store);
     expect(ops.repositoryEtags).toEqual({ '1312512520': '"keep"' });
     expect(ops.repositoryEtagEpochs['1313911960']).toBe(1);
-    expect(ops.lastSuccessfulReconciliationAt).toBe(
-      '2026-07-28T12:00:00.000Z',
-    );
+    expect(ops.lastSuccessfulReconciliationAt).toBe('2026-07-28T12:00:00.000Z');
   });
 
   it('does not restore ETags after concurrent invalidation', async () => {
