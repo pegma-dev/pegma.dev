@@ -1,0 +1,57 @@
+---
+import Base from '../../../layouts/Base.astro';
+---
+
+<Base title="Connect an agent - Pegma" description="Confirm a device code and review a registered agent's access request.">
+  <section class="account-hero" data-agent-flow="device_code">
+    <p class="eyebrow">Account · Agent access</p>
+    <h1>Connect an agent</h1>
+    <p class="lede">Enter the code shown by the agent you are connecting, then review its request. Approval requires your current Admin access.</p>
+  </section>
+  <p id="agent-status" class="notice" role="status" aria-live="polite">Checking your account access...</p>
+  <section id="agent-signed-out" class="account-panel" hidden>
+    <h2>Sign in required</h2>
+    <p>Use your existing Pegma account, then return to enter the device code.</p>
+    <a id="agent-sign-in" href="/account">Sign in</a>
+  </section>
+  <section id="agent-panel" class="account-panel" hidden>
+    <p id="agent-resource" class="form-note"></p>
+    <form id="agent-device-code" class="account-form">
+      <label for="agent-user-code">Code shown by your agent</label>
+      <input id="agent-user-code" name="userCode" type="text" maxlength="200" required autocomplete="off" autocapitalize="characters" spellcheck="false" />
+      <button type="submit">Review this request</button>
+      <p class="form-note">Only enter a code for a connection you started.</p>
+    </form>
+    <section id="agent-request" hidden>
+      <h2 id="agent-client"></h2>
+      <dl id="agent-details"></dl>
+      <form id="agent-consent" class="account-form">
+        <fieldset>
+          <legend>Permissions to approve</legend>
+          <div id="agent-scopes"></div>
+        </fieldset>
+        <p>Access remains subject to your current permissions. Sign-out does not revoke an agent grant; use the grant controls below.</p>
+        <div class="account-inline">
+          <button type="submit" name="decision" value="approve">Approve selected permissions</button>
+          <button type="submit" name="decision" value="deny" class="secondary-button">Deny</button>
+        </div>
+      </form>
+    </section>
+    <section>
+      <h2>View or revoke a known grant</h2>
+      <p>Enter the grant ID from your approval. Only your own grants are available here.</p>
+      <form id="agent-grant-lookup" class="account-form">
+        <label for="agent-grant-id">Grant ID</label>
+        <input id="agent-grant-id" name="grantId" type="text" maxlength="512" required autocomplete="off" />
+        <button type="submit">View grant</button>
+      </form>
+      <section id="agent-grant" hidden>
+        <dl id="agent-grant-details"></dl>
+        <button id="agent-revoke" type="button" class="secondary-button">Revoke this grant</button>
+      </section>
+    </section>
+    <p><a href="/account/agents/authorize">Known grant controls</a> · <a href="/account">Account</a> · <a href="/knowledge">Guides</a></p>
+  </section>
+  <noscript><p class="notice">Reviewing agent access requires JavaScript and a signed-in Admin session.</p></noscript>
+  <script is:inline type="module" src="/agent-access.js"></script>
+</Base>

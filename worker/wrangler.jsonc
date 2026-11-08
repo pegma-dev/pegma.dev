@@ -11,8 +11,18 @@
       "pattern": "pegma.dev/api/*",
       "zone_name": "pegma.dev",
     },
+    {
+      "pattern": "pegma.dev/.well-known/oauth-authorization-server",
+      "zone_name": "pegma.dev",
+    },
+    {
+      "pattern": "pegma.dev/.well-known/oauth-protected-resource/api/knowledge/mcp",
+      "zone_name": "pegma.dev",
+    },
   ],
   "vars": {
+    "PEGMA_KNOWLEDGE_ENABLED": "false",
+    "PEGMA_AGENT_CLIENTS_JSON": "[]",
     "IDENTITY_EMAIL_FROM": "Pegma <identity@pegma.dev>",
     "IDENTITY_EMAIL_ENABLED": "true",
     "GITHUB_ORGANIZATION_ID": "309286193",

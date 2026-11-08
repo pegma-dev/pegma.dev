@@ -48,6 +48,7 @@ import {
 } from './maintenance-schedule';
 import { createPegmaMcpHandler } from './mcp-server';
 import type { CatalogFetchEnv } from './mcp-catalog-fetch';
+import { handleKnowledgeRequest, isKnowledgeRequest } from './knowledge-host';
 
 type AppEnv = Env &
   LoggerEnv &
@@ -137,6 +138,10 @@ export default {
           },
         );
       }
+    }
+
+    if (isKnowledgeRequest(path)) {
+      return handleKnowledgeRequest(request, env, logger);
     }
 
     if (
