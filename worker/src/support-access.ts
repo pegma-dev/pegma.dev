@@ -29,6 +29,8 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
 
 /** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */
 export const SUPPORT_ROLE = 'Support' as const;
+/** Explicitly assigned KB staff authority, independent of Support grants. */
+export const KNOWLEDGE_ROLE = 'Knowledge' as const;
 
 /**
  * The role-administration role name — mapped since the Phase 5 surface
@@ -93,7 +95,8 @@ export const APPLICATION_SCOPE = Object.freeze({
  * Customer permissions are granted to any authenticated account via
  * `defaults` — not a paid entitlement or invented multi-tenant role (there
  * is no billing ledger on pegma.dev; roles are the only stored grant).
- * Staff permissions are granted via the stored, audited `Support` role,
+ * Support permissions are granted via the stored, audited `Support` role,
+ * and KB staff permissions require the separately assigned `Knowledge` role;
  * and role administration via the stored, audited `Admin` role — mapped
  * with the Phase 5 surface. Version 3 adds Knowledge Base permissions and
  * administrator-only agent linking without replacing any stored assignment.
@@ -103,10 +106,8 @@ export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
   version: 'pegma.dev-policy-3',
   defaults: [...SUPPORT_CUSTOMER_PERMISSIONS, knowledgePermissions.articleRead],
   roles: Object.freeze({
-    [SUPPORT_ROLE]: [
-      ...SUPPORT_STAFF_PERMISSIONS,
-      ...KNOWLEDGE_STAFF_PERMISSIONS,
-    ],
+    [SUPPORT_ROLE]: [...SUPPORT_STAFF_PERMISSIONS],
+    [KNOWLEDGE_ROLE]: [...KNOWLEDGE_STAFF_PERMISSIONS],
     [ADMIN_ROLE]: [
       ...ADMIN_PERMISSIONS,
       AGENT_LINK_PERMISSION,

@@ -22,13 +22,17 @@ function failure(error) {
     signedOut.hidden = error.status !== 401;
   }
   status(
-    error.status === 401
-      ? 'Sign in to read your available guides.'
-      : error.status === 403
-        ? 'These guides are not available to your account.'
-        : error.status === 404
-          ? 'That guide is unavailable.'
-          : 'Guides are temporarily unavailable. Try again later.',
+    error.status === 429
+      ? Number.isFinite(error.retryAfterSeconds)
+        ? `Too many requests. Try again in ${error.retryAfterSeconds} second(s).`
+        : 'Too many requests. Wait before trying again.'
+      : error.status === 401
+        ? 'Sign in to read your available guides.'
+        : error.status === 403
+          ? 'These guides are not available to your account.'
+          : error.status === 404
+            ? 'That guide is unavailable.'
+            : 'Guides are temporarily unavailable. Try again later.',
     error.status !== 401,
   );
 }
@@ -46,6 +50,15 @@ async function json(path, init = {}) {
       typeof body.error === 'string' ? body.error : 'unavailable',
     );
     error.status = response.status;
+    const retry = response.headers.get('Retry-After');
+    const seconds =
+      retry === null
+        ? NaN
+        : /^\d+$/u.test(retry)
+          ? Number(retry)
+          : Math.ceil((Date.parse(retry) - Date.now()) / 1000);
+    if (Number.isFinite(seconds) && seconds >= 0)
+      error.retryAfterSeconds = seconds;
     throw error;
   }
   return body;
@@ -63,30 +76,34 @@ async function showArticle(articleId, updateUrl = true) {
   const generation = ++readGeneration;
   articleNode.hidden = true;
   status('Loading guide...');
-  const article = await portal('getPublishedArticle', { articleId });
-  if (generation !== readGeneration) return;
-  document.querySelector('#knowledge-title').textContent = article.title;
-  document.querySelector('#knowledge-summary').textContent = article.summary;
-  const applicability = article.applicability;
-  document.querySelector('#knowledge-applicability').textContent = [
-    applicability.productId,
-    applicability.productVersion,
-    applicability.buildId,
-    applicability.locale,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  // Published Markdown is still untrusted content; display it as text.
-  document.querySelector('#knowledge-content').textContent =
-    article.content.text;
-  articleNode.hidden = false;
-  if (updateUrl)
-    window.history.replaceState(
-      null,
-      '',
-      `/knowledge?${new URLSearchParams({ article: article.articleId })}`,
-    );
-  status('Approved guide loaded.');
+  try {
+    const article = await portal('getPublishedArticle', { articleId });
+    if (generation !== readGeneration) return;
+    document.querySelector('#knowledge-title').textContent = article.title;
+    document.querySelector('#knowledge-summary').textContent = article.summary;
+    const applicability = article.applicability;
+    document.querySelector('#knowledge-applicability').textContent = [
+      applicability.productId,
+      applicability.productVersion,
+      applicability.buildId,
+      applicability.locale,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    // Published Markdown is still untrusted content; display it as text.
+    document.querySelector('#knowledge-content').textContent =
+      article.content.text;
+    articleNode.hidden = false;
+    if (updateUrl)
+      window.history.replaceState(
+        null,
+        '',
+        `/knowledge?${new URLSearchParams({ article: article.articleId })}`,
+      );
+    status('Approved guide loaded.');
+  } catch (error) {
+    if (generation === readGeneration) failure(error);
+  }
 }
 
 document
@@ -120,7 +137,7 @@ document
         title.className = 'text-button';
         title.textContent = article.title;
         title.addEventListener('click', () => {
-          showArticle(article.articleId).catch(failure);
+          showArticle(article.articleId);
         });
         const snippet = document.createElement('p');
         snippet.textContent = article.snippet;

@@ -8,15 +8,20 @@ import {
 import {
   createAgentAccessRuntime,
   readAgentClients,
+  type AgentAccessRuntime,
 } from './agent-access-runtime';
 import { createKnowledgeRuntime } from './knowledge-runtime';
 import { AUTHORIZATION_APPLICATION_ID } from './support-access';
+import { knowledgeAdmissionCount } from './knowledge-admission';
 
 type KnowledgeConfiguration = {
   readonly [
     Key in keyof Pick<
       Env,
-      'PEGMA_KNOWLEDGE_ENABLED' | 'PEGMA_AGENT_CLIENTS_JSON'
+      | 'PEGMA_KNOWLEDGE_ENABLED'
+      | 'PEGMA_AGENT_CLIENTS_JSON'
+      | 'PEGMA_KNOWLEDGE_BROWSER_LIMIT'
+      | 'PEGMA_AGENT_RESOURCE_LIMIT'
     >
   ]?: string;
 };
@@ -68,10 +73,23 @@ export async function handleKnowledgeRequest(
       roleStore: createRoleStore(identity.store, AUTHORIZATION_APPLICATION_ID),
       logger,
     };
-    const agentAccess = createAgentAccessRuntime({
-      ...options,
-      clients: readAgentClients(env.PEGMA_AGENT_CLIENTS_JSON),
-    });
+    let agentAccess: AgentAccessRuntime | null = null;
+    try {
+      agentAccess = createAgentAccessRuntime({
+        ...options,
+        clients: readAgentClients(env.PEGMA_AGENT_CLIENTS_JSON),
+        resourceLimitCount: knowledgeAdmissionCount(
+          env.PEGMA_AGENT_RESOURCE_LIMIT,
+          300,
+        ),
+      });
+    } catch (error) {
+      // An invalid optional agent registration must not disable browser guides
+      // or human review. The issuer and bearer paths remain unavailable.
+      logger.log('error', 'agent_access.configuration_unavailable', {
+        error: error instanceof Error ? error.name : 'unknown',
+      });
+    }
     const path = new URL(request.url).pathname;
     if (metadataPaths.has(path) || path.startsWith('/api/agent-access/')) {
       if (agentAccess === null)
@@ -88,9 +106,15 @@ export async function handleKnowledgeRequest(
       );
     }
     return (
-      (await createKnowledgeRuntime({ ...options, agentAccess }).handle(
-        request,
-      )) ??
+      (await createKnowledgeRuntime({
+        ...options,
+        agentAccess,
+        isEnabled: () => env.PEGMA_KNOWLEDGE_ENABLED === 'true',
+        browserLimitCount: knowledgeAdmissionCount(
+          env.PEGMA_KNOWLEDGE_BROWSER_LIMIT,
+          120,
+        ),
+      }).handle(request)) ??
       new Response('Not Found', {
         status: 404,
         headers: { 'Cache-Control': 'no-store' },

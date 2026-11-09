@@ -16,6 +16,7 @@ import {
   exactObject,
   isPlainObject,
   json,
+  optionalKeysObject,
   readJson,
 } from './api-auth';
 import {
@@ -27,7 +28,10 @@ import {
   type AgentAccessRuntime,
 } from './agent-access-runtime';
 import { KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION } from './support-access';
-import type { KnowledgeEvidenceService } from './knowledge-evidence';
+import {
+  KnowledgeLedgerError,
+  type KnowledgeEvidenceService,
+} from './knowledge-evidence';
 import { IDENTITY_ISSUER } from './identity-api';
 
 export interface KnowledgeApiOptions extends AgentBrowserOptions {
@@ -35,6 +39,8 @@ export interface KnowledgeApiOptions extends AgentBrowserOptions {
   readonly evidence: KnowledgeEvidenceService;
   readonly agentAccess: AgentAccessRuntime | null;
   readonly limitBrowser: (request: Request) => Promise<void>;
+  /** Server-only bounded repair; never accepts caller authority or returns DTOs. */
+  readonly repairArticle?: (articleId: string) => Promise<void>;
 }
 
 function secured(response: Response): Response {
@@ -47,6 +53,83 @@ function response(value: unknown): Response {
   if (new TextEncoder().encode(encoded).byteLength > 512 * 1024)
     throw new ApiError(503, 'response_capacity');
   return json(value);
+}
+const commandFields = ['commandId', 'correlationId', 'expectedGeneration'];
+const inputFields: Readonly<Record<string, readonly string[]>> = {
+  getCollection: ['collectionId'],
+  getValidationPolicy: ['policyId'],
+  getGovernanceConfiguration: ['collectionId'],
+  getDraft: ['articleId'],
+  getEvidence: ['articleId'],
+  getProvenance: ['articleId'],
+  getReview: ['articleId'],
+  getPublishedArticle: ['articleId'],
+  getValidationRequirements: ['collectionId', 'kind'],
+  createCollection: [...commandFields, 'collectionId', 'name'],
+  previewCollectionPolicy: ['collectionId', 'uses'],
+  updateCollectionPolicy: [...commandFields, 'collectionId', 'preview'],
+  putValidationPolicy: [...commandFields, 'policy'],
+  putGovernanceConfiguration: [
+    ...commandFields,
+    'collectionId',
+    'configuration',
+  ],
+  createDraft: [...commandFields, 'articleId', 'collectionId', 'draft'],
+  updateDraft: [...commandFields, 'articleId', 'collectionId', 'draft'],
+  submitEvidence: [...commandFields, 'articleId', 'evidence', 'receipt'],
+  submitForReview: [...commandFields, 'articleId'],
+  publishArticle: [...commandFields, 'articleId', 'review'],
+  rejectReview: [...commandFields, 'articleId', 'reason'],
+  retireArticle: [...commandFields, 'articleId'],
+  revokeEvidence: [
+    ...commandFields,
+    'articleId',
+    'articleRevision',
+    'evidenceId',
+    'evidenceVersion',
+    'evidenceHash',
+    'reason',
+  ],
+  listPortalCollections: [],
+  searchPublishedArticles: ['collectionId', 'query', 'applicability'],
+};
+function sdkInput(operation: string, input: unknown): unknown {
+  const fields = inputFields[operation];
+  if (fields === undefined) throw new ApiError(400, 'unknown_operation');
+  const optional =
+    operation === 'updateCollectionPolicy'
+      ? ['approvePublic']
+      : operation === 'listPortalCollections' ||
+          operation === 'searchPublishedArticles'
+        ? ['limit']
+        : [];
+  const value = optionalKeysObject(input, fields, optional);
+  for (const name of [
+    'commandId',
+    'correlationId',
+    'articleId',
+    'collectionId',
+    'policyId',
+  ])
+    if (name in value) boundedString(value[name], 1, 200);
+  for (const name of [
+    'expectedGeneration',
+    'articleRevision',
+    'evidenceVersion',
+    'limit',
+  ]) {
+    const count = value[name];
+    if (
+      name in value &&
+      (typeof count !== 'number' ||
+        !Number.isSafeInteger(count) ||
+        count < (name === 'expectedGeneration' ? 0 : 1))
+    )
+      throw new ApiError(400, 'invalid_request');
+  }
+  if ('approvePublic' in value && typeof value.approvePublic !== 'boolean')
+    throw new ApiError(400, 'invalid_request');
+  return value;
 }
 
 /** Browser operations are a closed allowlist over the released SDK validators. */
@@ -150,6 +233,10 @@ export function createKnowledgeApi(
     'reportRead',
     'confirmReport',
     'rejectReport',
+    'reassessReport',
+    'reportLedger',
+    'resetReports',
+    'drainReports',
   ]);
   return async (request) => {
     const url = new URL(request.url);
@@ -190,35 +277,57 @@ export function createKnowledgeApi(
           !hasPermission(identity.access, knowledgePermissions.evidenceSubmit)
         )
           throw new ApiError(403, 'forbidden');
+        // Recheck the same delegated credential after awaited input/storage.
+        // A current human principal alone does not establish a live grant.
+        const currentAgent = async () => {
+          const latest = await agents.protectedResource.authenticate(request);
+          if (latest instanceof Response) return latest;
+          if (
+            latest.grantId !== identity.grantId ||
+            latest.clientId !== identity.clientId ||
+            latest.resource !== identity.resource ||
+            latest.access.principalId !== identity.access.principalId ||
+            !latest.scopes.includes(knowledgeAgentScopes.evidenceSubmit) ||
+            !hasPermission(latest.access, knowledgePermissions.evidenceSubmit)
+          )
+            throw new ApiError(403, 'forbidden');
+          return latest;
+        };
         if (request.method === 'POST') {
           if (url.search !== '') throw new ApiError(400, 'invalid_request');
-          return secured(
-            response(
-              await options.evidence.report(
-                identity.access,
-                await readJson(request),
-              ),
-            ),
-          );
+          const input = await readJson(request);
+          const latest = await currentAgent();
+          if (latest instanceof Response) return secured(latest);
+          const value = await options.evidence.report(latest.access, input);
+          const final = await currentAgent();
+          if (final instanceof Response) return secured(final);
+          return secured(response(value));
+        }
+        const keys = [...url.searchParams.keys()];
+        if (keys.length === 1 && keys[0] === 'articleId') {
+          const value = await options.evidence.ledger(identity.access, {
+            articleId: boundedString(url.searchParams.get('articleId'), 1, 200),
+          });
+          const final = await currentAgent();
+          if (final instanceof Response) return secured(final);
+          return secured(response(value));
         }
         if (
-          [...url.searchParams.keys()].length !== 2 ||
+          keys.length !== 3 ||
           url.searchParams.getAll('articleId').length !== 1 ||
-          url.searchParams.getAll('reportId').length !== 1
+          url.searchParams.getAll('reportId').length !== 1 ||
+          url.searchParams.getAll('ledgerEpoch').length !== 1 ||
+          !/^[1-9][0-9]*$/u.test(url.searchParams.get('ledgerEpoch') ?? '')
         )
           throw new ApiError(400, 'invalid_request');
-        return secured(
-          response(
-            await options.evidence.status(identity.access, {
-              articleId: boundedString(
-                url.searchParams.get('articleId'),
-                1,
-                200,
-              ),
-              reportId: boundedString(url.searchParams.get('reportId'), 1, 200),
-            }),
-          ),
-        );
+        const value = await options.evidence.status(identity.access, {
+          articleId: boundedString(url.searchParams.get('articleId'), 1, 200),
+          reportId: boundedString(url.searchParams.get('reportId'), 1, 200),
+          ledgerEpoch: Number(url.searchParams.get('ledgerEpoch')),
+        });
+        const final = await currentAgent();
+        if (final instanceof Response) return secured(final);
+        return secured(response(value));
       }
       const state = url.pathname === '/api/staff/knowledge/state';
       if (request.method !== (state ? 'GET' : 'POST'))
@@ -297,7 +406,7 @@ export function createKnowledgeApi(
         // unknown JSON without asserting it is an already validated SDK DTO.
         const result: unknown = await Reflect.apply(method, app, [
           access,
-          envelope.input,
+          sdkInput(operation, envelope.input),
         ]);
         await requireCurrentBrowserAccess(
           request,
@@ -319,11 +428,21 @@ export function createKnowledgeApi(
             ? await options.evidence.list(access, envelope.input)
             : operation === 'reportRead'
               ? await options.evidence.read(access, envelope.input)
-              : await options.evidence.decide(
-                  access,
-                  envelope.input,
-                  operation === 'confirmReport' ? 'confirmed' : 'rejected',
-                );
+              : operation === 'reportLedger'
+                ? await options.evidence.ledger(access, envelope.input)
+                : operation === 'resetReports'
+                  ? await options.evidence.reset(access, envelope.input)
+                  : operation === 'drainReports'
+                    ? await options.evidence.drain(access, envelope.input)
+                    : await options.evidence.decide(
+                        access,
+                        envelope.input,
+                        operation === 'confirmReport'
+                          ? 'confirmed'
+                          : operation === 'rejectReport'
+                            ? 'rejected'
+                            : 'pending',
+                      );
         await requireCurrentBrowserAccess(
           request,
           options,
@@ -349,8 +468,33 @@ export function createKnowledgeApi(
       );
       const result: unknown = await Reflect.apply(selected.method, app, [
         access,
-        envelope.input,
+        sdkInput(operation, envelope.input),
       ]);
+      if (
+        ['publishArticle', 'retireArticle', 'revokeEvidence'].includes(
+          operation,
+        ) &&
+        isPlainObject(envelope.input) &&
+        typeof envelope.input.articleId === 'string'
+      ) {
+        try {
+          await options.repairArticle?.(envelope.input.articleId);
+        } catch {
+          // Publication/retirement/revocation already committed. A failed hint
+          // repair is recovered by the durable page worker, not a rollback.
+          try {
+            options.logger.log(
+              'warn',
+              'knowledge.retrieval_maintenance.failed',
+              {
+                stage: 'keyed',
+              },
+            );
+          } catch {
+            // The article command committed before this diagnostic.
+          }
+        }
+      }
       await requireCurrentBrowserAccess(
         request,
         options,
@@ -382,13 +526,11 @@ export function createKnowledgeApi(
       } else if (error instanceof KnowledgeBaseError) {
         status = error.code === 'invalid' ? 400 : 409;
         code = 'knowledge_' + error.code;
-      } else if (error instanceof TypeError || error instanceof SyntaxError) {
-        status = 400;
-        code = 'invalid_request';
       }
       if (status === 503)
         options.logger.log('error', 'knowledge.api_unavailable', {
           error: error instanceof Error ? error.name : 'unknown',
+          stage: error instanceof KnowledgeLedgerError ? error.stage : 'api',
         });
       return secured(
         json(

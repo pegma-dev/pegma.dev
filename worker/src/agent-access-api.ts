@@ -63,6 +63,7 @@ export function createAgentAccessApi(
         options,
         request.method !== 'GET',
       );
+      const principalId = context.access.principalId;
       if (path === '/api/agent-access/state') {
         if (url.search !== '') throw new ApiError(400, 'invalid_request');
         response = json({
@@ -133,6 +134,16 @@ export function createAgentAccessApi(
         };
         response = json(await options.service.approve(context, command));
       }
+      // The service may have awaited private reads or a committed mutation.
+      // Withhold its response if the original browser no longer has authority;
+      // this does not undo an approval or revocation that already committed.
+      const final = await requireAgentBrowserContext(
+        request,
+        options,
+        request.method !== 'GET',
+      );
+      if (final.context.access.principalId !== principalId)
+        throw new ApiError(403, 'forbidden');
     } catch (error) {
       if (error instanceof ApiError)
         response = json(

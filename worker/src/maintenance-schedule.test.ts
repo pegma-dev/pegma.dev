@@ -11,10 +11,21 @@ import {
   runReleaseReconciliation,
 } from './release-reconciliation';
 import { runIdentityMaintenance } from './identity-maintenance';
+import { runKnowledgeMaintenance } from './knowledge-maintenance';
+import { createKnowledgeRetrievalMaintenance } from './knowledge-retrieval-maintenance';
 import { runSupportMaintenance } from './support-maintenance';
 import worker from './index';
 
 vi.mock('./identity-maintenance', () => ({ runIdentityMaintenance: vi.fn() }));
+vi.mock('./knowledge-maintenance', () => ({
+  runKnowledgeMaintenance: vi.fn(),
+}));
+vi.mock('./knowledge-retrieval-maintenance', () => ({
+  createKnowledgeRetrievalMaintenance: vi.fn(() => ({
+    runPage: vi.fn(async () => {}),
+    repairArticleBestEffort: vi.fn(async () => {}),
+  })),
+}));
 vi.mock('./support-maintenance', () => ({ runSupportMaintenance: vi.fn() }));
 vi.mock('./logger', () => ({ createAppLogger: () => ({ log: vi.fn() }) }));
 vi.mock('./identity-runtime', () => ({
@@ -45,11 +56,31 @@ vi.mock('./release-reconciliation', async (original) => ({
   runReleaseReconciliation: vi.fn(),
 }));
 
-async function scheduled(cron: string, time: number) {
+async function scheduled(
+  cron: string,
+  time: number,
+  environment: Record<string, string> = {},
+) {
   const pending: Promise<unknown>[] = [];
+  // This tests routing with mocked runtime builders. Storage is deliberately
+  // unavailable; a routing regression must not silently reach a fake database.
+  const unavailable = (): never => {
+    throw new Error('Scheduler routing fixture cannot access D1.');
+  };
+  const identityDatabase: D1Database = {
+    prepare: unavailable,
+    batch: unavailable,
+    exec: unavailable,
+    withSession: unavailable,
+    dump: unavailable,
+  };
+  const routingEnvironment = {
+    ...environment,
+    IDENTITY_DB: identityDatabase,
+  };
   worker.scheduled(
     { cron, scheduledTime: time, noRetry() {} },
-    {} as Parameters<typeof worker.scheduled>[1],
+    routingEnvironment as Parameters<typeof worker.scheduled>[1],
     {
       waitUntil: (promise: Promise<unknown>) => {
         pending.push(promise);
@@ -60,6 +91,19 @@ async function scheduled(cron: string, time: number) {
     } as ExecutionContext,
   );
   await Promise.all(pending);
+}
+
+function knowledgeCleanupTime(): number {
+  const start = Date.parse('2026-10-15T00:00:00Z');
+  for (let minute = 0; minute < 60; minute++) {
+    const time = start + minute * 60_000;
+    if (
+      new Date(time).getUTCMinutes() !== 59 &&
+      cleanupLaneAt(time).kind === 'knowledge'
+    )
+      return time;
+  }
+  throw new Error('Expected one knowledge cleanup lane.');
 }
 
 describe('maintenance dispatch', () => {
@@ -74,7 +118,7 @@ describe('maintenance dispatch', () => {
     ]) {
       expect(cleanupLaneAt(time)).toEqual(
         expect.objectContaining({
-          kind: expect.stringMatching(/^(identity|support)$/),
+          kind: expect.stringMatching(/^(identity|support|knowledge)$/),
         }),
       );
     }
@@ -113,8 +157,8 @@ describe('maintenance dispatch', () => {
         observed.push(JSON.stringify(cleanupLaneAt(time)));
       }
     }
-    const cycle = observed.slice(0, 14);
-    expect(new Set(cycle).size).toBe(14);
+    const cycle = observed.slice(0, 15);
+    expect(new Set(cycle).size).toBe(15);
     for (let index = 0; index < observed.length; index++) {
       expect(observed[index]).toBe(cycle[index % cycle.length]);
     }
@@ -128,6 +172,8 @@ describe('maintenance dispatch', () => {
       { tasks: ['mail_send'] },
     );
     expect(runSupportMaintenance).not.toHaveBeenCalled();
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
@@ -139,41 +185,53 @@ describe('maintenance dispatch', () => {
       { tasks: ['mail_reconcile'] },
     );
     expect(runSupportMaintenance).not.toHaveBeenCalled();
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
-  it('covers all 14 cleanup lanes once across a UTC day boundary', async () => {
+  it('covers all 15 cleanup lanes once across a UTC day boundary', async () => {
     const lanes = [];
     const start = Date.parse('2026-10-15T23:53:00Z');
-    for (let minute = 0; minute < 15; minute++) {
+    for (let minute = 0; minute < 16; minute++) {
       const time = start + minute * 60_000;
       if (new Date(time).getUTCMinutes() === 59) continue;
       const lane = cleanupLaneAt(time);
       lanes.push(JSON.stringify(lane));
       vi.clearAllMocks();
       await scheduled(CLEANUP_CRON, time);
-      const selected =
-        lane.kind === 'identity'
-          ? runIdentityMaintenance
-          : runSupportMaintenance;
-      const other =
-        lane.kind === 'identity'
-          ? runSupportMaintenance
-          : runIdentityMaintenance;
+      const maintenance = {
+        identity: runIdentityMaintenance,
+        support: runSupportMaintenance,
+        knowledge: runKnowledgeMaintenance,
+      };
+      const selected = maintenance[lane.kind];
       expect(selected).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
         expect.anything(),
         {
           tasks: [lane.task],
-          ...(lane.limiterIndex === undefined
+          ...(!('limiterIndex' in lane) || lane.limiterIndex === undefined
             ? {}
             : { limiterIndex: lane.limiterIndex }),
         },
       );
-      expect(other).not.toHaveBeenCalled();
+      for (const [kind, other] of Object.entries(maintenance)) {
+        if (kind !== lane.kind) expect(other).not.toHaveBeenCalled();
+      }
       expect(runReleaseReconciliation).not.toHaveBeenCalled();
     }
-    expect(new Set(lanes).size).toBe(14);
+    expect(new Set(lanes).size).toBe(15);
+    expect(
+      lanes.filter(
+        (lane) =>
+          lane ===
+          JSON.stringify({
+            kind: 'knowledge',
+            task: 'rate_limits',
+          }),
+      ),
+    ).toHaveLength(1);
     for (const kind of ['identity', 'support']) {
       for (let limiterIndex = 0; limiterIndex < 4; limiterIndex++) {
         expect(lanes).toContain(
@@ -181,6 +239,75 @@ describe('maintenance dispatch', () => {
         );
       }
     }
+  });
+
+  it('dispatches knowledge cleanup while knowledge is disabled and client configuration is invalid', async () => {
+    const start = Date.parse('2026-10-15T00:00:00Z');
+    let time: number | undefined;
+    for (let minute = 0; minute < 60; minute++) {
+      const candidate = start + minute * 60_000;
+      if (
+        new Date(candidate).getUTCMinutes() !== 59 &&
+        cleanupLaneAt(candidate).kind === 'knowledge'
+      ) {
+        time = candidate;
+        break;
+      }
+    }
+    if (time === undefined)
+      throw new Error('Expected one knowledge cleanup lane.');
+    await scheduled(CLEANUP_CRON, time, {
+      PEGMA_KNOWLEDGE_ENABLED: 'false',
+      PEGMA_AGENT_CLIENTS_JSON: 'not-json',
+    });
+    expect(runKnowledgeMaintenance).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        store: expect.anything(),
+        clock: expect.anything(),
+      }),
+      expect.anything(),
+      { tasks: ['rate_limits'] },
+    );
+    expect(runIdentityMaintenance).not.toHaveBeenCalled();
+    expect(runSupportMaintenance).not.toHaveBeenCalled();
+    expect(runReleaseReconciliation).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
+  });
+
+  it('runs one enabled KB page on the existing knowledge tick despite a limiter failure or invalid clients', async () => {
+    vi.mocked(runKnowledgeMaintenance).mockRejectedValueOnce(
+      new Error('Synthetic limiter failure.'),
+    );
+    await scheduled(CLEANUP_CRON, knowledgeCleanupTime(), {
+      PEGMA_KNOWLEDGE_ENABLED: 'true',
+      PEGMA_AGENT_CLIENTS_JSON: 'not-json',
+    });
+    expect(runKnowledgeMaintenance).toHaveBeenCalledTimes(1);
+    expect(createKnowledgeRetrievalMaintenance).toHaveBeenCalledTimes(1);
+    const invocation = vi.mocked(createKnowledgeRetrievalMaintenance).mock
+      .results[0];
+    if (invocation?.type !== 'return')
+      throw new Error('Expected the actual scheduler repair composition.');
+    expect(invocation.value.runPage).toHaveBeenCalledTimes(1);
+    const options = vi.mocked(createKnowledgeRetrievalMaintenance).mock
+      .calls[0]?.[0];
+    expect(options?.isEnabled()).toBe(true);
+    expect(runIdentityMaintenance).not.toHaveBeenCalled();
+    expect(runSupportMaintenance).not.toHaveBeenCalled();
+    expect(runReleaseReconciliation).not.toHaveBeenCalled();
+  });
+
+  it('preserves the limiter lane when enabled KB composition fails', async () => {
+    vi.mocked(createKnowledgeRetrievalMaintenance).mockImplementationOnce(
+      () => {
+        throw new Error('Synthetic repair composition failure.');
+      },
+    );
+    await scheduled(CLEANUP_CRON, knowledgeCleanupTime(), {
+      PEGMA_KNOWLEDGE_ENABLED: 'true',
+    });
+    expect(runKnowledgeMaintenance).toHaveBeenCalledTimes(1);
+    expect(createKnowledgeRetrievalMaintenance).toHaveBeenCalledTimes(1);
   });
 
   it('runs only release reconciliation on its own cron and ignores unknown crons', async () => {
@@ -196,5 +323,7 @@ describe('maintenance dispatch', () => {
     );
     expect(runIdentityMaintenance).not.toHaveBeenCalled();
     expect(runSupportMaintenance).not.toHaveBeenCalled();
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
   });
 });

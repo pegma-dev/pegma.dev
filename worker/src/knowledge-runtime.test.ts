@@ -1,7 +1,13 @@
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
+import { hasPermission } from '@pegma/authorization-core';
 import { createRoleStore } from '@pegma/authorization-storage';
 import { createSessionStore } from '@pegma/sessions';
-import { createMemoryStore } from '@pegma/storage-core';
+import {
+  createMemoryStore,
+  type CollectionDefinition,
+  type CollectionStore,
+  type Store,
+} from '@pegma/storage-core';
 import { fixedClock, type PrincipalId } from '@pegma/spine';
 import { describe, expect, it, vi } from 'vitest';
 import { createKnowledgeRuntime } from './knowledge-runtime';
@@ -10,16 +16,38 @@ import type { IdentityPort, IdentityUser } from './identity-contracts';
 import {
   APPLICATION_SCOPE,
   AUTHORIZATION_APPLICATION_ID,
+  KNOWLEDGE_ROLE,
+  SUPPORT_STAFF_PERMISSIONS,
+  staffAccessContextFromRoles,
 } from './support-access';
 
-async function fixture() {
-  const store = createMemoryStore();
+async function fixture(options: { browserLimitCount?: number } = {}) {
+  const backing = createMemoryStore();
+  interface ReportRow {
+    readonly articleId: string;
+    readonly id: string;
+    readonly payload: string;
+  }
+  let reportDefinition: CollectionDefinition<ReportRow> | undefined;
+  const store: Store = {
+    collection<T>(definition: CollectionDefinition<T>): CollectionStore<T> {
+      if (definition.name === 'pegma-dev.knowledge-evidence.v1')
+        reportDefinition =
+          definition as unknown as CollectionDefinition<ReportRow>;
+      return backing.collection(definition);
+    },
+  };
+  function reportRows() {
+    if (reportDefinition === undefined)
+      throw new Error('The public report factory did not open its collection.');
+    return backing.collection(reportDefinition);
+  }
   const clock = fixedClock('2026-11-08T12:00:00.000Z');
   const logger = { log: vi.fn() };
   const sessions = createSessionStore(store, { logger, clock });
   const roleStore = createRoleStore(store, AUTHORIZATION_APPLICATION_ID);
   const users = new Map<PrincipalId, IdentityUser>(
-    ['admin', 'support', 'customer'].map((principalId) => [
+    ['admin', 'knowledge', 'support', 'customer'].map((principalId) => [
       principalId,
       {
         principalId,
@@ -48,6 +76,7 @@ async function fixture() {
   };
   for (const [id, role] of [
     ['admin', 'Admin'],
+    ['knowledge', KNOWLEDGE_ROLE],
     ['support', 'Support'],
   ]) {
     if (id === undefined || role === undefined)
@@ -90,6 +119,7 @@ async function fixture() {
     logger,
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
     agentAccess: null,
+    ...options,
   });
   async function request(
     path: string,
@@ -129,7 +159,16 @@ async function fixture() {
       principal,
       body: { operation, input },
     });
-  return { store, runtime, request, command, roleStore, users };
+  return {
+    store,
+    reportRows,
+    runtime,
+    request,
+    command,
+    roleStore,
+    users,
+    logger,
+  };
 }
 
 describe('Knowledge Base browser composition', () => {
@@ -176,13 +215,13 @@ describe('Knowledge Base browser composition', () => {
     ).toBeNull();
   });
 
-  it('gives Support actual review controls without collection/governance mutation', async () => {
+  it('gives explicitly granted Knowledge staff review controls without collection/governance mutation', async () => {
     const f = await fixture();
     const state = await f.request('/api/staff/knowledge/state', {
-      principal: 'support',
+      principal: 'knowledge',
     });
     expect(await state.json()).toMatchObject({
-      attesterId: 'support',
+      attesterId: 'knowledge',
       permissions: {
         collectionManage: false,
         validationManage: false,
@@ -199,21 +238,26 @@ describe('Knowledge Base browser composition', () => {
       name: 'Guides',
     });
     expect(
-      (await f.command('getCollection', { collectionId: 'guides' }, 'support'))
-        .status,
+      (
+        await f.command(
+          'getCollection',
+          { collectionId: 'guides' },
+          'knowledge',
+        )
+      ).status,
     ).toBe(200);
     expect(
       (
         await f.command(
           'getGovernanceConfiguration',
           { collectionId: 'guides' },
-          'support',
+          'knowledge',
         )
       ).status,
     ).toBe(403);
-    expect((await f.command('putValidationPolicy', {}, 'support')).status).toBe(
-      403,
-    );
+    expect(
+      (await f.command('putValidationPolicy', {}, 'knowledge')).status,
+    ).toBe(403);
     expect(
       (
         await f.command(
@@ -225,13 +269,42 @@ describe('Knowledge Base browser composition', () => {
             collectionId: 'other',
             name: 'Other',
           },
-          'support',
+          'knowledge',
         )
       ).status,
     ).toBe(403);
     expect(
       (await f.command('getCollection', { collectionId: 'other' })).status,
     ).toBe(404);
+  });
+
+  it('keeps historical Support grants limited to human support without staff KB powers', async () => {
+    const f = await fixture();
+    const support = await staffAccessContextFromRoles('support', f.roleStore);
+    expect(support).not.toBeNull();
+    if (support === null)
+      throw new Error('Historical Support authority must remain.');
+    expect(
+      SUPPORT_STAFF_PERMISSIONS.every((permission) =>
+        hasPermission(support, permission),
+      ),
+    ).toBe(true);
+    expect(
+      (await f.request('/api/staff/knowledge/state', { principal: 'support' }))
+        .status,
+    ).toBe(403);
+    for (const operation of [
+      'getDraft',
+      'getEvidence',
+      'reportRead',
+      'confirmReport',
+      'submitForReview',
+      'publishArticle',
+    ]) {
+      expect(
+        (await f.command(operation, { articleId: 'guide' }, 'support')).status,
+      ).toBe(403);
+    }
   });
 
   it('separates the signed-in portal DTOs from private staff operations', async () => {
@@ -345,19 +418,22 @@ describe('Knowledge Base browser composition', () => {
 
   it('honors actual stored role and identity revocation on the next request', async () => {
     const f = await fixture();
-    const assignment = await f.roleStore.getRoleAssignment('role-support');
+    const assignment = await f.roleStore.getRoleAssignment('role-knowledge');
     if (assignment === null) throw new Error('Missing actual role assignment.');
     await f.roleStore.revokeRoleAssignmentWithAudit({
-      assignmentId: 'role-support',
+      assignmentId: 'role-knowledge',
       expectedConcurrencyToken: assignment.concurrencyToken,
       revokedBy: { kind: 'principal', principalId: 'admin' },
       revokedAtEpochMs: Date.parse('2026-11-08T12:00:00.000Z'),
       reason: 'Synthetic revocation',
-      auditEventId: 'revoke-support',
+      auditEventId: 'revoke-knowledge',
     });
     expect(
-      (await f.request('/api/staff/knowledge/state', { principal: 'support' }))
-        .status,
+      (
+        await f.request('/api/staff/knowledge/state', {
+          principal: 'knowledge',
+        })
+      ).status,
     ).toBe(403);
     const user = f.users.get('admin');
     if (user === undefined) throw new Error('Missing synthetic user.');
@@ -370,5 +446,50 @@ describe('Knowledge Base browser composition', () => {
     expect(portal.headers.get('Cache-Control')).toBe('no-store');
     expect(portal.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(portal.headers.get('X-Content-Type-Options')).toBe('nosniff');
+  });
+
+  it('exposes the actual durable browser limiter with a bounded configurable budget', async () => {
+    const f = await fixture({ browserLimitCount: 1 });
+    expect(f.runtime.limiters).toHaveLength(1);
+    expect(typeof f.runtime.limiters[0]?.sweep).toBe('function');
+    expect((await f.request('/api/staff/knowledge/state')).status).toBe(200);
+    const limited = await f.request('/api/staff/knowledge/state');
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('Retry-After')).toBe('300');
+    await expect(fixture({ browserLimitCount: 0 })).rejects.toThrow(TypeError);
+    await expect(fixture({ browserLimitCount: 10_001 })).rejects.toThrow(
+      TypeError,
+    );
+  });
+
+  it('reports persisted ledger corruption as an internal fault without logging its body', async () => {
+    const f = await fixture();
+    const privatePayload = 'private-report-corruption-marker';
+    await f.reportRows().put({
+      articleId: 'broken',
+      id: 'head',
+      payload: privatePayload,
+    });
+    const result = await f.command(
+      'reportLedger',
+      { articleId: 'broken' },
+      'knowledge',
+    );
+    expect(result.status).toBe(503);
+    expect(await result.json()).toEqual({ error: 'service_unavailable' });
+    expect(f.logger.log).toHaveBeenCalledWith(
+      'error',
+      'knowledge.api_unavailable',
+      { error: 'KnowledgeLedgerError', stage: 'head_decode' },
+    );
+    expect(JSON.stringify(f.logger.log.mock.calls)).not.toContain(
+      privatePayload,
+    );
+    const malformed = await f.command(
+      'reportLedger',
+      { articleId: 'broken', injected: true },
+      'knowledge',
+    );
+    expect(malformed.status).toBe(400);
   });
 });

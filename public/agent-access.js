@@ -16,6 +16,7 @@ let currentGrant = null;
 let loadGeneration = 0;
 let grantGeneration = 0;
 let mutationPending = false;
+let approvedLookupSelector = '';
 
 const messages = {
   forbidden: 'Your current account does not have Admin access.',
@@ -31,26 +32,81 @@ function status(message, error = false) {
   statusNode.dataset.tone = error ? 'error' : 'neutral';
 }
 
-function failure(error) {
+function retryMessage(error) {
+  return Number.isFinite(error.retryAfterSeconds)
+    ? `Too many requests. Try again in ${error.retryAfterSeconds} second(s).`
+    : 'Too many requests. Wait before trying again.';
+}
+
+function retryAfter(response) {
+  const value = response.headers.get('Retry-After');
+  if (value === null) return undefined;
+  const seconds = /^\d+$/u.test(value)
+    ? Number(value)
+    : Math.ceil((Date.parse(value) - Date.now()) / 1000);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
+async function failure(
+  error,
+  isCurrent = () => true,
+  resource = false,
+  acceptedConsent = false,
+) {
+  if (!isCurrent()) return;
+  const prefix = acceptedConsent
+    ? 'Consent was accepted, but grant controls could not be loaded. '
+    : '';
+  if (error.status === 403 && resource) {
+    try {
+      const state = await api('/api/agent-access/state');
+      if (!isCurrent()) return;
+      csrfToken = state.csrfToken;
+      status(
+        `${prefix}That request or grant is not available to this account. Other Admin controls remain available.`,
+        true,
+      );
+      return;
+    } catch (authorityError) {
+      if (!isCurrent()) return;
+      if (authorityError.status !== 401 && authorityError.status !== 403) {
+        status(
+          `${prefix}${authorityError.status === 429 ? retryMessage(authorityError) : 'Current Admin access could not be checked. Retry the lookup.'}`,
+          true,
+        );
+        return;
+      }
+      error = authorityError;
+    }
+  }
+  if (!isCurrent()) return;
   if (error.status === 401) {
+    ++loadGeneration;
+    ++grantGeneration;
     csrfToken = '';
     approval = null;
     currentGrant = null;
     panel.hidden = true;
     signedOut.hidden = false;
-    status('Sign in to continue.');
+    status(`${prefix}Sign in to continue.`);
     return;
   }
   if (error.status === 403) {
+    ++loadGeneration;
+    ++grantGeneration;
     approval = null;
     currentGrant = null;
+    csrfToken = '';
     panel.hidden = true;
   }
   status(
-    messages[error.message] ??
-      (error.status === 403
-        ? messages.forbidden
-        : 'The request could not be completed. Refresh and try again.'),
+    prefix +
+      (error.status === 429
+        ? retryMessage(error)
+        : (messages[error.message] ??
+          (error.status === 403
+            ? messages.forbidden
+            : 'The request could not be completed. Refresh and try again.'))),
     true,
   );
 }
@@ -72,6 +128,7 @@ async function api(path, init = {}) {
       typeof body?.error === 'string' ? body.error : 'unavailable',
     );
     error.status = response.status;
+    error.retryAfterSeconds = retryAfter(response);
     throw error;
   }
   return body;
@@ -90,7 +147,7 @@ function details(node, entries) {
 
 function parameter(name) {
   const values = new URLSearchParams(window.location.search).getAll(name);
-  return values.length === 1 && values[0].length <= 512 ? values[0] : '';
+  return values.length === 1 && values[0].length <= 128 ? values[0] : '';
 }
 
 function setMutationPending(pending) {
@@ -103,46 +160,50 @@ function setMutationPending(pending) {
 
 async function loadApproval(selector, userCode = '') {
   const generation = ++loadGeneration;
+  const isCurrent = () => generation === loadGeneration;
   approval = null;
   requestPanel.hidden = true;
   status('Loading the request...');
-  const result = await api(`/api/agent-access/approval?${selector}`);
-  if (generation !== loadGeneration) return;
-  if (result.flow !== flow) throw new Error('invalid_request');
-  approval = result;
-  approvalUserCode = userCode;
-  grantInput.value = result.requestId;
-  document.querySelector('#agent-client').textContent = result.clientName;
-  details(document.querySelector('#agent-details'), [
-    ['Client ID', result.clientId],
-    ['Resource', result.resource],
-    ['Grant / request ID', result.requestId],
-    ['Status', result.status],
-    ['Expires', result.expiresAt],
-  ]);
-  const scopes = document.querySelector('#agent-scopes');
-  scopes.replaceChildren();
-  for (const [index, scope] of result.requestedScopes.entries()) {
-    const row = document.createElement('p');
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.name = 'scope';
-    checkbox.value = scope.name;
-    checkbox.id = `agent-scope-${index}`;
-    checkbox.checked = true;
-    const label = document.createElement('label');
-    label.htmlFor = checkbox.id;
-    label.textContent = `${scope.description} (${scope.name})`;
-    row.append(checkbox, label);
-    scopes.append(row);
+  try {
+    const result = await api(`/api/agent-access/approval?${selector}`);
+    if (!isCurrent()) return;
+    if (result.flow !== flow) throw new Error('invalid_request');
+    approval = result;
+    approvalUserCode = userCode;
+    document.querySelector('#agent-client').textContent = result.clientName;
+    details(document.querySelector('#agent-details'), [
+      ['Client ID', result.clientId],
+      ['Resource', result.resource],
+      ['Request ID', result.requestId],
+      ['Status', result.status],
+      ['Expires', result.expiresAt],
+    ]);
+    const scopes = document.querySelector('#agent-scopes');
+    scopes.replaceChildren();
+    for (const [index, scope] of result.requestedScopes.entries()) {
+      const row = document.createElement('p');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.name = 'scope';
+      checkbox.value = scope.name;
+      checkbox.id = `agent-scope-${index}`;
+      checkbox.checked = true;
+      const label = document.createElement('label');
+      label.htmlFor = checkbox.id;
+      label.textContent = `${scope.description} (${scope.name})`;
+      row.append(checkbox, label);
+      scopes.append(row);
+    }
+    requestPanel.hidden = false;
+    setMutationPending(mutationPending);
+    status(
+      result.status === 'pending'
+        ? 'Review the request and choose approve or deny.'
+        : `This request is ${result.status}.`,
+    );
+  } catch (error) {
+    await failure(error, isCurrent, true);
   }
-  requestPanel.hidden = false;
-  setMutationPending(mutationPending);
-  status(
-    result.status === 'pending'
-      ? 'Review the request and choose approve or deny.'
-      : `This request is ${result.status}.`,
-  );
 }
 
 consentForm.addEventListener('submit', async (event) => {
@@ -160,6 +221,8 @@ consentForm.addEventListener('submit', async (event) => {
   const request = { requestId: approval.requestId, decision };
   if (decision === 'approve') request.approvedScopes = selected;
   if (flow === 'device_code') request.userCode = approvalUserCode;
+  ++loadGeneration;
+  ++grantGeneration;
   setMutationPending(true);
   try {
     const result = await api('/api/agent-access/approval', {
@@ -185,13 +248,13 @@ consentForm.addEventListener('submit', async (event) => {
     if (result.flow !== 'device_code') throw new Error('invalid_request');
     window.history.replaceState(null, '', window.location.pathname);
     if (userCodeInput) userCodeInput.value = '';
-    status(
-      result.approved
-        ? 'Approved. Return to your agent to finish connecting. Keep this grant ID for revocation.'
-        : 'Request denied.',
-    );
+    if (result.approved) {
+      approvedLookupSelector = request.requestId;
+      document.querySelector('#agent-approved-grant').hidden = false;
+      await loadGrant(approvedLookupSelector, true);
+    } else status('Request denied.');
   } catch (error) {
-    failure(error);
+    await failure(error, () => true, true);
   } finally {
     setMutationPending(false);
   }
@@ -201,61 +264,81 @@ deviceForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (mutationPending) return;
   const code = userCodeInput.value.trim();
-  if (!code) return;
-  try {
-    await loadApproval(new URLSearchParams({ user_code: code }), code);
-  } catch (error) {
-    failure(error);
-  }
+  if (!code || code.length > 128) return;
+  await loadApproval(new URLSearchParams({ user_code: code }), code);
 });
+
+async function loadGrant(id, acceptedConsent = false) {
+  const generation = ++grantGeneration;
+  const isCurrent = () => generation === grantGeneration;
+  currentGrant = null;
+  grantPanel.hidden = true;
+  try {
+    const grant = await api(
+      `/api/agent-access/grants/${encodeURIComponent(id)}`,
+    );
+    if (!isCurrent()) return;
+    currentGrant = grant;
+    grantInput.value = grant.grantId;
+    details(document.querySelector('#agent-grant-details'), [
+      ['Grant ID', grant.grantId],
+      ['Client ID', grant.clientId],
+      ['Resource', grant.resource],
+      ['Permissions', grant.scopes.map((scope) => scope.name).join(', ')],
+      ['Status', grant.status],
+      ['Created', grant.createdAt],
+      ['Expires', grant.expiresAt],
+    ]);
+    grantPanel.hidden = false;
+    document.querySelector('#agent-grant-instructions').textContent =
+      `Grant ID: ${grant.grantId}. Use this ID in the lookup form or choose Revoke this grant below. Status: ${grant.status}.`;
+    setMutationPending(mutationPending);
+    if (acceptedConsent)
+      document.querySelector('#agent-approved-grant').hidden = true;
+    status(
+      acceptedConsent
+        ? 'Consent accepted and grant controls loaded. Return to your agent to finish connecting. The exact grant ID and revocation controls are below.'
+        : 'Grant loaded.',
+    );
+  } catch (error) {
+    await failure(error, isCurrent, true, acceptedConsent);
+  }
+}
+
+document
+  .querySelector('#agent-approved-grant')
+  .addEventListener('click', async () => {
+    if (!approvedLookupSelector || mutationPending) return;
+    await loadGrant(approvedLookupSelector, true);
+  });
 
 document
   .querySelector('#agent-grant-lookup')
   .addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = grantInput.value.trim();
-    if (!id || mutationPending) return;
-    const generation = ++grantGeneration;
-    currentGrant = null;
-    grantPanel.hidden = true;
-    try {
-      const grant = await api(
-        `/api/agent-access/grants/${encodeURIComponent(id)}`,
-      );
-      if (generation !== grantGeneration) return;
-      currentGrant = grant;
-      grantInput.value = grant.grantId;
-      details(document.querySelector('#agent-grant-details'), [
-        ['Grant ID', grant.grantId],
-        ['Client ID', grant.clientId],
-        ['Resource', grant.resource],
-        ['Permissions', grant.scopes.map((scope) => scope.name).join(', ')],
-        ['Status', grant.status],
-        ['Created', grant.createdAt],
-        ['Expires', grant.expiresAt],
-      ]);
-      grantPanel.hidden = false;
-      setMutationPending(mutationPending);
-      status('Grant loaded.');
-    } catch (error) {
-      failure(error);
-    }
+    if (!id || id.length > 128 || mutationPending) return;
+    await loadGrant(id);
   });
 
 revokeButton.addEventListener('click', async () => {
   if (mutationPending || currentGrant === null) return;
   const id = currentGrant.grantId;
   if (!window.confirm('Revoke this agent grant and its credentials?')) return;
+  ++loadGeneration;
+  const generation = ++grantGeneration;
+  const isCurrent = () => generation === grantGeneration;
   setMutationPending(true);
   try {
     await api(`/api/agent-access/grants/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
+    if (!isCurrent()) return;
     currentGrant = null;
     grantPanel.hidden = true;
     status('Grant revoked.');
   } catch (error) {
-    failure(error);
+    await failure(error, isCurrent, true);
   } finally {
     setMutationPending(false);
   }
@@ -284,7 +367,7 @@ async function start() {
         );
     }
   } catch (error) {
-    failure(error);
+    await failure(error);
   }
 }
 

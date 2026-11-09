@@ -236,6 +236,14 @@ assignForm.addEventListener('submit', async (event) => {
   ) {
     return;
   }
+  if (
+    role === 'Knowledge' &&
+    !window.confirm(
+      'Grant the Knowledge role? It permits draft editing, test-report review, evidence and provenance management, guide publication, and retirement.',
+    )
+  ) {
+    return;
+  }
   try {
     await api(
       `/api/admin/principals/${encodeURIComponent(currentPrincipal)}/roles`,

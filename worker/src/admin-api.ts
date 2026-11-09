@@ -20,12 +20,10 @@ import {
   requireSameOriginMutation,
   type Authenticated,
 } from './api-auth';
-import type {
-  IdentityLinkProjector,
-  IdentityPort,
-} from './identity-contracts';
+import type { IdentityLinkProjector, IdentityPort } from './identity-contracts';
 import {
   ADMIN_ROLE,
+  KNOWLEDGE_ROLE,
   APPLICATION_SCOPE,
   PEGMA_ACCESS_POLICY,
   SUPPORT_ROLE,
@@ -41,7 +39,8 @@ import {
 
 const PRINCIPAL_PATH =
   /^\/api\/admin\/principals\/([A-Za-z0-9._~-]{1,200})(?:\/(roles|history))?$/u;
-const ASSIGNMENT_PATH = /^\/api\/admin\/assignments\/([A-Za-z0-9._~-]{1,200})$/u;
+const ASSIGNMENT_PATH =
+  /^\/api\/admin\/assignments\/([A-Za-z0-9._~-]{1,200})$/u;
 
 /** How a lookup query was interpreted. */
 export type LookupKind = 'email' | 'principalId';
@@ -61,7 +60,7 @@ export function classifyLookup(query: string): LookupKind {
 
 /** The only roles the surface may assign; entitlements are not roles. */
 const ASSIGNABLE_ROLES: ReadonlySet<string> = Object.freeze(
-  new Set<string>([SUPPORT_ROLE, ADMIN_ROLE]),
+  new Set<string>([SUPPORT_ROLE, KNOWLEDGE_ROLE, ADMIN_ROLE]),
 );
 
 export interface AdminApiOptions {
@@ -218,8 +217,7 @@ export function createAdminApi(
           authenticated.link.subject,
         );
         const body = exactObject(await readJson(request), ['query']);
-        const query =
-          typeof body.query === 'string' ? body.query.trim() : '';
+        const query = typeof body.query === 'string' ? body.query.trim() : '';
         if (query === '' || query.length > 320) {
           throw new ApiError(400, 'invalid_query');
         }

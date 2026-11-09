@@ -78,7 +78,14 @@ import Base from '../../layouts/Base.astro';
         <select id="assign-role" name="role">
           <option value="Support">Support</option>
           <option value="Admin">Admin</option>
+          <option value="Knowledge">Knowledge</option>
         </select>
+        <p class="form-note">
+          Support grants Support Desk access. Knowledge separately grants draft
+          editing, test-report review, evidence and provenance management, guide
+          publication, and retirement. Knowledge does not grant agent linking
+          or account and role administration.
+        </p>
         <div class="account-inline">
           <button type="submit">Assign</button>
         </div>

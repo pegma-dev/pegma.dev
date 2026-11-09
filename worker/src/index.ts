@@ -40,6 +40,9 @@ import {
   type SupportRuntimeEnv,
 } from './support-desk';
 import { runSupportMaintenance } from './support-maintenance';
+import { runKnowledgeMaintenance } from './knowledge-maintenance';
+import { createKnowledgeRetrievalMaintenance } from './knowledge-retrieval-maintenance';
+import { systemClock } from '@pegma/spine';
 import {
   MAIL_CRON,
   MAIL_RECONCILE_CRON,
@@ -56,6 +59,12 @@ type AppEnv = Env &
   GitHubReleaseWebhookEnv &
   SupportRuntimeEnv &
   CatalogFetchEnv;
+
+function knowledgeRetrievalEnabled(environment: {
+  readonly PEGMA_KNOWLEDGE_ENABLED?: string;
+}): boolean {
+  return environment.PEGMA_KNOWLEDGE_ENABLED === 'true';
+}
 
 function createSupportHandler(
   env: AppEnv,
@@ -448,6 +457,44 @@ export default {
           } catch (error) {
             logger.log('error', 'identity.maintenance_unavailable', {
               error: error instanceof Error ? error.name : 'unknown',
+            });
+          }
+        })(),
+      );
+
+    if (cleanup?.kind === 'knowledge')
+      ctx.waitUntil(
+        (async () => {
+          try {
+            await runKnowledgeMaintenance(
+              { store: createProductionStore(env), clock: systemClock },
+              logger,
+              { tasks: [cleanup.task] },
+            );
+          } catch (error) {
+            logger.log('error', 'knowledge.maintenance_unavailable', {
+              error: error instanceof Error ? error.name : 'unknown',
+            });
+          }
+        })(),
+      );
+
+    // Keep the existing limiter lane independent of Knowledge activation and
+    // failures. Only the new KB page requires the current Knowledge gate.
+    if (cleanup?.kind === 'knowledge' && knowledgeRetrievalEnabled(env))
+      ctx.waitUntil(
+        (async () => {
+          try {
+            if (!knowledgeRetrievalEnabled(env)) return;
+            await createKnowledgeRetrievalMaintenance({
+              store: createProductionStore(env),
+              clock: systemClock,
+              logger,
+              isEnabled: () => knowledgeRetrievalEnabled(env),
+            }).runPage();
+          } catch {
+            logger.log('error', 'knowledge.retrieval_maintenance.failed', {
+              stage: 'composition',
             });
           }
         })(),

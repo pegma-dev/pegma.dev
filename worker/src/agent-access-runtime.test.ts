@@ -20,7 +20,10 @@ import {
   APPLICATION_SCOPE,
   AUTHORIZATION_APPLICATION_ID,
   KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+  KNOWLEDGE_ROLE,
+  PEGMA_ACCESS_POLICY,
   SUPPORT_ROLE,
+  SUPPORT_STAFF_PERMISSIONS,
 } from './support-access';
 import {
   AGENT_RESOURCE,
@@ -56,7 +59,7 @@ async function fixture() {
   const sessions = createSessionStore(store, { logger });
   const roleStore = createRoleStore(store, AUTHORIZATION_APPLICATION_ID);
   const users = new Map<string, IdentityUser>();
-  for (const id of ['admin', 'other-admin', 'staff', 'member'])
+  for (const id of ['admin', 'other-admin', 'staff', 'knowledge', 'member'])
     users.set(id, {
       principalId: id,
       email: `${id}@example.test`,
@@ -103,12 +106,14 @@ async function fixture() {
   await grant('admin', ADMIN_ROLE);
   await grant('other-admin', ADMIN_ROLE);
   await grant('staff', SUPPORT_ROLE);
+  await grant('knowledge', KNOWLEDGE_ROLE);
   const cookies = new Map<string, string>();
   const rawSessions = new Map<string, string>();
   for (const [index, id] of [
     'admin',
     'other-admin',
     'staff',
+    'knowledge',
     'member',
   ].entries()) {
     const raw = String(index).padStart(2, '0') + 's'.repeat(41);
@@ -201,6 +206,25 @@ async function fixture() {
 }
 
 describe('Agent Access host composition', () => {
+  it('applies an explicit resource budget using the existing durable limiter', async () => {
+    const f = await fixture();
+    const runtime = createAgentAccessRuntime({
+      ...f.options,
+      resourceLimitCount: 1,
+    });
+    if (runtime === null) throw new Error('Expected a configured runtime.');
+    const request = new Request(AGENT_RESOURCE, {
+      headers: { 'CF-Connecting-IP': '192.0.2.17' },
+    });
+    expect(await runtime.resourceLimit(request)).toMatchObject({
+      allowed: true,
+    });
+    expect(await runtime.resourceLimit(request)).toMatchObject({
+      allowed: false,
+    });
+    expect(runtime.limiters).toHaveLength(6);
+  });
+
   it('requires explicit bounded public client registration', async () => {
     const f = await fixture();
     expect(readAgentClients(undefined)).toBeNull();
@@ -244,6 +268,10 @@ describe('Agent Access host composition', () => {
         ?.status,
     ).toBe(403);
     expect(
+      (await f.runtime.api(f.request('/api/agent-access/state', 'knowledge')))
+        ?.status,
+    ).toBe(403);
+    expect(
       (await f.runtime.api(f.request('/api/agent-access/state', 'member')))
         ?.status,
     ).toBe(403);
@@ -255,9 +283,31 @@ describe('Agent Access host composition', () => {
       await f.roleStore.listRoleAssignments('admin', APPLICATION_SCOPE),
     ).toEqual(history);
     const staff = await createAgentPrincipalResolver(f.options)('staff');
-    expect(staff?.permissions).toContain(KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION);
+    expect(PEGMA_ACCESS_POLICY.roles?.[SUPPORT_ROLE]).toEqual(
+      SUPPORT_STAFF_PERMISSIONS,
+    );
+    expect(staff?.permissions).not.toContain(
+      KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+    );
+    expect(staff?.permissions).not.toContain('knowledge.article.draft.write');
+    expect(staff?.permissions).not.toContain('knowledge.article.publish');
     expect(staff?.permissions).not.toContain(AGENT_LINK_PERMISSION);
     expect(staff?.permissions).not.toContain('knowledge.collection.manage');
+    expect(
+      (await f.roleStore.listRoleAssignments('staff', APPLICATION_SCOPE)).map(
+        (assignment) => assignment.role,
+      ),
+    ).toEqual([SUPPORT_ROLE]);
+    const knowledge = await createAgentPrincipalResolver(f.options)(
+      'knowledge',
+    );
+    expect(knowledge?.permissions).toContain(
+      KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+    );
+    expect(knowledge?.permissions).toContain('knowledge.article.publish');
+    expect(knowledge?.permissions).not.toContain(AGENT_LINK_PERMISSION);
+    expect(knowledge?.permissions).not.toContain('admin.role.assign');
+    expect(knowledge?.permissions).not.toContain('knowledge.collection.manage');
   });
 
   it('rejects bearer substitution, missing CSRF, cross-origin consent and caller actors', async () => {

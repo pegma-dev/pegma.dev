@@ -11,7 +11,15 @@ import type {
   VerifiedIdentityClaims,
 } from './identity-contracts';
 import { createRoleHolderIndex } from './role-holder-index';
-import { ADMIN_ROLE, SUPPORT_ROLE } from './support-access';
+import {
+  ADMIN_ROLE,
+  SUPPORT_ROLE,
+  KNOWLEDGE_ROLE,
+  APPLICATION_SCOPE,
+  KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+  AGENT_LINK_PERMISSION,
+} from './support-access';
+import { createAgentPrincipalResolver } from './agent-authority';
 import {
   createAdminLookupLimiter,
   createAdminMutationLimiter,
@@ -114,7 +122,9 @@ function mutate(
   });
 }
 
-function fixture(options: { bootstrapPrincipals?: readonly PrincipalId[] } = {}) {
+function fixture(
+  options: { bootstrapPrincipals?: readonly PrincipalId[] } = {},
+) {
   const store = createMemoryStore();
   const sessions = createSessionStore(store, { logger });
   const users = new Map<PrincipalId, IdentityUser>([
@@ -131,33 +141,32 @@ function fixture(options: { bootstrapPrincipals?: readonly PrincipalId[] } = {})
     logger,
     clock,
   });
+  const holderIndex = createRoleHolderIndex(store);
   const api = createAdminApi({
     sessions,
     identity,
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
     logger,
     roleStore: runtime.roleStore,
-    holderIndex: createRoleHolderIndex(store),
+    holderIndex,
     mutationLimiter: createAdminMutationLimiter(store, clock),
     lookupLimiter: createAdminLookupLimiter(store, clock),
     bootstrapPrincipals: new Set(options.bootstrapPrincipals ?? []),
   });
-  return { api, sessions, identity, roleStore: runtime.roleStore };
+  return { api, sessions, identity, roleStore: runtime.roleStore, holderIndex };
 }
 
 /** Seed the first administrator the way the bootstrap touch would. */
-async function bootstrappedAdmin(
-  options: { bootstrapArmed?: boolean } = {},
-) {
+async function bootstrappedAdmin(options: { bootstrapArmed?: boolean } = {}) {
   const world = fixture({ bootstrapPrincipals: [admin] });
   const auth = await sessionCookie(world.sessions, admin, 'b'.repeat(43));
   // The first authenticated admin-surface touch seeds Admin, then passes
   // the permission check on the same request.
   const state = await world.api(get('/api/admin/state', auth.cookie));
   expect(state.status).toBe(200);
-  expect(((await state.json()) as { bootstrapArmed: boolean }).bootstrapArmed).toBe(
-    options.bootstrapArmed ?? true,
-  );
+  expect(
+    ((await state.json()) as { bootstrapArmed: boolean }).bootstrapArmed,
+  ).toBe(options.bootstrapArmed ?? true);
   return { ...world, auth };
 }
 
@@ -208,7 +217,9 @@ describe('one search box', () => {
     // Exactly one email normalization function exists and it lives in
     // Identity: the host trims the text-box value and passes it through
     // untouched — no host-side lowercasing.
-    expect(identity.findUserByEmail).toHaveBeenCalledWith('Member@Example.TEST');
+    expect(identity.findUserByEmail).toHaveBeenCalledWith(
+      'Member@Example.TEST',
+    );
   });
 
   it('answers 404 for an unknown principal and 400 for unusable input', async () => {
@@ -312,11 +323,7 @@ describe('admin API access', () => {
     );
     expect(assign.status).toBe(201);
     const revoke = await api(
-      mutate(
-        'DELETE',
-        `/api/admin/assignments/${held[0]!.id}`,
-        auth,
-      ),
+      mutate('DELETE', `/api/admin/assignments/${held[0]!.id}`, auth),
     );
     expect(revoke.status).toBe(200);
     const after = await api(get('/api/admin/state', auth.cookie));
@@ -372,14 +379,200 @@ describe('principal views', () => {
     const history = await api(
       get(`/api/admin/principals/${member}/history`, auth.cookie),
     );
-    const events = ((await history.json()) as {
-      events: readonly { kind: string; role: string }[];
-    }).events;
+    const events = (
+      (await history.json()) as {
+        events: readonly { kind: string; role: string }[];
+      }
+    ).events;
     expect(events.map((event) => event.kind)).toEqual(['granted', 'revoked']);
   });
 });
 
 describe('role mutations', () => {
+  it('assigns and revokes explicit Knowledge through the audited surface without changing existing grants', async () => {
+    const world = await bootstrappedAdmin();
+    const resolver = createAgentPrincipalResolver({
+      identity: world.identity,
+      identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+      roleStore: world.roleStore,
+    });
+    expect(
+      (
+        await world.api(
+          mutate('POST', `/api/admin/principals/${member}/roles`, world.auth, {
+            role: SUPPORT_ROLE,
+          }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await world.api(
+          mutate(
+            'POST',
+            `/api/admin/principals/${secondAdmin}/roles`,
+            world.auth,
+            { role: SUPPORT_ROLE },
+          ),
+        )
+      ).status,
+    ).toBe(201);
+    const historical = (
+      await world.roleStore.listActiveRoleAssignments(
+        secondAdmin,
+        APPLICATION_SCOPE,
+      )
+    ).find((assignment) => assignment.role === SUPPORT_ROLE);
+    if (historical === undefined)
+      throw new Error('Expected historical Support assignment.');
+    expect(
+      (
+        await world.api(
+          mutate(
+            'DELETE',
+            `/api/admin/assignments/${historical.id}`,
+            world.auth,
+          ),
+        )
+      ).status,
+    ).toBe(200);
+    const supportBefore = await world.roleStore.listRoleAssignments(
+      member,
+      APPLICATION_SCOPE,
+    );
+    const revokedBefore = await world.roleStore.getRoleAssignment(
+      historical.id,
+    );
+    const adminBefore = await world.roleStore.listRoleAssignments(
+      admin,
+      APPLICATION_SCOPE,
+    );
+    expect(revokedBefore?.assignment.status).toBe('revoked');
+    expect((await resolver(member))?.permissions).not.toContain(
+      KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+    );
+    expect(
+      (
+        await world.api(
+          mutate('POST', `/api/admin/principals/${member}/roles`, world.auth, {
+            role: KNOWLEDGE_ROLE,
+          }),
+        )
+      ).status,
+    ).toBe(201);
+    const knowledge = (
+      await world.roleStore.listActiveRoleAssignments(member, APPLICATION_SCOPE)
+    ).find((assignment) => assignment.role === KNOWLEDGE_ROLE);
+    if (knowledge === undefined)
+      throw new Error('Expected explicitly assigned Knowledge role.');
+    expect(knowledge.grantedBy).toEqual({
+      kind: 'principal',
+      principalId: admin,
+    });
+    expect(await world.holderIndex.listByRole(KNOWLEDGE_ROLE)).toContainEqual({
+      role: KNOWLEDGE_ROLE,
+      principalId: member,
+      assignmentId: knowledge.id,
+    });
+    const approved = await resolver(member);
+    expect(approved?.permissions).toContain(
+      KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+    );
+    expect(approved?.permissions).toContain('knowledge.article.publish');
+    expect(approved?.permissions).not.toContain(AGENT_LINK_PERMISSION);
+    expect(approved?.permissions).not.toContain('admin.role.assign');
+    expect(approved?.permissions).not.toContain('knowledge.collection.manage');
+    const knowledgeSession = await sessionCookie(world.sessions, member);
+    expect(
+      (
+        await world.api(
+          mutate(
+            'POST',
+            `/api/admin/principals/${member}/roles`,
+            knowledgeSession,
+            { role: ADMIN_ROLE },
+          ),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await world.api(
+          mutate('POST', `/api/admin/principals/${member}/roles`, world.auth, {
+            role: KNOWLEDGE_ROLE,
+          }),
+        )
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await world.api(
+          mutate(
+            'DELETE',
+            `/api/admin/assignments/${knowledge.id}`,
+            world.auth,
+          ),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await resolver(member))?.permissions).not.toContain(
+      KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+    );
+    expect((await resolver(member))?.permissions).not.toContain(
+      'knowledge.article.publish',
+    );
+    expect(
+      (
+        await world.roleStore.listRoleAssignments(member, APPLICATION_SCOPE)
+      ).filter((assignment) => assignment.role === SUPPORT_ROLE),
+    ).toEqual(supportBefore);
+    expect(await world.roleStore.getRoleAssignment(historical.id)).toEqual(
+      revokedBefore,
+    );
+    expect(
+      await world.roleStore.listRoleAssignments(admin, APPLICATION_SCOPE),
+    ).toEqual(adminBefore);
+    expect(
+      (await world.roleStore.listRoleAssignmentAuditEvents(knowledge.id)).map(
+        (record) => record.event.kind,
+      ),
+    ).toEqual(['granted', 'revoked']);
+    // The holder index is deliberately an append-only superset after revocation.
+    expect(await world.holderIndex.listByRole(KNOWLEDGE_ROLE)).toContainEqual({
+      role: KNOWLEDGE_ROLE,
+      principalId: member,
+      assignmentId: knowledge.id,
+    });
+  });
+
+  it('requires actual Admin authority and CSRF for Knowledge assignments', async () => {
+    const world = await bootstrappedAdmin();
+    const memberSession = await sessionCookie(world.sessions, member);
+    expect(
+      (
+        await world.api(
+          mutate(
+            'POST',
+            `/api/admin/principals/${member}/roles`,
+            memberSession,
+            { role: KNOWLEDGE_ROLE },
+          ),
+        )
+      ).status,
+    ).toBe(403);
+    const noCsrf = mutate(
+      'POST',
+      `/api/admin/principals/${member}/roles`,
+      world.auth,
+      { role: KNOWLEDGE_ROLE },
+    );
+    noCsrf.headers.delete('X-Pegma-CSRF');
+    expect((await world.api(noCsrf)).status).toBe(403);
+    expect(
+      await world.roleStore.listRoleAssignments(member, APPLICATION_SCOPE),
+    ).toEqual([]);
+  });
+
   it('assigns allowlisted roles only, to real principals only, once', async () => {
     const { api, auth } = await bootstrappedAdmin();
     expect(
@@ -394,9 +587,14 @@ describe('role mutations', () => {
     expect(
       (
         await api(
-          mutate('POST', '/api/admin/principals/unknown-principal/roles', auth, {
-            role: SUPPORT_ROLE,
-          }),
+          mutate(
+            'POST',
+            '/api/admin/principals/unknown-principal/roles',
+            auth,
+            {
+              role: SUPPORT_ROLE,
+            },
+          ),
         )
       ).status,
     ).toBe(404);

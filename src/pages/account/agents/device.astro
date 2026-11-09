@@ -18,7 +18,7 @@ import Base from '../../../layouts/Base.astro';
     <p id="agent-resource" class="form-note"></p>
     <form id="agent-device-code" class="account-form">
       <label for="agent-user-code">Code shown by your agent</label>
-      <input id="agent-user-code" name="userCode" type="text" maxlength="200" required autocomplete="off" autocapitalize="characters" spellcheck="false" />
+      <input id="agent-user-code" name="userCode" type="text" maxlength="128" required autocomplete="off" autocapitalize="characters" spellcheck="false" />
       <button type="submit">Review this request</button>
       <p class="form-note">Only enter a code for a connection you started.</p>
     </form>
@@ -37,16 +37,18 @@ import Base from '../../../layouts/Base.astro';
         </div>
       </form>
     </section>
+    <button id="agent-approved-grant" type="button" class="secondary-button" hidden>Retry loading the approved grant controls</button>
     <section>
       <h2>View or revoke a known grant</h2>
       <p>Enter the grant ID from your approval. Only your own grants are available here.</p>
       <form id="agent-grant-lookup" class="account-form">
         <label for="agent-grant-id">Grant ID</label>
-        <input id="agent-grant-id" name="grantId" type="text" maxlength="512" required autocomplete="off" />
+        <input id="agent-grant-id" name="grantId" type="text" maxlength="128" required autocomplete="off" />
         <button type="submit">View grant</button>
       </form>
       <section id="agent-grant" hidden>
         <dl id="agent-grant-details"></dl>
+        <p id="agent-grant-instructions" class="form-note"></p>
         <button id="agent-revoke" type="button" class="secondary-button">Revoke this grant</button>
       </section>
     </section>

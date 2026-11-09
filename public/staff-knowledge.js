@@ -11,6 +11,8 @@ let validationId = '';
 let draft = null;
 let review = null;
 let report = null;
+let evidenceSnapshot = null;
+let reportLedger = null;
 let busy = false;
 let requirementCounter = 0;
 const commandIds = new Map();
@@ -53,6 +55,15 @@ async function request(path, init = {}) {
       typeof body.error === 'string' ? body.error : 'unavailable',
     );
     error.status = response.status;
+    const retry = response.headers.get('Retry-After');
+    const seconds =
+      retry === null
+        ? NaN
+        : /^\d+$/u.test(retry)
+          ? Number(retry)
+          : Math.ceil((Date.parse(retry) - Date.now()) / 1000);
+    if (Number.isFinite(seconds) && seconds >= 0)
+      error.retryAfterSeconds = seconds;
     throw error;
   }
   return body;
@@ -96,7 +107,11 @@ async function run(action) {
       select('#kb-signed-out').hidden = error.status !== 401;
     }
     status(
-      error.clientMessage ??
+      (error.status === 429
+        ? Number.isFinite(error.retryAfterSeconds)
+          ? `Too many requests. Try again in ${error.retryAfterSeconds} second(s).`
+          : 'Too many requests. Wait before trying again.'
+        : error.clientMessage) ??
         (error.status === 401
           ? 'Sign in to continue.'
           : error.status === 403
@@ -398,10 +413,16 @@ async function loadDraft(articleId) {
   draft = null;
   review = null;
   report = null;
+  evidenceSnapshot = null;
+  reportLedger = null;
   select('#kb-draft-detail').textContent = '';
   select('#kb-article-actions').hidden = true;
   select('#kb-review-panel').hidden = true;
   select('#kb-report-panel').hidden = true;
+  select('#kb-ledger-panel').hidden = true;
+  select('#kb-evidence-panel').hidden = true;
+  select('#kb-evidence-select').replaceChildren();
+  select('#kb-evidence-selected').textContent = '';
   select('#kb-article-detail').textContent = '';
   select('#kb-report-list').replaceChildren();
   draft = await call('getDraft', { articleId });
@@ -414,10 +435,7 @@ select('#kb-article-form').addEventListener('submit', (event) => {
   event.preventDefault();
   run(() => loadDraft(required('#kb-article-id')));
 });
-for (const [button, operation] of [
-  ['#kb-evidence-read', 'getEvidence'],
-  ['#kb-provenance-read', 'getProvenance'],
-]) {
+for (const [button, operation] of [['#kb-provenance-read', 'getProvenance']]) {
   select(button).addEventListener('click', () =>
     run(async () => {
       text(
@@ -428,6 +446,98 @@ for (const [button, operation] of [
     }),
   );
 }
+
+async function loadEvidence() {
+  evidenceSnapshot = null;
+  select('#kb-evidence-panel').hidden = true;
+  select('#kb-evidence-selected').textContent = '';
+  const result = await call('getEvidence', { articleId: requireArticle() });
+  evidenceSnapshot = result;
+  text('#kb-article-detail', result);
+  const choices = select('#kb-evidence-select');
+  choices.replaceChildren();
+  const prompt = document.createElement('option');
+  prompt.value = '';
+  prompt.textContent = 'Select the exact evidence version to revoke';
+  choices.append(prompt);
+  for (const [index, item] of result.evidence.entries()) {
+    const revoked = result.revokedEvidence.some(
+      (entry) =>
+        entry.articleRevision === item.articleRevision &&
+        entry.id === item.id &&
+        entry.version === item.version &&
+        entry.hash === item.hash,
+    );
+    if (revoked) continue;
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = `${item.id} · article revision ${item.articleRevision} · evidence version ${item.version} · ${item.hash}`;
+    choices.append(option);
+  }
+  select('#kb-evidence-panel').hidden = permissions.evidenceRevoke !== true;
+  status('Current evidence and exact revocation choices loaded.');
+}
+
+select('#kb-evidence-read').addEventListener('click', () => run(loadEvidence));
+select('#kb-evidence-select').addEventListener('change', () => {
+  const value = select('#kb-evidence-select').value;
+  const item = value === '' ? null : evidenceSnapshot?.evidence[Number(value)];
+  if (item) text('#kb-evidence-selected', item);
+  else select('#kb-evidence-selected').textContent = '';
+});
+select('#kb-evidence-revoke').addEventListener('submit', (event) => {
+  event.preventDefault();
+  run(async () => {
+    const value = select('#kb-evidence-select').value;
+    const snapshot = evidenceSnapshot;
+    const item = value === '' ? null : snapshot?.evidence[Number(value)];
+    if (!snapshot || !item || permissions.evidenceRevoke !== true) return;
+    const reason = required('#kb-evidence-reason');
+    if (
+      !window.confirm(
+        `Revoke evidence ${item.id}, version ${item.version}, hash ${item.hash}, for article ${snapshot.articleId} revision ${item.articleRevision}?`,
+      )
+    )
+      return;
+    await mutate('revokeEvidence', {
+      articleId: snapshot.articleId,
+      expectedGeneration: snapshot.generation,
+      articleRevision: item.articleRevision,
+      evidenceId: item.id,
+      evidenceVersion: item.version,
+      evidenceHash: item.hash,
+      reason,
+    });
+    await loadDraft(snapshot.articleId);
+    await loadEvidence();
+    status('The exact evidence version was revoked.');
+  });
+});
+
+select('#kb-retire').addEventListener('click', () =>
+  run(async () => {
+    requireArticle();
+    const snapshot = draft;
+    if (
+      permissions.retire !== true ||
+      !window.confirm(
+        `Retire article ${snapshot.articleId} at generation ${snapshot.generation}, revision ${snapshot.revision.number}, content hash ${snapshot.revision.contentHash}? Any publication will be withdrawn.`,
+      )
+    )
+      return;
+    await mutate('retireArticle', {
+      articleId: snapshot.articleId,
+      expectedGeneration: snapshot.generation,
+    });
+    await loadDraft(snapshot.articleId);
+    status(
+      draft.state === 'retired'
+        ? 'Article retired.'
+        : 'Retirement acknowledged. The current article state is shown above.',
+    );
+  }),
+);
+
 select('#kb-submit-review').addEventListener('click', () =>
   run(async () => {
     const articleId = requireArticle();
@@ -483,11 +593,85 @@ select('#kb-reject-review').addEventListener('submit', (event) => {
   });
 });
 
-async function readReport(reportId) {
+function showLedger(ledger) {
+  reportLedger = ledger;
+  text('#kb-ledger-detail', ledger);
+  select('#kb-ledger-panel').hidden = false;
+  select('#kb-ledger-reset').hidden =
+    permissions.evidenceConfirm !== true || ledger.status !== 'active';
+  select('#kb-ledger-drain').hidden =
+    permissions.evidenceConfirm !== true || ledger.status !== 'resetting';
+}
+
+async function loadLedger() {
+  const ledger = await call('reportLedger', { articleId: requireArticle() });
+  showLedger(ledger);
+  return ledger;
+}
+
+async function drainLedger(ledger) {
+  for (let page = 0; page < 4 && ledger.status === 'resetting'; page += 1) {
+    ledger = await call('drainReports', {
+      articleId: ledger.articleId,
+      ledgerEpoch: ledger.ledgerEpoch,
+    });
+    showLedger(ledger);
+  }
+  status(
+    ledger.status === 'active'
+      ? 'Report cleanup completed. Earlier report receipts remain invalid.'
+      : 'This bounded cleanup pass finished. Continue cleanup to inspect the remaining rows.',
+  );
+}
+
+select('#kb-ledger-read').addEventListener('click', () =>
+  run(async () => {
+    await loadLedger();
+    status('Current report ledger loaded.');
+  }),
+);
+select('#kb-ledger-reset').addEventListener('click', () =>
+  run(async () => {
+    if (!reportLedger || permissions.evidenceConfirm !== true) return;
+    const snapshot = reportLedger;
+    if (
+      !window.confirm(
+        `Reset report ledger ${snapshot.articleId} at epoch ${snapshot.ledgerEpoch}? Earlier report receipts and commands become permanently invalid. Accepted KB evidence and publication are unchanged.`,
+      )
+    )
+      return;
+    const result = await mutate(
+      'resetReports',
+      {
+        articleId: snapshot.articleId,
+        expectedLedgerEpoch: snapshot.ledgerEpoch,
+      },
+      false,
+    );
+    report = null;
+    select('#kb-report-panel').hidden = true;
+    select('#kb-report-list').replaceChildren();
+    showLedger(result);
+    await drainLedger(result);
+  }),
+);
+select('#kb-ledger-drain').addEventListener('click', () =>
+  run(async () => {
+    if (permissions.evidenceConfirm !== true) return;
+    await drainLedger(await loadLedger());
+  }),
+);
+
+async function readReport(reportId, ledgerEpoch) {
   report = null;
   select('#kb-report-panel').hidden = true;
   select('#kb-report-detail').textContent = '';
-  report = await call('reportRead', { articleId: requireArticle(), reportId });
+  if (ledgerEpoch === undefined) ledgerEpoch = (await loadLedger()).ledgerEpoch;
+  report = await call('reportRead', {
+    articleId: requireArticle(),
+    reportId,
+    ledgerEpoch,
+  });
   select('#kb-report-id').value = report.reportId;
   text('#kb-report-detail', report);
   const elapsed = Date.now() - Date.parse(report.evidence.executedAt);
@@ -501,6 +685,7 @@ async function readReport(reportId) {
 select('#kb-reports-read').addEventListener('click', () =>
   run(async () => {
     const result = await call('reportList', { articleId: requireArticle() });
+    showLedger(result.ledger);
     select('#kb-report-list').replaceChildren();
     for (const item of result.reports) {
       const row = document.createElement('li');
@@ -508,7 +693,7 @@ select('#kb-reports-read').addEventListener('click', () =>
       button.type = 'button';
       button.textContent = item.reportId;
       button.addEventListener('click', () =>
-        run(() => readReport(item.reportId)),
+        run(() => readReport(item.reportId, result.ledger.ledgerEpoch)),
       );
       const summary = document.createElement('p');
       summary.textContent = `${item.status} · ${item.submittedAt} · ${typeof item.summary === 'string' ? item.summary : JSON.stringify(item.summary)}`;
@@ -529,6 +714,7 @@ select('#kb-report-read').addEventListener('submit', (event) => {
 for (const [button, operation, decision] of [
   ['#kb-report-confirm', 'confirmReport', 'confirm'],
   ['#kb-report-reject', 'rejectReport', 'reject'],
+  ['#kb-report-reassess', 'reassessReport', 'reassess'],
 ]) {
   select(button).addEventListener('click', () =>
     run(async () => {
@@ -544,6 +730,7 @@ for (const [button, operation, decision] of [
         {
           articleId: report.articleId,
           reportId: report.reportId,
+          ledgerEpoch: report.ledgerEpoch,
           expectedReportGeneration: report.expectedReportGeneration,
           reviewBindingHash: report.reviewBindingHash,
         },
@@ -555,7 +742,9 @@ for (const [button, operation, decision] of [
       status(
         decision === 'confirm'
           ? 'Human review recorded. The agent can submit the exact evidence with its existing report receipt; Knowledge Base acceptance is a separate step.'
-          : 'Report rejected.',
+          : decision === 'reassess'
+            ? 'Report returned to pending human review. The earlier confirmation no longer applies; the agent must poll the current report status and use its current receipt.'
+            : 'Report rejected.',
       );
     }),
   );

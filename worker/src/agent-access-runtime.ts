@@ -15,8 +15,9 @@ import {
   createDurableLimiter,
   defineRateLimitPolicy,
   type DurableRateLimiter,
-} from '@pegma/rate-limit';
+} from '@pegma/rate-limit-paged';
 import { systemClock, type Clock } from '@pegma/spine';
+import { knowledgeAdmissionPolicyName } from './knowledge-admission';
 import type { Store } from '@pegma/storage-core';
 import {
   ApiError,
@@ -133,6 +134,7 @@ export interface AgentAccessRuntimeOptions extends AgentBrowserOptions {
   readonly store: Store;
   readonly clock?: Clock;
   readonly clients?: readonly PublicClient[] | null;
+  readonly resourceLimitCount?: number;
 }
 export interface AgentAccessRuntime {
   readonly configuration: AgentAccessConfiguration;
@@ -187,7 +189,11 @@ export function createAgentAccessRuntime(
   const limiters: DurableRateLimiter[] = [];
   function admission(name: string, limit: number) {
     const limiter = createDurableLimiter(
-      defineRateLimitPolicy({ name, limit, windowMs: 5 * 60_000 }),
+      defineRateLimitPolicy({
+        name: knowledgeAdmissionPolicyName(name, limit),
+        limit,
+        windowMs: 5 * 60_000,
+      }),
       options.store,
       { clock },
     );
@@ -214,7 +220,10 @@ export function createAgentAccessRuntime(
     revocation: admission('pegma.agent.revoke', 120),
   };
   const browserLimit = admission('pegma.agent.browser', 120);
-  const resourceLimit = admission('pegma.agent.resource', 300);
+  const resourceLimit = admission(
+    'pegma.agent.resource',
+    options.resourceLimitCount ?? 300,
+  );
   const protocol = createAgentAccessHttp({
     service,
     configuration,

@@ -1,13 +1,14 @@
 import type { IdentityMaintenanceTask } from './identity-maintenance';
+import type { KnowledgeMaintenanceTask } from './knowledge-maintenance';
 import type { SupportMaintenanceTask } from './support-maintenance';
 
 export const MAIL_CRON = '* * * * *';
 // Skip minute zero so every trigger has a distinct schedule.
 export const MAIL_RECONCILE_CRON = '1-59 * * * *';
-// Cleanup skips minute 59 and rotates through 14 small lanes.
+// Cleanup skips minute 59 and rotates through 15 small lanes.
 export const CLEANUP_CRON = '0-58 * * * *';
 
-type CleanupLane =
+export type CleanupLane =
   | {
       readonly kind: 'identity';
       readonly task: IdentityMaintenanceTask;
@@ -17,6 +18,10 @@ type CleanupLane =
       readonly kind: 'support';
       readonly task: SupportMaintenanceTask;
       readonly limiterIndex?: number;
+    }
+  | {
+      readonly kind: 'knowledge';
+      readonly task: KnowledgeMaintenanceTask;
     };
 
 const CLEANUP_LANES: readonly CleanupLane[] = [
@@ -36,6 +41,7 @@ const CLEANUP_LANES: readonly CleanupLane[] = [
     task: 'rate_limits' as const,
     limiterIndex,
   })),
+  { kind: 'knowledge', task: 'rate_limits' },
 ];
 
 /** Deterministic across cold starts, delayed delivery, and UTC hour boundaries. */
