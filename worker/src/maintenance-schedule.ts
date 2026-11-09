@@ -7,7 +7,7 @@ export const MAIL_CRON = '* * * * *';
 export const MAIL_RECONCILE_CRON = '1-59 * * * *';
 // Cleanup skips minute 59 and rotates through 15 small lanes.
 export const CLEANUP_CRON = '0-58 * * * *';
-// Even minutes isolate rate cleanup; odd minutes advance one ready KB hint.
+// Two ticks clean rate windows, then one advances a ready KB hint.
 export const RATE_LIMIT_CRON = '0-57 * * * *';
 
 export type CleanupLane =
@@ -59,7 +59,7 @@ export function cleanupLaneAt(scheduledTime: number): CleanupLane {
 export function rateKnowledgeLaneAt(
   scheduledTime: number,
 ): 'rate_limits' | 'retrieval_ready' {
-  return Math.floor(scheduledTime / 60_000) % 2 === 0
-    ? 'rate_limits'
-    : 'retrieval_ready';
+  return Math.floor(scheduledTime / 60_000) % 3 === 2
+    ? 'retrieval_ready'
+    : 'rate_limits';
 }

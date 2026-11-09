@@ -24,6 +24,7 @@ import {
   type KnowledgeAgentOperation,
 } from '@pegma/knowledge-base-mcp';
 import { createSessionStore } from '@pegma/sessions';
+import { createDurableLimiter } from '@pegma/rate-limit-paged';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createAgentPrincipalResolver } from './agent-authority';
@@ -37,6 +38,7 @@ import { createIdentityRuntime } from './identity-runtime';
 import { handleKnowledgeRequest } from './knowledge-host';
 import worker from './index';
 import { createKnowledgeRetrievalReady } from './knowledge-retrieval-ready';
+import { runKnowledgeMaintenance } from './knowledge-maintenance';
 import {
   defineCollection,
   type CollectionDefinition,
@@ -48,6 +50,7 @@ import {
   CLEANUP_CRON,
   RATE_LIMIT_CRON,
   cleanupLaneAt,
+  rateKnowledgeLaneAt,
 } from './maintenance-schedule';
 import type { KnowledgeReportView } from './knowledge-evidence';
 import {
@@ -119,6 +122,9 @@ function measuredDatabase(backing: D1Database) {
   const requests: RequestBudget[] = [];
   let failScheduledBatch = false;
   let afterScheduledKnowledgeBatch: (() => Promise<void>) | undefined;
+  let beforeScheduledCheckpointWrite:
+    ((version: string) => Promise<void>) | undefined;
+  const scheduledCheckpointWrites: { version: string; written: boolean }[] = [];
   completedBudgets.push(requests);
   const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
   const bindings = new WeakMap<D1PreparedStatement, readonly unknown[]>();
@@ -149,11 +155,30 @@ function measuredDatabase(backing: D1Database) {
       bind(...values: unknown[]) {
         return wrap(original.bind(...values), values);
       },
-      first<T = Record<string, unknown>>(column?: string): Promise<T | null> {
+      async first<T = Record<string, unknown>>(
+        column?: string,
+      ): Promise<T | null> {
         execution();
-        return column === undefined
-          ? original.first<T>()
-          : original.first<T>(column);
+        // Observe the actual conditional call's public bookmark key/version.
+        // Do not inspect or replace its SQL, result, or OCC decision.
+        const checkpoint =
+          beforeScheduledCheckpointWrite !== undefined &&
+          scope.getStore()?.operation.startsWith('scheduled.') === true &&
+          boundValues.length === 4 &&
+          boundValues.includes('pegma-dev-maintenance:knowledge') &&
+          boundValues.includes('rate-limits');
+        const version = checkpoint ? boundValues[3] : undefined;
+        if (checkpoint && typeof version !== 'string')
+          throw new Error('Expected the actual checkpoint concurrency token.');
+        if (typeof version === 'string')
+          await beforeScheduledCheckpointWrite?.(version);
+        const result =
+          column === undefined
+            ? await original.first<T>()
+            : await original.first<T>(column);
+        if (typeof version === 'string')
+          scheduledCheckpointWrites.push({ version, written: result !== null });
+        return result;
       },
       run<T = Record<string, unknown>>() {
         execution();
@@ -228,6 +253,16 @@ function measuredDatabase(backing: D1Database) {
   return {
     database,
     requests,
+    scheduledCheckpointWrites,
+    beforeScheduledCheckpointWrite(hook: (version: string) => Promise<void>) {
+      beforeScheduledCheckpointWrite = hook;
+    },
+    currentOperation() {
+      return scope.getStore()?.operation;
+    },
+    outsideRequest<T>(run: () => Promise<T>): Promise<T> {
+      return scope.exit(run);
+    },
     failNextScheduledBatch() {
       failScheduledBatch = true;
     },
@@ -273,6 +308,17 @@ function measuredDatabase(backing: D1Database) {
 const readyDiagnostics = defineCollection<StoredRecord>({
   name: 'pegma-dev.knowledge-retrieval-ready.v1',
   key: (value) => ({ partition: 'knowledge', id: String(value.id) }),
+  codec: { encode: (value) => value, decode: (value) => value },
+});
+
+// The adversary rewrites only a real producer-created bookmark, unchanged.
+// No synthetic head, generation, cursor, limiter codec or SQL write is created.
+const rateCheckpointDiagnostics = defineCollection<StoredRecord>({
+  name: 'pegma-dev-maintenance',
+  key: (value) => ({
+    partition: String(value.partition),
+    id: String(value.id),
+  }),
   codec: { encode: (value) => value, decode: (value) => value },
 });
 
@@ -629,7 +675,7 @@ async function fixture(isolateSetupAdmission = false) {
     expect(logical.operation).toBe(operation);
     return object(logical.result);
   }
-  let scheduledTick = Math.floor(Date.now() / 120_000) * 120_000 + 60_000;
+  let scheduledTick = Math.floor(Date.now() / 60_000) * 60_000;
   let physicalTick = scheduledTick;
   async function scheduled(kind: 'ready' | 'physical' = 'ready') {
     let time = kind === 'ready' ? scheduledTick : physicalTick;
@@ -641,8 +687,18 @@ async function fixture(isolateSetupAdmission = false) {
         time += 60_000;
       physicalTick = time + 60_000;
     } else {
-      while (new Date(time).getUTCMinutes() > 57) time += 120_000;
-      scheduledTick = time + 120_000;
+      const eligible = Array.from(
+        { length: 120 },
+        (_, offset) => time + offset * 60_000,
+      ).find(
+        (candidate) =>
+          new Date(candidate).getUTCMinutes() <= 57 &&
+          rateKnowledgeLaneAt(candidate) === 'retrieval_ready',
+      );
+      if (eligible === undefined)
+        throw new Error('No actual ready-lane tick in the bounded schedule.');
+      time = eligible;
+      scheduledTick = time + 60_000;
     }
     return meter.request(
       'scheduled.' + kind,
@@ -773,6 +829,168 @@ describe('real production KB request budgets over actual D1', () => {
       { operation: 'pending-request', calls: 2 },
       { operation: 'overlapping-request', calls: 1 },
     ]);
+  });
+
+  it('sweeps twenty real expired rows within 48 calls after two independent bookmark CAS conflicts', async () => {
+    const meter = measuredDatabase(env.IDENTITY_DB);
+    const store = createCloudflareD1Store({
+      database: meter.database,
+      createSchemaIfMissing: false,
+    });
+    const clock = { now: () => new Date().toISOString() };
+    // Setup is outside every measured invocation. The real producer creates
+    // the bookmark before genuine peers can change only its opaque version.
+    await runKnowledgeMaintenance({ store, clock }, { log() {} });
+    const checkpoints = store.collection(rateCheckpointDiagnostics);
+    const key = { partition: 'knowledge', id: 'rate-limits' };
+    const initial = await checkpoints.getVersioned(key);
+    if (initial === null)
+      throw new Error('Missing producer-created checkpoint.');
+    expect(initial.value.cursor).toBeNull();
+    const limiter = createDurableLimiter(
+      { name: 'pegma.test.actual-d1-occ', limit: 1, windowMs: 60_000 },
+      store,
+    );
+    const expiredAt = new Date(Date.now() - 180_000).toISOString();
+    for (let index = 0; index < 20; index++)
+      expect(await limiter.allow('192.0.2.' + (index + 1), expiredAt)).toEqual({
+        allowed: true,
+      });
+    const liveRows = () =>
+      env.IDENTITY_DB.prepare(
+        'SELECT COUNT(*) AS count FROM RECORDS WHERE deleted = 0',
+      ).first<number>('count');
+    // Exactly twenty real counters, their real descriptor, and the bookmark.
+    const beforeRows = await liveRows();
+    expect(beforeRows).toBe(22);
+    const operation = 'scheduled.rate-limits.two-real-conflicts';
+    let attempts = 0;
+    let peerWrites = 0;
+    const peerReadVersions: string[] = [];
+    meter.beforeScheduledCheckpointWrite(async (version) => {
+      attempts += 1;
+      expect(meter.currentOperation()).toBe(operation);
+      if (attempts > 2) return;
+      const peerNumber = attempts;
+      // These are other invocations, not free work inside the scheduled one.
+      // Each uses the same real metered D1 binding under its own ALS budget.
+      await meter.outsideRequest(async () => {
+        expect(meter.currentOperation()).toBeUndefined();
+        await meter.request(
+          'external.bookmark-peer-' + peerNumber,
+          async () => {
+            expect(meter.currentOperation()).toBe(
+              'external.bookmark-peer-' + peerNumber,
+            );
+            const current = await checkpoints.getVersioned(key);
+            if (current === null)
+              throw new Error('Missing actual peer target.');
+            expect(current.value).toEqual(initial.value);
+            expect(current.version).toBe(version);
+            peerReadVersions.push(current.version);
+            const written = await checkpoints.putIfUnchanged(
+              current.value,
+              current.version,
+            );
+            expect(written).toBe(true);
+            peerWrites += 1;
+            return Response.json({ written });
+          },
+          true,
+        );
+      });
+      expect(meter.currentOperation()).toBe(operation);
+    });
+    const startMinute = Math.floor(Date.now() / 60_000) * 60_000;
+    const scheduledTime = Array.from(
+      { length: 120 },
+      (_, offset) => startMinute + offset * 60_000,
+    ).find(
+      (time) =>
+        new Date(time).getUTCMinutes() <= 57 &&
+        rateKnowledgeLaneAt(time) === 'rate_limits',
+    );
+    if (scheduledTime === undefined)
+      throw new Error('No real rate-lane tick in the bounded schedule.');
+    try {
+      await meter.request(
+        operation,
+        async () => {
+          const pending: Promise<unknown>[] = [];
+          const configuration: Parameters<typeof worker.scheduled>[1] = {
+            ...env,
+            IDENTITY_DB: meter.database,
+            DATADOG_API_KEY: undefined,
+            PEGMA_KNOWLEDGE_ENABLED: 'false',
+            get IDENTITY_EMAIL_CODE_SECRET_BASE64(): string {
+              throw new Error('Rate cleanup must not initialize Identity.');
+            },
+          };
+          Object.defineProperty(configuration, 'PEGMA_AGENT_CLIENTS_JSON', {
+            value: 'not-json',
+          });
+          worker.scheduled(
+            { cron: RATE_LIMIT_CRON, scheduledTime, noRetry() {} },
+            configuration,
+            {
+              waitUntil(promise) {
+                pending.push(promise);
+              },
+              passThroughOnException() {},
+              props: {},
+              exports: {},
+            } as ExecutionContext,
+          );
+          expect(pending).toHaveLength(1);
+          await Promise.all(pending);
+          return Response.json({ complete: true });
+        },
+        true,
+      );
+      expect(meter.currentOperation()).toBeUndefined();
+      expect(attempts).toBe(3);
+      expect(peerWrites).toBe(2);
+      expect(
+        meter.scheduledCheckpointWrites.map((entry) => entry.written),
+      ).toEqual([false, false, true]);
+      const attemptedVersions = meter.scheduledCheckpointWrites.map(
+        (entry) => entry.version,
+      );
+      expect(new Set(attemptedVersions).size).toBe(3);
+      expect(peerReadVersions).toEqual(attemptedVersions.slice(0, 2));
+      const final = await checkpoints.getVersioned(key);
+      expect(final?.value.generation).toBe(
+        integer(initial.value.generation) + 1,
+      );
+      expect(final?.version).not.toBe(attemptedVersions[2]);
+      const afterRows = await liveRows();
+      expect(afterRows).toBe(2);
+      const scheduled = meter.requests.find(
+        (entry) => entry.operation === operation,
+      );
+      if (scheduled === undefined) throw new Error('Missing scheduled budget.');
+      expect(scheduled.calls).toBeLessThanOrEqual(48);
+      expect(scheduled.blockedExecutions ?? 0).toBe(0);
+      const peers = meter.requests.filter((entry) =>
+        entry.operation.startsWith('external.bookmark-peer-'),
+      );
+      expect(peers.map((entry) => entry.calls)).toEqual([2, 2]);
+      profileFacts.rateRowsActuallyDeleted =
+        integer(beforeRows) - integer(afterRows);
+      profileFacts.rateBookmarkActualAttempts = attempts;
+      profileFacts.rateBookmarkActualConflicts =
+        meter.scheduledCheckpointWrites.filter(
+          (entry) => !entry.written,
+        ).length;
+      profileFacts.rateScheduledActualD1Calls = scheduled.calls;
+      profileFacts.rateIndependentPeerD1Calls = peers.reduce(
+        (sum, entry) => sum + entry.calls,
+        0,
+      );
+      profileFacts.ratePeersOutsideScheduledAls = true;
+    } finally {
+      meter.assertFreeBudget();
+    }
   });
 
   it('rotates real pending hints after a D1 transport failure and preserves a newer enqueue during a scheduled completion', async () => {

@@ -462,37 +462,74 @@ describe('knowledge maintenance', () => {
     },
   );
 
-  it('sustains12 five-IP windows across seven policies with29 isolated20-row pages per hour', async () => {
+  it('keeps expired backlog and age bounded during four hours of 672 counters per hour, then drains', async () => {
     // Synthetic capacity evidence, not a production traffic forecast or SLA.
-    // Each IP uses all seven policies in each window; each fixed window creates
-    // 35 counters plus the seven persistent SDK policy descriptors.
+    // Fifty browser subjects plus one subject in each of six Agent Access
+    // policy shapes create 56 counters per five-minute cohort. All seven
+    // persistent descriptors and live windows consume real scan positions.
     const f = fixture();
     const observed = observe(f.backing);
-    const limiters = Array.from({ length: 7 }, (_, index) =>
-      createDurableLimiter(
+    const policies = [
+      { name: 'browser', limit: 120, subjects: 50 },
+      { name: 'authorize', limit: 60, subjects: 1 },
+      { name: 'device', limit: 60, subjects: 1 },
+      { name: 'token', limit: 300, subjects: 1 },
+      { name: 'revoke', limit: 120, subjects: 1 },
+      { name: 'agent-browser', limit: 120, subjects: 1 },
+      { name: 'resource', limit: 300, subjects: 1 },
+    ];
+    const limiters = policies.map((policy) => ({
+      subjects: policy.subjects,
+      limiter: createDurableLimiter(
         {
-          name: `pegma.test.capacity.policy-${index}`,
-          limit: 10,
+          name: `pegma.test.capacity.${policy.name}`,
+          limit: policy.limit,
           windowMs: 300_000,
         },
         f.backing,
         { clock: f.clock },
       ),
+    }));
+    // Read-only diagnostics over rows created by public limiter.allow calls;
+    // no copied record encoder or raw counter seeding is used.
+    const records = f.backing.collection(
+      defineCollection<StoredRecord>({
+        name: 'rate-limit-windows',
+        key: (value) => ({
+          partition: String(value.partition),
+          id: String(value.id),
+        }),
+        codec: { encode: (value) => value, decode: (value) => value },
+      }),
     );
-    const runtime = { store: observed.store, clock: f.clock };
+    async function readRows() {
+      const rows: StoredRecord[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await records.scan({
+          limit: 1_000,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        rows.push(...page.records.map((row) => row.value));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+      return rows;
+    }
     const range = /^(\d+)-(\d+) \* \* \* \*$/.exec(RATE_LIMIT_CRON);
     expect(range).not.toBeNull();
-    const expiredBacklogs: number[] = [];
+    const hourly: { expired: number; oldestExpiredAgeMs: number }[] = [];
     const skippedMinutes: number[] = [];
+    let completedTrafficCycles = 0;
     const start = Date.parse('2026-11-08T00:45:00.000Z');
-    // Cross both skipped minutes while traffic is still creating new windows,
-    // then retain the same cadence after traffic stops for eventual drainage.
-    for (let minute = 0; minute < 120; minute++) {
+    // Four continuing hours cross the real 58/59 gaps, followed by two hours
+    // at the same cadence after arrivals stop. A one-shot eventual drain would
+    // not expose a service rate below the continuing counter creation rate.
+    for (let minute = 0; minute < 360; minute++) {
       const at = new Date(start + minute * 60_000).toISOString();
       f.setTime(at);
-      if (minute < 60 && minute % 5 === 0) {
-        for (const limiter of limiters) {
-          for (let ip = 1; ip <= 5; ip++) {
+      if (minute < 240 && minute % 5 === 0) {
+        for (const { limiter, subjects } of limiters) {
+          for (let ip = 1; ip <= subjects; ip++) {
             expect(await limiter.allow(`192.0.2.${ip}`)).toEqual({
               allowed: true,
             });
@@ -505,24 +542,65 @@ describe('knowledge maintenance', () => {
         utcMinute >= Number(range![1]) && utcMinute <= Number(range![2]);
       const eligible =
         cronEligible && rateKnowledgeLaneAt(Date.parse(at)) === 'rate_limits';
-      if (eligible) await runKnowledgeMaintenance(runtime, f.logger);
-      else if (!cronEligible) skippedMinutes.push(utcMinute);
+      if (eligible) {
+        // Reconstruct invocation state; only the actual persisted bookmark
+        // carries continuation across these calls.
+        await runKnowledgeMaintenance(
+          { store: observed.store, clock: f.clock },
+          f.logger,
+        );
+        const checkpoint = await f.checkpoint();
+        expect(checkpoint?.generation).toBe(observed.scans.length);
+        if (minute < 240 && checkpoint?.cursor === null)
+          completedTrafficCycles += 1;
+      } else if (!cronEligible) skippedMinutes.push(utcMinute);
       expect(observed.scans.length - before).toBe(eligible ? 1 : 0);
-      if (minute < 60 && minute % 5 === 4) {
-        const expired = Math.floor(minute / 5) * 35 - observed.deleted();
-        expiredBacklogs.push(expired);
-        // An older window cannot accumulate behind each new five-minute window.
+      if (minute < 240 && minute % 60 === 59) {
+        // At this cohort phase all but the newest window have also passed
+        // the published helper's one-minute clock-skew grace.
+        const expired = Math.floor(minute / 5) * 56 - observed.deleted();
+        const now = Date.parse(at);
+        const expiredRows = (await readRows()).filter(
+          (row) =>
+            row.kind === 'window' &&
+            typeof row.windowStartMs === 'number' &&
+            typeof row.windowMs === 'number' &&
+            row.windowStartMs + row.windowMs + 60_000 <= now,
+        );
+        expect(expiredRows).toHaveLength(expired);
         expect(expired).toBeGreaterThanOrEqual(0);
-        // The hour-end58/59 gap and one-minute skew grace may retain two windows.
-        expect(expired).toBeLessThanOrEqual(70);
+        hourly.push({
+          expired,
+          oldestExpiredAgeMs: Math.max(
+            0,
+            ...expiredRows.map(
+              (row) =>
+                now - Number(row.windowStartMs) - Number(row.windowMs) - 60_000,
+            ),
+          ),
+        });
       }
     }
-    expect(expiredBacklogs).toHaveLength(12);
-    expect(skippedMinutes).toEqual([58, 59, 58, 59]);
-    expect(observed.deleted()).toBe(12 * 35);
-    expect(observed.scans).toHaveLength(58);
+    expect(hourly).toHaveLength(4);
+    // Compare the same workload phase after warmup, allowing one discrete
+    // arrival cohort of scan/cursor oscillation, not another two-hour backlog.
+    // The old 580-row/h ceiling falls at least 184 counters behind 672/h over
+    // these two continuing hours, even before retained/live-row overhead.
+    expect(hourly[3]!.expired).toBeLessThanOrEqual(hourly[1]!.expired + 56);
+    expect(hourly[3]!.oldestExpiredAgeMs).toBeLessThanOrEqual(
+      hourly[1]!.oldestExpiredAgeMs + 300_000,
+    );
+    expect(completedTrafficCycles).toBeGreaterThan(0);
+    expect(skippedMinutes).toEqual(
+      Array.from({ length: 6 }, () => [58, 59]).flat(),
+    );
+    expect(observed.deleted()).toBe(48 * 56);
+    const remaining = await readRows();
+    expect(remaining).toHaveLength(7);
+    expect(remaining.every((row) => row.kind === 'policy')).toBe(true);
+    expect(observed.scans).toHaveLength(6 * 39);
     expect(observed.scans.every((page) => page.limit === 20)).toBe(true);
-    expect(f.logger.log).toHaveBeenCalledTimes(58);
+    expect(f.logger.log).toHaveBeenCalledTimes(6 * 39);
     expect(f.logger.log).toHaveBeenLastCalledWith(
       'info',
       'knowledge.maintenance_page',

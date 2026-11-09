@@ -155,6 +155,7 @@ describe('maintenance dispatch', () => {
       RATE_LIMIT_CRON,
       RELEASE_RECONCILIATION_CRON,
     ]);
+    expect(new Set(crons).size).toBe(5);
   });
 
   it('advances each cleanup lane exactly once per eligible tick in the configured cron', () => {
@@ -258,19 +259,18 @@ describe('maintenance dispatch', () => {
     }
   });
 
-  it('isolates29 rate pages and29 ready pages in the same58-minute cron', async () => {
+  it('isolates 39 rate pages and 19 ready pages per hour across a UTC day boundary', async () => {
     const range = /^(\d+)-(\d+) \* \* \* \*$/.exec(RATE_LIMIT_CRON);
     expect(range).not.toBeNull();
-    const start = Date.parse('2026-10-15T00:00:00Z');
+    const start = Date.parse('2026-10-15T23:00:00Z');
     let pages = 0;
     let readyPages = 0;
-    for (
-      let minute = Number(range![1]);
-      minute <= Number(range![2]);
-      minute++
-    ) {
-      vi.clearAllMocks();
+    for (let minute = 0; minute < 120; minute++) {
       const time = start + minute * 60_000;
+      const utcMinute = new Date(time).getUTCMinutes();
+      if (utcMinute < Number(range![1]) || utcMinute > Number(range![2]))
+        continue;
+      vi.clearAllMocks();
       expect(
         await scheduled(RATE_LIMIT_CRON, time, {
           PEGMA_KNOWLEDGE_ENABLED: 'true',
@@ -297,9 +297,12 @@ describe('maintenance dispatch', () => {
       expect(runIdentityMaintenance).not.toHaveBeenCalled();
       expect(runSupportMaintenance).not.toHaveBeenCalled();
       expect(runReleaseReconciliation).not.toHaveBeenCalled();
+      if (utcMinute === Number(range![2])) {
+        const hours = Math.floor(minute / 60) + 1;
+        expect(pages).toBe(hours * 39);
+        expect(readyPages).toBe(hours * 19);
+      }
     }
-    expect(pages).toBe(29);
-    expect(readyPages).toBe(29);
   });
 
   it('isolates a failed rate invocation from later identity and support cleanup invocations', async () => {
@@ -349,8 +352,8 @@ describe('maintenance dispatch', () => {
     expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
   });
 
-  it('does not construct a projection Store on a disabled odd tick, even with malformed OAuth configuration', async () => {
-    await scheduled(RATE_LIMIT_CRON, Date.parse('2026-10-15T00:01:00Z'), {
+  it('does not construct a projection Store on a disabled ready tick, even with malformed OAuth configuration', async () => {
+    await scheduled(RATE_LIMIT_CRON, Date.parse('2026-10-15T00:02:00Z'), {
       PEGMA_KNOWLEDGE_ENABLED: 'false',
       PEGMA_AGENT_CLIENTS_JSON: 'not-json',
     });

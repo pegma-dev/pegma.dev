@@ -20,7 +20,11 @@ import {
   createProductionSupportMaintenanceRuntime,
 } from './support-desk';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
-import { cleanupLaneAt, RATE_LIMIT_CRON } from './maintenance-schedule';
+import {
+  cleanupLaneAt,
+  rateKnowledgeLaneAt,
+  RATE_LIMIT_CRON,
+} from './maintenance-schedule';
 import worker from './index';
 
 const logger: Logger = { log: vi.fn() };
@@ -212,10 +216,21 @@ describe('maintenance cursor writes over D1', () => {
       Object.defineProperty(scheduledEnvironment, 'PEGMA_AGENT_CLIENTS_JSON', {
         value: 'not-json',
       });
+      const startMinute = Math.floor(Date.now() / 60_000) * 60_000;
+      const scheduledTime = Array.from(
+        { length: 120 },
+        (_, offset) => startMinute + offset * 60_000,
+      ).find(
+        (candidate) =>
+          new Date(candidate).getUTCMinutes() <= 57 &&
+          rateKnowledgeLaneAt(candidate) === 'rate_limits',
+      );
+      if (scheduledTime === undefined)
+        throw new Error('No actual rate-lane tick in the bounded schedule.');
       worker.scheduled(
         {
           cron: RATE_LIMIT_CRON,
-          scheduledTime: Math.floor(Date.now() / 120_000) * 120_000,
+          scheduledTime,
           noRetry() {},
         },
         scheduledEnvironment,

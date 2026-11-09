@@ -50,7 +50,7 @@ verification qualify the producer; they do not qualify this host.
 Installed D1 and Core files match the original release archives byte for byte;
 actual public ESM imports resolve the same Core module and error classes.
 On Node `22.18.0`, the ordinary checked-in configurations pass type checks and
-all 523 tests: 475 Node tests across 45 files, 46 real D1 tests across five files,
+all 524 tests: 475 Node tests across 45 files, 47 real D1 tests across five files,
 and two Bench Ticket Worker/D1/R2 tests. The static build emits 21 pages, and
 Wrangler's explicit dry run packages the Worker without uploading it. These
 checks use the published registry graph, without source aliases. Earlier
@@ -241,15 +241,19 @@ prerequisites.
 ### Limiter window cleanup and the shared cron
 
 The [scheduler](../worker/src/index.ts) keeps five distinct cron expressions.
-`RATE_LIMIT_CRON` remains `0-57 * * * *`, but its 58 eligible minutes now
-alternate between two isolated invocations:
+`RATE_LIMIT_CRON` remains `0-57 * * * *`. Its 58 eligible minutes allocate
+two isolated rate invocations followed by one ready-hint invocation:
 
-- Even UTC minutes run one [global limiter cleanup](../worker/src/knowledge-maintenance.ts)
-  page of at most 20 physical rows: 29 pages per hour. This runs independently
-  of the Knowledge flag and optional agent registrations.
-- Odd UTC minutes run one [ready-hint page](../worker/src/knowledge-retrieval-ready.ts)
-  when Knowledge is enabled. They do not also run limiter cleanup or physical
-  KB recovery. An empty ready queue does not trigger another heavy task.
+- UTC minutes with remainder 0 or 1 when divided by three run one
+  [global limiter cleanup](../worker/src/knowledge-maintenance.ts) page of at
+  most 20 physical rows: 39 pages per hour. This runs independently of the
+  Knowledge flag and optional agent registrations.
+- Minutes with remainder 2 run one
+  [ready-hint page](../worker/src/knowledge-retrieval-ready.ts) when Knowledge
+  is enabled: 19 pages per hour. They do not also run limiter cleanup or
+  physical KB recovery. An empty ready queue does not trigger another heavy
+  task. This reduces the previous 29 ready opportunities to 19; ready hints
+  remain a latency aid, with atomic SDK jobs and physical recovery preserved.
 
 The original four other expressions and all 15 rotating cleanup lanes remain
 in place. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
@@ -262,13 +266,17 @@ pages are not snapshots. Descriptors, malformed/legacy `0.2.0` rows and
 unknown layouts remain retained. This does not silently migrate old limiter
 storage; existing Identity/Support maintenance remains in place.
 
-The scheduled limiter ceiling is 580 physical rows per hour if all 29 pages
+The scheduled limiter ceiling is 780 physical rows per hour if all 39 pages
 succeed and fill. Live windows, descriptors, retained rows and cursor-cycle
 overhead consume slots, so this is not a deletion or expiry guarantee. The
-synthetic capacity regression now creates 12 five-minute windows for five IPs
-across seven policies: 420 counters, with the minute-58/59 gaps retained. It
-checks actual drainage at the revised cadence; it is not a production
-benchmark or a passed-gate claim in this guide.
+synthetic capacity regression creates 50 browser IP subjects plus one subject
+in each of six Agent Access policy shapes per five-minute cohort: 672 counters
+per hour for four continuing hours, then two hours without new arrivals.
+Seven persistent descriptors, live windows and the minute-58/59 gaps remain
+in the actual Store. It checks backlog and oldest-expiry age at the same
+workload phase after warmup, cursor-cycle progress and eventual drainage.
+This finite workload is not a production benchmark, universal arrival-rate
+bound or passed-gate claim in this guide.
 
 Descriptor reads, conditional deletes and checkpoint work add storage
 operations beyond the scan-row limit. Validate the complete scheduled handler
