@@ -9,6 +9,7 @@ import type {
 } from '@pegma/knowledge-base-core';
 import {
   knowledgeAgentToolNames,
+  knowledgeAgentScopes,
   type KnowledgeAgentOperation,
 } from '@pegma/knowledge-base-mcp';
 import { createSessionStore } from '@pegma/sessions';
@@ -290,11 +291,13 @@ async function fixture() {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   }
-  async function device() {
+  async function device(
+    scopes: readonly string[] = AGENT_KNOWLEDGE_PERMISSIONS,
+  ) {
     const pending = await agents.service.beginDeviceAuthorization({
       clientId: client.clientId,
       resource: AGENT_RESOURCE,
-      scopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
+      scopes: [...scopes],
     });
     const viewed = await agents.api(
       browser(
@@ -313,7 +316,7 @@ async function fixture() {
         requestId: approval.requestId,
         userCode: pending.user_code,
         decision: 'approve',
-        approvedScopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
+        approvedScopes: [...scopes],
       }),
     );
     expect(approved?.status).toBe(200);
@@ -330,7 +333,7 @@ async function fixture() {
     expect(delegated.access.roles).toEqual([]);
     expect(delegated.access.entitlements).toEqual([]);
     expect(delegated.access.permissions.slice().sort()).toEqual(
-      [...AGENT_KNOWLEDGE_PERMISSIONS].sort(),
+      [...scopes].sort(),
     );
     return {
       token: tokens.access_token,
@@ -467,7 +470,11 @@ async function fixture() {
       ).toBe('revoked');
     }
   }
-  function block(hook: keyof StoreHooks, rowIdContains?: string) {
+  function block(
+    hook: keyof StoreHooks,
+    rowIdContains?: string,
+    failAfterRead = false,
+  ) {
     const entered = barrier();
     const finish = barrier();
     hooks[hook] = async (rowId) => {
@@ -476,6 +483,8 @@ async function fixture() {
       hooks[hook] = undefined;
       entered.release();
       await finish.ready;
+      if (failAfterRead)
+        throw new Error('Synthetic private final-read failure canary.');
     };
     return { entered: entered.ready, finish: finish.release };
   }
@@ -490,8 +499,58 @@ async function fixture() {
     queueReport,
     revoke,
     block,
+    identity,
+    roleStore,
+    resolve,
   };
 }
+
+it('resolves stored roles before the actual active verified Identity claims without a duplicate user read', async () => {
+  const f = await fixture();
+  const observations: string[] = [];
+  const resolve = createAgentPrincipalResolver({
+    identity: {
+      ...f.identity,
+      async claimsFor(id) {
+        observations.push('claims');
+        return f.identity.claimsFor(id);
+      },
+      async getUser(id) {
+        observations.push('user');
+        return f.identity.getUser(id);
+      },
+    },
+    roleStore: {
+      async listActiveRoleAssignments(id, scope) {
+        const result = await f.roleStore.listActiveRoleAssignments(id, scope);
+        observations.push('roles');
+        return result;
+      },
+    },
+    identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+  });
+  expect(await resolve(ownerId)).toEqual(await f.resolve(ownerId));
+  expect(observations).toEqual(['roles', 'claims']);
+});
+
+it('refuses a real stored Admin assignment whose principal has no actual Identity account', async () => {
+  const f = await fixture();
+  const principalId = 'orphaned-role-principal';
+  const granted = await f.roleStore.grantRoleAssignmentWithAudit({
+    assignment: {
+      id: 'orphaned-role-assignment',
+      principalId,
+      role: ADMIN_ROLE,
+      scope: APPLICATION_SCOPE,
+      grantedBy: { kind: 'system', systemId: 'synthetic-orphan-test' },
+      grantedAtEpochMs: Date.now(),
+      status: 'active',
+    },
+    auditEventId: 'orphaned-role-audit',
+  });
+  expect(granted.status).toBe('granted');
+  expect(await f.resolve(principalId)).toBeNull();
+});
 
 describe.each(['http', 'mcp'] as const)(
   'current agent authority over actual %s transport',
@@ -542,6 +601,147 @@ describe.each(['http', 'mcp'] as const)(
         ).rejects.toBeInstanceOf(KnowledgeBaseNotFoundError);
       },
     );
+
+    it.each([
+      { scope: knowledgeAgentScopes.draftWrite, allowed: true },
+      { scope: knowledgeAgentScopes.evidenceSubmit, allowed: true },
+      { scope: knowledgeAgentScopes.draftRead, allowed: false },
+    ])(
+      'retains the requirements permission alternative for $scope',
+      async ({ scope, allowed }) => {
+        const f = await fixture();
+        const credential = await f.device([scope]);
+        const result = await logicalResponse(
+          await f.knowledge.handle(
+            agentRequest(
+              transport,
+              credential.token,
+              JSON.stringify(
+                wire(transport, 'getValidationRequirements', {
+                  collectionId,
+                  kind: draft.kind,
+                }),
+              ),
+            ),
+          ),
+          transport,
+        );
+        if (allowed)
+          expect(result).toMatchObject({
+            operation: 'getValidationRequirements',
+            result: { collectionId },
+          });
+        else expect(result).toMatchObject({ error: { code: 'forbidden' } });
+      },
+    );
+
+    it('requires both report grants while allowing report reads without draft-write authority', async () => {
+      const f = await fixture();
+      const input = await f.reportInput('report-read-permissions');
+      for (const scopes of [
+        [knowledgeAgentScopes.draftRead],
+        [knowledgeAgentScopes.evidenceSubmit],
+        [knowledgeAgentScopes.draftRead, knowledgeAgentScopes.evidenceSubmit],
+      ]) {
+        const credential = await f.device(scopes);
+        const result = await logicalResponse(
+          await f.knowledge.handle(
+            agentRequest(
+              transport,
+              credential.token,
+              JSON.stringify(
+                wire(transport, 'getValidationRequirements', {
+                  articleId: input.articleId,
+                  collectionId,
+                  kind: draft.kind,
+                }),
+              ),
+            ),
+          ),
+          transport,
+        );
+        if (scopes.length === 2)
+          expect(result).toMatchObject({
+            result: { reportLedger: { status: 'active' } },
+          });
+        else expect(result).toMatchObject({ error: { code: 'forbidden' } });
+      }
+    });
+
+    it('keeps independent request read groups separate when one live grant is revoked', async () => {
+      const f = await fixture();
+      await f.knowledge.application.createDraft(
+        await f.access(),
+        f.createInput('isolated-read'),
+      );
+      const other = await f.device();
+      const blocked = f.block('afterKbRead');
+      const input = JSON.stringify(
+        wire(transport, 'getDraft', { articleId: 'isolated-read' }),
+      );
+      const pending = f.knowledge.handle(
+        agentRequest(transport, f.credential.token, input),
+      );
+      await Promise.race([
+        blocked.entered,
+        pending.then(() => {
+          throw new Error('Expected the actual read barrier.');
+        }),
+      ]);
+      try {
+        const independent = await logicalResponse(
+          await f.knowledge.handle(agentRequest(transport, other.token, input)),
+          transport,
+        );
+        expect(independent).toMatchObject({
+          result: { articleId: 'isolated-read' },
+        });
+        await f.revoke('grant');
+      } finally {
+        blocked.finish();
+      }
+      const denied = await logicalResponse(await pending, transport);
+      expect(denied).toMatchObject({ error: { code: 'forbidden' } });
+      expect(JSON.stringify(denied)).not.toContain(draft.content.text);
+      expect(
+        await logicalResponse(
+          await f.knowledge.handle(agentRequest(transport, other.token, input)),
+          transport,
+        ),
+      ).toMatchObject({ result: { articleId: 'isolated-read' } });
+    });
+
+    it('refuses another valid same-owner grant substituted during an actual private read', async () => {
+      const f = await fixture();
+      await f.knowledge.application.createDraft(
+        await f.access(),
+        f.createInput('read-header-swap'),
+      );
+      const other = await f.device();
+      const blocked = f.block('afterKbRead');
+      const request = agentRequest(
+        transport,
+        f.credential.token,
+        JSON.stringify(
+          wire(transport, 'getDraft', { articleId: 'read-header-swap' }),
+        ),
+      );
+      const pending = f.knowledge.handle(request);
+      await Promise.race([
+        blocked.entered,
+        pending.then(() => {
+          throw new Error('Expected the actual read barrier.');
+        }),
+      ]);
+      try {
+        request.headers.set('Authorization', 'Bearer ' + other.token);
+      } finally {
+        blocked.finish();
+      }
+      const result = await logicalResponse(await pending, transport);
+      expect(result).toMatchObject({ error: { code: 'forbidden' } });
+      expect(JSON.stringify(result)).not.toContain(draft.content.text);
+    });
 
     it.each(['grant', 'role'] as const)(
       'withholds private draft content after %s revocation during a real KB read',
@@ -752,6 +952,56 @@ describe.each(['http', 'mcp'] as const)(
             })
           ).evidence,
         ).toHaveLength(0);
+      },
+    );
+
+    it.each([
+      { kind: 'grant', failRead: false },
+      { kind: 'role', failRead: false },
+      { kind: 'grant', failRead: true },
+      { kind: 'role', failRead: true },
+    ] as const)(
+      'withholds a committed report ACK on late $kind revocation during its final read (read failure=$failRead)',
+      async ({ kind, failRead }) => {
+        const f = await fixture();
+        const input = await f.reportInput('deferred-report-final-read');
+        const committed = f.block('afterReportCommit');
+        const pending = f.knowledge.handle(
+          agentRequest(
+            transport,
+            f.credential.token,
+            JSON.stringify(wire(transport, 'submitEvidence', input)),
+          ),
+        );
+        await committed.entered;
+        const finalRead = f.block('afterKbRead', undefined, failRead);
+        committed.finish();
+        await finalRead.entered;
+        try {
+          await f.revoke(kind);
+        } finally {
+          finalRead.finish();
+        }
+        const result = await logicalResponse(await pending, transport);
+        expect(result).toMatchObject({ error: { code: 'forbidden' } });
+        expect(JSON.stringify(result)).not.toContain('pending-human-review');
+        expect(JSON.stringify(result)).not.toContain('failure canary');
+        expect(JSON.stringify(result)).not.toContain(input.report.details);
+        const retained = await f.knowledge.evidence.list(await f.access(), {
+          articleId: input.articleId,
+        });
+        expect(retained.reports).toHaveLength(1);
+        expect(retained.reports[0]).toMatchObject({
+          status: 'pending',
+          submittedBy: ownerId,
+        });
+        expect(
+          (
+            await f.knowledge.application.getEvidence(await f.access(), {
+              articleId: input.articleId,
+            })
+          ).evidence,
+        ).toEqual([]);
       },
     );
 

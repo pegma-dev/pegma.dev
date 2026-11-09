@@ -20,7 +20,9 @@ export interface ComponentEnrichment {
 }
 
 /** Keyed by component id (= registry `repo`). */
-export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>> = {
+export const COMPONENT_ENRICHMENT: Readonly<
+  Record<string, ComponentEnrichment>
+> = {
   spine: {
     dependencies: [],
     adapters: [],
@@ -31,7 +33,11 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
   },
   'storage-core': {
     dependencies: [
-      { componentId: 'spine', kind: 'requires', note: 'Shared contracts and Logger' },
+      {
+        componentId: 'spine',
+        kind: 'requires',
+        note: 'Shared contracts and Logger',
+      },
     ],
     adapters: [
       {
@@ -56,8 +62,7 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
         id: 'dynamodb',
         packageName: '@pegma/storage-dynamodb',
         host: 'other',
-        when:
-          'AWS-hosted apps using DynamoDB. Requires pegma-dev/storage-core#7 to be merged; factory is createDynamoDbStore. Not yet on npm.',
+        when: 'AWS-hosted apps using DynamoDB; hosts provide the AWS SDK client and table name to createDynamoDbStore.',
       },
     ],
     hostMustProvide: [
@@ -99,7 +104,11 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
   },
   'cache-core': {
     dependencies: [
-      { componentId: 'spine', kind: 'requires', note: 'Injected Clock and Logger' },
+      {
+        componentId: 'spine',
+        kind: 'requires',
+        note: 'Injected Clock and Logger',
+      },
     ],
     adapters: [
       {
@@ -310,7 +319,11 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
   },
   'flags-core': {
     dependencies: [
-      { componentId: 'spine', kind: 'requires', note: 'Injected Clock and Logger' },
+      {
+        componentId: 'spine',
+        kind: 'requires',
+        note: 'Injected Clock and Logger',
+      },
     ],
     adapters: [
       {
@@ -359,7 +372,11 @@ export const COMPONENT_ENRICHMENT: Readonly<Record<string, ComponentEnrichment>>
   },
   'logger-adapters': {
     dependencies: [
-      { componentId: 'spine', kind: 'requires', note: 'Implements Spine Logger' },
+      {
+        componentId: 'spine',
+        kind: 'requires',
+        note: 'Implements Spine Logger',
+      },
     ],
     adapters: [],
     hostMustProvide: [

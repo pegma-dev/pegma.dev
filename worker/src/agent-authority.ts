@@ -35,6 +35,12 @@ export function createAgentPrincipalResolver(
   options: AgentAuthorityOptions,
 ): (principalId: PrincipalId) => Promise<AccessContext | null> {
   return async (principalId) => {
+    const assignments = await options.roleStore.listActiveRoleAssignments(
+      principalId,
+      APPLICATION_SCOPE,
+    );
+    // Published Identity claimsFor requires an active, verified current user.
+    // Keep that account observation after the awaited stored-role lookup.
     let claims;
     try {
       claims = await options.identity.claimsFor(principalId);
@@ -58,18 +64,6 @@ export function createAgentPrincipalResolver(
       claims.emailVerified !== true ||
       link.issuer !== IDENTITY_ISSUER ||
       link.subject !== principalId
-    )
-      return null;
-    const assignments = await options.roleStore.listActiveRoleAssignments(
-      principalId,
-      APPLICATION_SCOPE,
-    );
-    const user = await options.identity.getUser(principalId);
-    if (
-      user === null ||
-      user.principalId !== principalId ||
-      user.status !== 'active' ||
-      user.emailVerified !== true
     )
       return null;
     return resolveAccess(

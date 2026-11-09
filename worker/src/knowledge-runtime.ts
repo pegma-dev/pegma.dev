@@ -14,6 +14,8 @@ import {
   createKnowledgeAgentDispatcher,
   createKnowledgeAgentHttp,
   createKnowledgeAgentMcp,
+  type KnowledgeAgentDispatcher,
+  type KnowledgeAgentResponse,
 } from '@pegma/knowledge-base-mcp';
 import {
   createDurableLimiter,
@@ -40,7 +42,7 @@ import {
 import { createKnowledgeApi } from './knowledge-api';
 import { IDENTITY_ISSUER } from './identity-api';
 import { knowledgeAdmissionPolicyName } from './knowledge-admission';
-import { createKnowledgeRetrievalMaintenance } from './knowledge-retrieval-maintenance';
+import { createKnowledgeRetrievalReady } from './knowledge-retrieval-ready';
 
 export interface KnowledgeRuntimeOptions
   extends AuthenticationOptions, AgentAuthorityOptions {
@@ -76,25 +78,23 @@ export function createKnowledgeRuntime(
     clock: options.clock,
     logger: options.logger,
     resolvePrincipal: createAgentPrincipalResolver(options),
+    authoringContext: {
+      getAuthoringContext(access, input) {
+        return application.getAuthoringContext(access, input);
+      },
+      confirmAuthoringContext(access, observation) {
+        return application.confirmAuthoringContext(access, observation);
+      },
+    },
     async readContext(access, articleId) {
-      const draft = await application.getDraft(access, { articleId });
-      const requirements = await application.getValidationRequirements(access, {
-        collectionId: draft.revision.collectionId,
-        kind: draft.revision.kind,
+      const observed = await application.getAuthoringContext(access, {
+        articleId,
+        includeEvidence: hasPermission(
+          access,
+          knowledgePermissions.evidenceRead,
+        ),
       });
-      const accepted = hasPermission(access, knowledgePermissions.evidenceRead)
-        ? await application.getEvidence(access, { articleId })
-        : undefined;
-      // The final draft generation fences the requirements/evidence reads.
-      // The SDK separately rechecks governance around evidence acceptance.
-      const latestDraft = await application.getDraft(access, { articleId });
-      if (draft.generation !== latestDraft.generation)
-        throw new ApiError(409, 'report_target_changed');
-      return {
-        draft: latestDraft,
-        requirements,
-        ...(accepted === undefined ? {} : { evidence: accepted }),
-      };
+      return observed.context;
     },
   });
   application = createKnowledgeBaseApplication({
@@ -118,13 +118,12 @@ export function createKnowledgeRuntime(
     ...options,
     application,
     evidence,
-    repairArticle: createKnowledgeRetrievalMaintenance({
+    repairArticle: createKnowledgeRetrievalReady({
       store: options.store,
       clock: options.clock,
       logger: options.logger,
       isEnabled: options.isEnabled ?? (() => true),
-      application,
-    }).repairArticleBestEffort,
+    }).enqueue,
     async limitBrowser(request) {
       const key = await knowledgeDigest(
         (request.headers.get('CF-Connecting-IP') ?? 'unavailable').slice(
@@ -176,6 +175,10 @@ export function createKnowledgeRuntime(
         required: readonly string[],
         requireAll = false,
       ): Promise<AccessContext> {
+        if (request.headers.get('Authorization') !== authorization)
+          throw new KnowledgeBaseAuthorizationError(
+            required[0] ?? knowledgePermissions.draftRead,
+          );
         const current =
           await configuredAgents.protectedResource.authenticate(request);
         if (
@@ -197,8 +200,10 @@ export function createKnowledgeRuntime(
           roles: Object.freeze([]),
           entitlements: Object.freeze([]),
           permissions: Object.freeze(
-            current.access.permissions.filter((permission) =>
-              original.permissions.includes(permission),
+            current.access.permissions.filter(
+              (permission) =>
+                original.permissions.includes(permission) &&
+                current.scopes.includes(permission),
             ),
           ),
         });
@@ -226,83 +231,253 @@ export function createKnowledgeRuntime(
         await freshAccess(original, required, requireAll);
         return result;
       }
-      // The real dispatcher continues to own all five schemas and attenuation;
-      // these request-bound methods only refresh authority before the real KB call.
-      const currentApplication: KnowledgeBaseApplication = {
-        ...application,
-        async getDraft(access, input) {
-          return invoke(access, [knowledgePermissions.draftRead], (fresh) =>
-            application.getDraft(fresh, input),
-          );
-        },
-        async createDraft(access, input) {
-          return invoke(access, [knowledgePermissions.draftWrite], (fresh) =>
-            application.createDraft(fresh, input),
-          );
-        },
-        async updateDraft(access, input) {
-          return invoke(access, [knowledgePermissions.draftWrite], (fresh) =>
-            application.updateDraft(fresh, input),
-          );
-        },
-        async getValidationRequirements(access, input) {
-          return invoke(
-            access,
-            [
-              knowledgePermissions.draftWrite,
-              knowledgePermissions.evidenceSubmit,
-            ],
-            (fresh) => application.getValidationRequirements(fresh, input),
-          );
-        },
-        async submitEvidence(access, input) {
-          return invoke(
-            access,
-            [knowledgePermissions.evidenceSubmit],
-            (fresh) => application.submitEvidence(fresh, input),
-          );
-        },
-      };
-      const currentReports: KnowledgeEvidenceService['agentReports'] = {
-        async report(access, input) {
-          return invoke(
-            access,
-            [
-              knowledgePermissions.draftRead,
-              knowledgePermissions.evidenceSubmit,
-            ],
-            (fresh) => evidence.agentReports.report(fresh, input),
-            true,
-          );
-        },
-        async ledger(access, input) {
-          return invoke(
-            access,
-            [
-              knowledgePermissions.draftRead,
-              knowledgePermissions.evidenceSubmit,
-            ],
-            (fresh) => evidence.agentReports.ledger(fresh, input),
-            true,
-          );
-        },
-        async status(access, input) {
-          return invoke(
-            access,
-            [
-              knowledgePermissions.draftRead,
-              knowledgePermissions.evidenceSubmit,
-            ],
-            (fresh) => evidence.agentReports.status(fresh, input),
-            true,
-          );
-        },
-      };
-      const dispatcher = createKnowledgeAgentDispatcher({
-        application: currentApplication,
+      // Each actual tool invocation owns its read group, including when the MCP
+      // SDK runs the callback after constructing its outer response.
+      const configuration = createKnowledgeAgentDispatcher({
+        application,
         resource: AGENT_RESOURCE,
-        reports: currentReports,
+        reports: evidence.agentReports,
       });
+      const dispatcher: KnowledgeAgentDispatcher = {
+        limits: configuration.limits,
+        ...(configuration.reportWorkflow === true
+          ? { reportWorkflow: true as const }
+          : {}),
+        async dispatch(identity, envelope): Promise<KnowledgeAgentResponse> {
+          let readContext: Promise<AccessContext> | undefined;
+          let readOriginal: AccessContext | undefined;
+          let deferredReportArticle: string | undefined;
+          let deferredReportRead = false;
+          const clauses: {
+            required: readonly string[];
+            requireAll: boolean;
+          }[] = [];
+          function recordClause(
+            required: readonly string[],
+            requireAll: boolean,
+          ) {
+            if (
+              !clauses.some(
+                (clause) =>
+                  clause.requireAll === requireAll &&
+                  clause.required.length === required.length &&
+                  clause.required.every(
+                    (permission, index) => permission === required[index],
+                  ),
+              )
+            )
+              clauses.push({
+                required: Object.freeze([...required]),
+                requireAll,
+              });
+          }
+          function write<T>(
+            original: AccessContext,
+            required: readonly string[],
+            operation: (access: AccessContext) => Promise<T>,
+            requireAll = false,
+          ): Promise<T> {
+            if (deferredReportArticle !== undefined)
+              throw new KnowledgeBaseAuthorizationError(
+                required[0] ?? knowledgePermissions.evidenceSubmit,
+              );
+            recordClause(required, requireAll);
+            return invoke(original, required, operation, requireAll);
+          }
+          async function read<T>(
+            original: AccessContext,
+            required: readonly string[],
+            operation: (access: AccessContext) => Promise<T>,
+            requireAll = false,
+            finalReportArticle?: string,
+          ): Promise<T> {
+            if (
+              deferredReportArticle !== undefined &&
+              (finalReportArticle !== deferredReportArticle ||
+                deferredReportRead)
+            )
+              throw new KnowledgeBaseAuthorizationError(
+                required[0] ?? knowledgePermissions.draftRead,
+              );
+            if (deferredReportArticle !== undefined) deferredReportRead = true;
+            if (
+              request.headers.get('Authorization') !== authorization ||
+              original.principalId !== identity.access.principalId
+            )
+              throw new KnowledgeBaseAuthorizationError(
+                required[0] ?? knowledgePermissions.draftRead,
+              );
+            if (readContext === undefined) {
+              readOriginal = original;
+              readContext = freshAccess(original, required, requireAll);
+            }
+            const access = await readContext;
+            const permitted = (permission: string) =>
+              original.permissions.includes(permission) &&
+              access.permissions.includes(permission);
+            if (
+              request.headers.get('Authorization') !== authorization ||
+              !(requireAll
+                ? required.every(permitted)
+                : required.some(permitted))
+            )
+              throw new KnowledgeBaseAuthorizationError(
+                required[0] ?? knowledgePermissions.draftRead,
+              );
+            recordClause(required, requireAll);
+            return operation(access);
+          }
+          const currentApplication: KnowledgeBaseApplication = {
+            ...application,
+            async getDraft(access, input) {
+              return read(
+                access,
+                [knowledgePermissions.draftRead],
+                (fresh) => application.getDraft(fresh, input),
+                false,
+                input.articleId,
+              );
+            },
+            async createDraft(access, input) {
+              return write(access, [knowledgePermissions.draftWrite], (fresh) =>
+                application.createDraft(fresh, input),
+              );
+            },
+            async updateDraft(access, input) {
+              return write(access, [knowledgePermissions.draftWrite], (fresh) =>
+                application.updateDraft(fresh, input),
+              );
+            },
+            async getValidationRequirements(access, input) {
+              return read(
+                access,
+                [
+                  knowledgePermissions.draftWrite,
+                  knowledgePermissions.evidenceSubmit,
+                ],
+                (fresh) => application.getValidationRequirements(fresh, input),
+              );
+            },
+            async submitEvidence(access, input) {
+              return write(
+                access,
+                [knowledgePermissions.evidenceSubmit],
+                (fresh) => application.submitEvidence(fresh, input),
+              );
+            },
+          };
+          const currentReports: KnowledgeEvidenceService['agentReports'] = {
+            async query(access, input) {
+              return read(
+                access,
+                [
+                  knowledgePermissions.draftRead,
+                  knowledgePermissions.evidenceSubmit,
+                ],
+                (fresh) => evidence.agentReports.query(fresh, input),
+                true,
+              );
+            },
+            async report(access, input) {
+              const required = [
+                knowledgePermissions.draftRead,
+                knowledgePermissions.evidenceSubmit,
+              ];
+              if (readOriginal === undefined)
+                return write(
+                  access,
+                  required,
+                  (fresh) => evidence.agentReports.report(fresh, input),
+                  true,
+                );
+              if (deferredReportArticle !== undefined)
+                throw new KnowledgeBaseAuthorizationError(
+                  knowledgePermissions.evidenceSubmit,
+                );
+              recordClause(required, true);
+              const fresh = await freshAccess(access, required, true);
+              // Only this mixed report path defers its postcommit observation.
+              // Afterward, permit only the same target's bounded getDraft read;
+              // the full original-credential gate runs before any logical result.
+              deferredReportArticle = input.articleId;
+              return evidence.agentReports.report(fresh, input);
+            },
+            async ledger(access, input) {
+              return read(
+                access,
+                [
+                  knowledgePermissions.draftRead,
+                  knowledgePermissions.evidenceSubmit,
+                ],
+                (fresh) => evidence.agentReports.ledger(fresh, input),
+                true,
+              );
+            },
+            async status(access, input) {
+              return read(
+                access,
+                [
+                  knowledgePermissions.draftRead,
+                  knowledgePermissions.evidenceSubmit,
+                ],
+                (fresh) => evidence.agentReports.status(fresh, input),
+                true,
+              );
+            },
+          };
+          const inner = createKnowledgeAgentDispatcher({
+            application: currentApplication,
+            resource: AGENT_RESOURCE,
+            reports: currentReports,
+          });
+          let operation: KnowledgeAgentResponse['operation'] = null;
+          async function finishReads(): Promise<void> {
+            if (readOriginal !== undefined) {
+              // Reauthenticate the original credential once after ALL read work,
+              // before HTTP or the MCP tool callback can serialize any result.
+              const final = await freshAccess(readOriginal, [], true);
+              for (const clause of clauses) {
+                const permitted = (permission: string) =>
+                  final.permissions.includes(permission);
+                if (
+                  !(clause.requireAll
+                    ? clause.required.every(permitted)
+                    : clause.required.some(permitted))
+                )
+                  throw new KnowledgeBaseAuthorizationError(
+                    clause.required[0] ?? knowledgePermissions.draftRead,
+                  );
+              }
+            }
+          }
+          try {
+            let result: KnowledgeAgentResponse;
+            try {
+              result = await inner.dispatch(identity, envelope);
+            } catch (error) {
+              // A later SDK failure cannot escape the deferred report gate.
+              await finishReads();
+              throw error;
+            }
+            operation = result.operation;
+            await finishReads();
+            return result;
+          } catch (error) {
+            const forbidden = error instanceof KnowledgeBaseAuthorizationError;
+            return {
+              apiVersion: '1',
+              operation,
+              error: {
+                code: forbidden ? 'forbidden' : 'unavailable',
+                status: forbidden ? 403 : 503,
+                message: forbidden
+                  ? 'Knowledge access is forbidden.'
+                  : 'Knowledge service is unavailable.',
+              },
+            };
+          }
+        },
+      };
       const transportOptions = {
         dispatcher,
         resource: AGENT_RESOURCE,

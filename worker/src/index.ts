@@ -42,12 +42,16 @@ import {
 import { runSupportMaintenance } from './support-maintenance';
 import { runKnowledgeMaintenance } from './knowledge-maintenance';
 import { createKnowledgeRetrievalMaintenance } from './knowledge-retrieval-maintenance';
+import { createKnowledgeRetrievalReady } from './knowledge-retrieval-ready';
+import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import { systemClock } from '@pegma/spine';
 import {
   MAIL_CRON,
   MAIL_RECONCILE_CRON,
   CLEANUP_CRON,
+  RATE_LIMIT_CRON,
   cleanupLaneAt,
+  rateKnowledgeLaneAt,
 } from './maintenance-schedule';
 import { createPegmaMcpHandler } from './mcp-server';
 import type { CatalogFetchEnv } from './mcp-catalog-fetch';
@@ -64,6 +68,17 @@ function knowledgeRetrievalEnabled(environment: {
   readonly PEGMA_KNOWLEDGE_ENABLED?: string;
 }): boolean {
   return environment.PEGMA_KNOWLEDGE_ENABLED === 'true';
+}
+
+// No Identity, sessions, mail, or AgentAccess initialization in projection ticks.
+function createKnowledgeProjectionStore(environment: {
+  readonly IDENTITY_DB: D1Database;
+}) {
+  return createCloudflareD1Store({
+    database: environment.IDENTITY_DB,
+    createSchemaIfMissing: false,
+    readBatchSize: 512,
+  });
 }
 
 function createSupportHandler(
@@ -394,6 +409,36 @@ export default {
     const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
     // Each cron has its own invocation CPU budget. Never combine all cleanup
     // with the time-sensitive mail path on Workers Free.
+    if (controller.cron === RATE_LIMIT_CRON) {
+      ctx.waitUntil(
+        (async () => {
+          try {
+            if (
+              rateKnowledgeLaneAt(controller.scheduledTime) === 'rate_limits'
+            ) {
+              await runKnowledgeMaintenance(
+                { store: createProductionStore(env), clock: systemClock },
+                logger,
+                { tasks: ['rate_limits'] },
+              );
+            } else if (knowledgeRetrievalEnabled(env)) {
+              await createKnowledgeRetrievalReady({
+                store: createKnowledgeProjectionStore(env),
+                clock: systemClock,
+                logger,
+                isEnabled: () => knowledgeRetrievalEnabled(env),
+              }).runPage();
+            }
+          } catch (error) {
+            logger.log('error', 'knowledge.maintenance_unavailable', {
+              error: error instanceof Error ? error.name : 'unknown',
+            });
+          }
+        })(),
+      );
+      return;
+    }
+
     if (controller.cron === RELEASE_RECONCILIATION_CRON) {
       ctx.waitUntil(
         (async () => {
@@ -462,32 +507,15 @@ export default {
         })(),
       );
 
-    if (cleanup?.kind === 'knowledge')
-      ctx.waitUntil(
-        (async () => {
-          try {
-            await runKnowledgeMaintenance(
-              { store: createProductionStore(env), clock: systemClock },
-              logger,
-              { tasks: [cleanup.task] },
-            );
-          } catch (error) {
-            logger.log('error', 'knowledge.maintenance_unavailable', {
-              error: error instanceof Error ? error.name : 'unknown',
-            });
-          }
-        })(),
-      );
-
-    // Keep the existing limiter lane independent of Knowledge activation and
-    // failures. Only the new KB page requires the current Knowledge gate.
+    // Retrieval keeps its existing knowledge lane and activation gate,
+    // independently of the isolated global limiter cron.
     if (cleanup?.kind === 'knowledge' && knowledgeRetrievalEnabled(env))
       ctx.waitUntil(
         (async () => {
           try {
             if (!knowledgeRetrievalEnabled(env)) return;
             await createKnowledgeRetrievalMaintenance({
-              store: createProductionStore(env),
+              store: createKnowledgeProjectionStore(env),
               clock: systemClock,
               logger,
               isEnabled: () => knowledgeRetrievalEnabled(env),

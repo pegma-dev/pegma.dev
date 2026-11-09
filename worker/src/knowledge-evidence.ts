@@ -40,7 +40,7 @@ export type KnowledgeEvidenceService = {
   /** Native component errors remain recognizable to the actual MCP dispatcher. */
   readonly agentReports: Pick<
     KnowledgeEvidenceReports,
-    'report' | 'ledger' | 'status'
+    'report' | 'ledger' | 'status' | 'query'
   >;
 };
 
@@ -130,7 +130,15 @@ export function createKnowledgeEvidenceService(
       report: reports.report,
       ledger: reports.ledger,
       status: reports.status,
+      query: reports.query,
     }),
+    query: (access, input) =>
+      hostOperation(() =>
+        reports.query(
+          access,
+          input as Parameters<KnowledgeEvidenceReports['query']>[1],
+        ),
+      ),
     report: (access, input) =>
       hostOperation(() =>
         reports.report(

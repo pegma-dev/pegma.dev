@@ -53,6 +53,7 @@ import { createSupportApi } from './support-api';
 import { createSupportRuntime } from './support-desk';
 import { createKnowledgeRuntime } from './knowledge-runtime';
 import { createKnowledgeRetrievalMaintenance } from './knowledge-retrieval-maintenance';
+import { createKnowledgeRetrievalReady } from './knowledge-retrieval-ready';
 import type {
   KnowledgeReportAcknowledgement,
   KnowledgeReportLedgerState,
@@ -141,7 +142,7 @@ async function integrationFixture(store: Store, loggerOverride?: Logger) {
       const current = users.get(id);
       if (current === undefined)
         throw Object.assign(new Error('missing'), { code: 'not_found' });
-      if (!current.emailVerified)
+      if (current.status !== 'active' || !current.emailVerified)
         throw Object.assign(new Error('unverified'), { code: 'invalid_state' });
       return {
         issuer: IDENTITY_ISSUER,
@@ -1243,7 +1244,7 @@ export function registerKnowledgeIntegrationScenarios(
           variant === 'throwing-logger'
             ? {
                 log: vi.fn<Logger['log']>((_level, event) => {
-                  if (event.startsWith('knowledge.retrieval_maintenance.'))
+                  if (event.startsWith('knowledge.retrieval_'))
                     throw new Error(
                       'Synthetic injected repair logger failure.',
                     );
@@ -1257,12 +1258,8 @@ export function registerKnowledgeIntegrationScenarios(
           token.access_token,
         );
         expect(published.value.state).toBe('published');
-        // Failed bounded keyed repair must not lie about the durable publish.
-        expect(f.logger.log).toHaveBeenCalledWith(
-          'warn',
-          'knowledge.retrieval_maintenance.failed',
-          { stage: 'keyed' },
-        );
+        // Publication only enqueues a dirty hint; it never waits for repair.
+        // The unavailable projection store must not change that durable ACK.
         expect(observed.scans).toEqual([]);
         const portal = async (operation: string, input: unknown) => {
           const response = await f.knowledgeRequest(
@@ -1310,13 +1307,33 @@ export function registerKnowledgeIntegrationScenarios(
             logger: f.logger,
             isEnabled: () => true,
           });
+        const ready = () =>
+          createKnowledgeRetrievalReady({
+            store: observed.store,
+            clock: f.clock,
+            logger: f.logger,
+            isEnabled: () => true,
+          });
+        await ready().runPage();
+        expect(f.logger.log).toHaveBeenCalledWith(
+          'error',
+          'knowledge.retrieval_ready.failed',
+          { stage: 'repair' },
+        );
         async function converge(indexed: boolean) {
-          for (let tick = 0; tick < 128; tick++) {
+          // Policy-wide changes deliberately rely on complete physical cycles;
+          // article commands use the ready hint retained across worker failure.
+          const physical = !indexed && withdrawal === 'policy';
+          for (let tick = 0; tick < 1024; tick++) {
             const before = observed.scans.length;
-            // A new composition each tick proves the cursor survives restart.
-            await maintenance().runPage();
-            expect(observed.scans.length - before).toBe(1);
-            expect(observed.scans.at(-1)?.limit).toBe(10);
+            if (physical) {
+              await maintenance().runPage();
+              expect(observed.scans.length - before).toBe(1);
+              expect(observed.scans.at(-1)?.limit).toBe(1);
+            } else {
+              await ready().runPage();
+              expect(observed.scans.length).toBe(before);
+            }
             const status = await f.knowledge.application.getArticleIndexStatus(
               indexAccess,
               { articleId: created.id },

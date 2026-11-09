@@ -2,7 +2,7 @@
 
 This is a **source candidate**, with public activation disabled. The host uses
 exact published `@pegma/agent-access@0.1.1` and all four
-`@pegma/knowledge-base-*` packages at `0.1.3`, over its existing Identity,
+`@pegma/knowledge-base-*` packages at `0.1.4`, over its existing Identity,
 Sessions, stored roles and D1 Store. The public catalog at `/api/mcp` remains
 separate from protected article authoring.
 
@@ -16,20 +16,49 @@ passed independent exact-byte, signature/provenance and registry-consumer
 verification. Existing Identity and Support Desk keep their
 `@pegma/rate-limit@0.2.0` dependency; Support Desk remains at `0.1.1`.
 
-All four exact KB `0.1.3` packages, including the shared report factory, are now
-installed in the manifest and lockfile. The
-[verified `0.1.3` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.3)
+All four exact KB `0.1.4` packages, including the shared report factory and
+governed authoring-context/report-query APIs, are installed in the manifest and
+lockfile. The
+[verified `0.1.4` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.4)
 at signed source
-[`8b4c25aa6a40f0c56be97f07e3b7b5ac6136a99b`](https://github.com/pegma-dev/knowledge-base/commit/8b4c25aa6a40f0c56be97f07e3b7b5ac6136a99b)
+[`541e8c93fe1b15bee9345e59b36325f422f97c50`](https://github.com/pegma-dev/knowledge-base/commit/541e8c93fe1b15bee9345e59b36325f422f97c50)
 passed full-set original-byte, signature/provenance and registry-consumer
 verification. Recovery retained the original prepared artifact without
-repacking; the [release run completed at attempt 5](https://github.com/pegma-dev/knowledge-base/actions/runs/42533473529/attempts/5).
-Host type/runtime/build/review gates remain pending and activation is disabled;
-producer verification and installation are not host or actual-client acceptance.
+repacking; the [release run completed at attempt 5](https://github.com/pegma-dev/knowledge-base/actions/runs/42576167664/attempts/5).
+Activation remains disabled; producer verification and installation are not host
+or actual-client acceptance.
 Do not substitute a source
 checkout, local tarball, dependency override, or forced SDK/schema deduplication
 for the released producer graph. The catalog transport and protected KB
 transport retain their respective released dependencies.
+
+The current manifest and lockfile pin released KB `0.1.4`,
+`@pegma/storage-cloudflare-d1@0.4.6` and genuine `@pegma/storage-core@0.4.0`.
+The D1 adapter itself retains that exact Core `0.4.0` dependency; no source alias,
+local archive, override or forced Core deduplication supplies the canonical
+graph. The frozen registry installation is complete.
+
+The [qualified D1 `0.4.6` release](https://github.com/pegma-dev/storage-core/releases/tag/v0.4.6)
+uses signed source
+[`35daa5e679d353fffc9fbf5afe73fe73198d8abf`](https://github.com/pegma-dev/storage-core/commit/35daa5e679d353fffc9fbf5afe73fe73198d8abf)
+and annotated tag object `52049598b9088f18cd8fae2a68f243b55cf80815`.
+[Release attempt 3 completed successfully](https://github.com/pegma-dev/storage-core/actions/runs/42705318277/attempts/3),
+with only D1 newly published and the other package versions reusing their genuine
+original archives. Exact registry bytes, source/provenance and public-consumer
+verification qualify the producer; they do not qualify this host.
+
+Installed D1 and Core files match the original release archives byte for byte;
+actual public ESM imports resolve the same Core module and error classes.
+On Node `22.18.0`, the ordinary checked-in configurations pass type checks and
+all 523 tests: 475 Node tests across 45 files, 46 real D1 tests across five files,
+and two Bench Ticket Worker/D1/R2 tests. The static build emits 21 pages, and
+Wrangler's explicit dry run packages the Worker without uploading it. These
+checks use the published registry graph, without source aliases. Earlier
+source-alias runs remain historical diagnostics.
+
+Current-head CI and full reviews remain pending. Actual-client acceptances
+remain at zero and no pilot has run. Keep activation disabled through the
+remaining deployed-host, staging/privacy and actual-client acceptance gates.
 
 ## Configuration and activation
 
@@ -83,6 +112,9 @@ The [host policy](../worker/src/support-access.ts) keeps authority explicit:
 Authenticated accounts receive the named article-read permission; collection
 audience policy and the released KB's current publication checks still decide
 which guides they can read. Role names do not bypass those checks.
+Portal article, search and collection results are withheld if the session or
+principal changes, or any captured permission is lost during the read. Added
+grants do not invalidate an otherwise authorized result.
 
 `/account/agents/device` accepts a human-entered/confirmed code of at most 128
 characters. `/account/agents/authorize` displays the exact request and requires
@@ -206,65 +238,123 @@ than assuming old/new budgets combine. The producer dependency is installed;
 validating the resulting current head and host acceptance remain activation
 prerequisites.
 
-### Limiter window cleanup
+### Limiter window cleanup and the shared cron
 
-The [Knowledge limiter cleanup lane](../worker/src/knowledge-maintenance.ts) scans one
-global physical page of 10 rows each time its scheduled turn runs, regardless
-of the Knowledge feature flag or agent registration. It shares the scheduler
-with the existing Identity/Support lanes and uses the paged helper instead of
-enumerating live configured policies. Its bookmark advances only after
-success, retaining the prior continuation on failure. Follow no-deletion
-pages and repeat complete cycles; pages are not snapshots. Descriptors,
-malformed/legacy `0.2.0` rows and unknown layouts remain retained. The new lane
-does not silently migrate old limiter storage. Existing Identity/Support
-maintenance remains in place. This source candidate does not establish live
-maintenance execution.
+The [scheduler](../worker/src/index.ts) keeps five distinct cron expressions.
+`RATE_LIMIT_CRON` remains `0-57 * * * *`, but its 58 eligible minutes now
+alternate between two isolated invocations:
+
+- Even UTC minutes run one [global limiter cleanup](../worker/src/knowledge-maintenance.ts)
+  page of at most 20 physical rows: 29 pages per hour. This runs independently
+  of the Knowledge flag and optional agent registrations.
+- Odd UTC minutes run one [ready-hint page](../worker/src/knowledge-retrieval-ready.ts)
+  when Knowledge is enabled. They do not also run limiter cleanup or physical
+  KB recovery. An empty ready queue does not trigger another heavy task.
+
+The original four other expressions and all 15 rotating cleanup lanes remain
+in place. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
+activation, confirm account-wide cron usage: this configuration already uses
+five expressions and does not add a sixth for retrieval.
+
+The limiter bookmark advances only after success, retaining the prior
+continuation on failure. Follow no-deletion pages and repeat complete cycles;
+pages are not snapshots. Descriptors, malformed/legacy `0.2.0` rows and
+unknown layouts remain retained. This does not silently migrate old limiter
+storage; existing Identity/Support maintenance remains in place.
+
+The scheduled limiter ceiling is 580 physical rows per hour if all 29 pages
+succeed and fill. Live windows, descriptors, retained rows and cursor-cycle
+overhead consume slots, so this is not a deletion or expiry guarantee. The
+synthetic capacity regression now creates 12 five-minute windows for five IPs
+across seven policies: 420 counters, with the minute-58/59 gaps retained. It
+checks actual drainage at the revised cadence; it is not a production
+benchmark or a passed-gate claim in this guide.
+
+Descriptor reads, conditional deletes and checkpoint work add storage
+operations beyond the scan-row limit. Validate the complete scheduled handler
+against the Free 50-call D1 budget. The real-D1 fixture counts actual binding
+executions, including batches and checkpoints, and has a calibration that
+throws before backend execution 51. That does not prove the Free 10 ms CPU
+budget, daily row quotas or live capacity. Activation also requires measured
+runtime budgets, full cursor-cycle progress and sustained deletion throughput
+under actual load.
 
 ### Retrieval projection repair
 
-[createKnowledgeRetrievalMaintenance](../worker/src/knowledge-retrieval-maintenance.ts)
-uses an internal server-owned principal with only `knowledge.index.manage`,
-without an Admin role or new staff/agent grants. On the existing Knowledge turn
-of the [15-lane cleanup schedule](../worker/src/maintenance-schedule.ts),
-`runPage()` invokes one real `repairRetrievalPage` with a physical scan limit of 10. This is a separate KB projection page, not the ten limiter-window rows.
-Additional SDK keyed reads and projection writes have their own bounds. The
-new page requires the current exact `PEGMA_KNOWLEDGE_ENABLED=true` gate;
-limiter cleanup remains independent of that flag and of projection failures.
-The existing cleanup cron remains `0-58 * * * *`.
+Publication and indexing are separate durable work. After an accepted
+`publishArticle`, `retireArticle` or `revokeEvidence`, the
+[request hook](../worker/src/knowledge-runtime.ts) attempts one nonthrowing,
+body-free ready-hint overwrite for that article. It no longer awaits inline
+`repairArticleIndex`. The record contains only a hash key, article identity,
+format and trusted request time in `pegma-dev.knowledge-retrieval-ready.v1`;
+it contains no report, evidence or article body. Duplicate acknowledgements
+can overwrite the same hint. Enqueue or diagnostic failures do not undo the
+committed command. The existing final browser-authority check still runs and
+can withhold its acknowledgement if authority changed.
 
-The projection bookmark uses the separate `pegma-dev-maintenance` key
-`{ partition: 'knowledge', id: 'retrieval' }`. Its cursor and monotonic
-generation advance through OCC only when the prior cursor/generation still
-match, including a generation increment for `null` to `null`. A failed page
-does not advance its checkpoint, and stale overlapping completions cannot
-replace newer progress. Checkpoint
-acknowledgement uncertainty is resolved by rereading durable state; projection
-writes already completed are not rolled back. Retry the retained continuation
-and repeat complete cursor cycles, including
-no-match pages and pending work. Logs contain coarse counts/status/stages,
-not article IDs, cursors, queries, private bodies or exception text.
+The ready worker scans one physical hint and calls the actual SDK
+`repairArticleIndex` with `maxBatches:1`. This bounds attempted derived
+transactions, including contention, rather than allowing an unbounded retry
+loop. It deletes only the exact scanned Store key/version after that call
+returns `status:'ready'`; `indexed:false` is a converged withdrawal. Pending,
+blocked and failed work retain their hints. A newer enqueue changes the opaque
+Store version and wins over an older worker's conditional deletion.
 
-Successful `publishArticle`, `retireArticle` and `revokeEvidence` commands also
-attempt one private bounded keyed `repairArticleIndex` through the
-[API/runtime hook](../worker/src/knowledge-runtime.ts). HTTP requests do not
-scan the corpus or expose maintenance operations/DTOs. A repair failure leaves
-the committed mutation intact and does not replace its result. The existing
-final browser-authority check still runs after the awaited hook and can
-withhold an acknowledgement if authority changed.
+The ready cursor rotates past a failed item so other hints can progress, then
+revisits retained work on later cycles. It uses the separate
+`pegma-dev-maintenance` key `{ partition:'knowledge', id:'retrieval-ready' }`.
+The physical recovery worker retains `{ partition:'knowledge', id:'retrieval' }`.
+Both checkpoints use a bounded opaque cursor and safe-integer monotonic
+generation, with one OCC attempt and a generation increment even for
+`null` to `null`. Scan/checkpoint failures preserve saved progress; delayed
+completions cannot overwrite a newer generation. Already committed projection
+writes are not rolled back after acknowledgement uncertainty.
 
-The page worker constructs the actual application from the same Store and
-clock without report-factory, login, provider or agent-client construction.
-Publication eligibility still checks retained accepted evidence and current
-policy. These hosts currently have no `privateSources` verifier: retained
-nonempty private-source references remain blocked/unavailable. A future
-source-enabled composition must supply its real eligibility/currentness ports
-to both request and repair paths; there is no allow-all fallback.
+The existing Knowledge turn in the
+[15-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
+calls `repairRetrievalPage` with `limit:1` and `maxBatches:1`. Complete physical
+cycles and the SDK's existing atomic article-change jobs remain the recovery
+path for a lost hint, collection/policy changes and unfinished work. The ready
+queue is a latency aid, not the authority or sole delivery guarantee.
+Physical recovery still includes no-match pages and repeated cycles; a large
+corpus or persistent failures can delay convergence. No indexing latency or
+live SLA is claimed.
 
-Keyed repair is best effort and does not guarantee immediate portal discovery
-or search readiness. Collection/policy changes, missed work and cleanup still
-need repeated page cycles. There is no indexing latency/SLA claim. Customer
-retrieval always rechecks actual publication, audience and proof/source
-revocation; stale index hints cannot grant access or restore approval.
+Both projection paths use the existing AuthCore-resolved, server-owned
+principal with only `knowledge.index.manage`, without an Admin role or new
+human/agent permission. Scheduled composition opens a separate Store with
+`createSchemaIfMissing:false` and explicit `readBatchSize:512`, then constructs
+the actual application from that Store and clock. It does not initialize
+Identity, mail, sessions, reports or agent registrations. Projection work
+checks the current `PEGMA_KNOWLEDGE_ENABLED=true` flag before Store access and
+after awaits; disabled ticks do no projection work. Limiter cleanup remains
+independent of that flag and projection failures.
+
+This phase has no private-source eligibility verifier. Retained nonempty
+`privateSources` references remain blocked/unavailable. A future source-enabled
+composition must provide its real authorization/withdrawal ports in both
+request and repair paths; there is no allow-all fallback. HTTP handlers do not
+scan the corpus or expose maintenance DTOs. Coarse diagnostics contain counts
+and fixed stages, not article IDs, cursors, queries, private bodies or exception
+text.
+
+Projection-dependent portal discovery/search stays empty or unavailable until
+current repair qualifies it. Known-ID publication reads retain their existing
+SDK authority checks. Retirement, evidence revocation and audience withdrawal
+are filtered immediately, before a worker removes stale hints; an index entry
+cannot grant access, restore approval or serve as customer confirmation of an
+unqualified publication.
+
+Earlier local candidate measurements of the awaited inline path reached 118
+D1 calls for publication and 104 for evidence revocation, above the 50-call
+limit despite successful logical responses. The eight-case real-D1
+profiling fixture now passes on the canonical published graph. It exercises whole HTTP/MCP and scheduled
+invocations, including genuine 32-proof/96-revocation history, pending work,
+transport failure, newer enqueue races and lost-hint recovery, with a hard
+50-call guard on the bounded Free-plan cases. This local result does not
+establish deployed CPU limits, daily quotas or sustained production throughput.
+Preserve all authority and history checks, keep activation disabled and complete
+the live-platform gates before use.
 
 Disable the feature if acceptance fails. Identity, role administration, human
 Support Desk and the public catalog retain their original composition. No

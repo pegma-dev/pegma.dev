@@ -21,7 +21,8 @@ const EVAL_NPM: Record<string, string | null> = {
   '@pegma/spine': '0.1.1',
   '@pegma/storage-core': '0.4.0',
   '@pegma/storage-azure-tables': '0.4.0',
-  '@pegma/storage-cloudflare-d1': '0.4.1',
+  '@pegma/storage-cloudflare-d1': '0.4.6',
+  '@pegma/storage-dynamodb': '0.4.5',
   '@pegma/storage-blobs': '0.1.0',
   '@pegma/storage-azure-blob': '0.1.0',
   '@pegma/storage-cloudflare-r2': '0.1.0',
@@ -102,7 +103,9 @@ describe('assembly eval harness (Phase 5)', () => {
   it('compiles the real catalog artifact (not a hand-built twin)', () => {
     expect(catalog.schemaVersion).toBe('0.1.0');
     expect(catalog.components.length).toBe(components.length);
-    const scaffold = catalog.recipes.find((r) => r.id === 'static-brochure-minimal');
+    const scaffold = catalog.recipes.find(
+      (r) => r.id === 'static-brochure-minimal',
+    );
     expect(scaffold?.fixture.status).toBe('green');
     expect(scaffold?.fixture.citation).toContain('scaffold-cf-minimal');
     expect(scaffold?.capabilityTags).toEqual(['static_host']);
@@ -132,13 +135,17 @@ describe('assembly eval harness (Phase 5)', () => {
     }
     expect(withCatalog.passRate).toBe(1);
 
-    const staticCase = withCatalog.cases.find((c) => c.id === 'static-brochure')!;
+    const staticCase = withCatalog.cases.find(
+      (c) => c.id === 'static-brochure',
+    )!;
     expect(staticCase.primaryRecipeId).toBe('static-brochure-minimal');
 
-    const healthCase = withCatalog.cases.find((c) => c.id === 'health-endpoint-only')!;
+    const healthCase = withCatalog.cases.find(
+      (c) => c.id === 'health-endpoint-only',
+    )!;
     expect(healthCase.primaryRecipeId).not.toBe('static-brochure-minimal');
-    expect(healthCase.packageNames.some((p) => p.includes('@pegma/health'))).toBe(
-      true,
-    );
+    expect(
+      healthCase.packageNames.some((p) => p.includes('@pegma/health')),
+    ).toBe(true);
   });
 });

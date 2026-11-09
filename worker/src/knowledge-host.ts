@@ -63,7 +63,7 @@ export async function handleKnowledgeRequest(
   if (env.PEGMA_KNOWLEDGE_ENABLED !== 'true')
     return unavailable('knowledge_disabled');
   try {
-    const identity = createProductionIdentityRuntime(env, logger);
+    const identity = createProductionIdentityRuntime(env, logger, 512);
     const options = {
       store: identity.store,
       clock: systemClock,

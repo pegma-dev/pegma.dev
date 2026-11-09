@@ -320,11 +320,13 @@ describe('stored staff report confirmation', () => {
     expect(confirmed.receipt).toBe(f.ack.receipt);
 
     const fresh = f.freshEvidence();
-    expect(Object.keys(fresh.agentReports).sort()).toEqual([
-      'ledger',
-      'report',
-      'status',
-    ]);
+    expect(fresh.agentReports).toEqual(
+      expect.objectContaining({
+        ledger: expect.any(Function),
+        report: expect.any(Function),
+        status: expect.any(Function),
+      }),
+    );
     expect(
       await fresh.status(f.agent, {
         articleId: 'guide',

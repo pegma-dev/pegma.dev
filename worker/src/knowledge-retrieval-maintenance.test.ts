@@ -175,14 +175,6 @@ describe('bounded Knowledge retrieval maintenance', () => {
     hooks.failScan = true;
     await expect(maintenance.runPage()).resolves.toBeUndefined();
     expect(await checkpoint(backing)).toEqual(committed);
-    await expect(
-      maintenance.repairArticleBestEffort(''),
-    ).resolves.toBeUndefined();
-    expect(logger.log).toHaveBeenCalledWith(
-      'warn',
-      'knowledge.retrieval_maintenance.failed',
-      { stage: 'keyed' },
-    );
   });
 
   it('does no Store work when disabled, or when the clock is invalid', async () => {
@@ -197,7 +189,6 @@ describe('bounded Knowledge retrieval maintenance', () => {
         },
       );
       await maintenance.runPage();
-      await maintenance.repairArticleBestEffort('synthetic-guide');
       expect(seen.calls.collections).toBe(0);
       expect(await checkpoint(backing)).toBeNull();
       if (mode === 'disabled') expect(logger.log).not.toHaveBeenCalled();
@@ -208,7 +199,7 @@ describe('bounded Knowledge retrieval maintenance', () => {
     }
   });
 
-  it('scans one physical ten-row page per call and resumes across reconstructed workers', async () => {
+  it('scans one physical row per call and resumes across reconstructed workers', async () => {
     const backing = createMemoryStore();
     const app = await seed(backing);
     expect((await app.listPortalCollections(actor, {})).collections).toEqual(
@@ -216,14 +207,17 @@ describe('bounded Knowledge retrieval maintenance', () => {
     );
     const seen = observe(backing);
     let complete = false;
-    for (let tick = 0; tick < 32; tick++) {
+    for (let tick = 0; tick < 256; tick++) {
       const before = seen.scans.length;
       await runner(seen.store).maintenance.runPage();
       expect(seen.scans.length - before).toBe(1);
-      expect(seen.scans.at(-1)?.limit).toBe(10);
+      expect(seen.scans.at(-1)?.limit).toBe(1);
       const saved = await checkpoint(backing);
       expect(saved?.generation).toBe(tick + 1);
-      if (saved?.cursor === null) {
+      if (
+        saved?.cursor === null &&
+        (await app.listPortalCollections(actor, {})).collections.length === 3
+      ) {
         complete = true;
         break;
       }
@@ -297,7 +291,7 @@ describe('bounded Knowledge retrieval maintenance', () => {
       'info',
       'knowledge.retrieval_maintenance.page',
       expect.objectContaining({
-        physicalRows: 10,
+        physicalRows: 1,
         candidates: 0,
         cursorSaved: true,
       }),
@@ -319,13 +313,28 @@ describe('bounded Knowledge retrieval maintenance', () => {
         failCheckpoint: failure === 'checkpoint',
       };
       const seen = observe(backing, hooks);
-      await runner(seen.store).maintenance.runPage();
-      expect(seen.calls.projectionCommits).toBeGreaterThan(0);
-      expect(await checkpoint(backing)).toBeNull();
-      hooks.failCheckpoint = false;
-      for (let tick = 0; tick < 8; tick++) {
+      // A checkpoint outage retries the same physical candidate. A lost SDK
+      // ACK can occur later in the cycle, after earlier noncandidate pages.
+      if (failure === 'checkpoint')
         await runner(seen.store).maintenance.runPage();
-        if ((await checkpoint(backing))?.cursor === null) break;
+      else {
+        for (
+          let tick = 0;
+          tick < 64 && seen.calls.projectionCommits === 0;
+          tick++
+        )
+          await runner(seen.store).maintenance.runPage();
+        expect(seen.calls.projectionCommits).toBeGreaterThan(0);
+      }
+      const retry = await checkpoint(backing);
+      if (failure === 'checkpoint') expect(retry).toBeNull();
+      hooks.failCheckpoint = false;
+      for (let tick = 0; tick < 128; tick++) {
+        await runner(seen.store).maintenance.runPage();
+        if (
+          (await app.listPortalCollections(actor, {})).collections.length === 1
+        )
+          break;
       }
       expect((await app.listPortalCollections(actor, {})).collections).toEqual([
         { collectionId: 'synthetic-guides-0', label: 'Synthetic guides 0' },

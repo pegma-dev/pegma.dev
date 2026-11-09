@@ -70,8 +70,13 @@ async function fixture() {
     });
   const identity: IdentityPort = {
     claimsFor: vi.fn(async (principalId: string) => {
-      if (!users.has(principalId))
+      const current = users.get(principalId);
+      if (current === undefined)
         throw Object.assign(new Error('not found'), { code: 'not_found' });
+      if (current.status !== 'active' || !current.emailVerified)
+        throw Object.assign(new Error('not active and verified'), {
+          code: 'invalid_state',
+        });
       return {
         issuer: IDENTITY_ISSUER,
         subject: principalId,

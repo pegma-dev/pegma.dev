@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import { createSessionStore } from '@pegma/sessions';
+import { createDurableLimiter } from '@pegma/rate-limit-paged';
 import { systemClock, type Logger } from '@pegma/spine';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -19,7 +20,8 @@ import {
   createProductionSupportMaintenanceRuntime,
 } from './support-desk';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
-import { cleanupLaneAt } from './maintenance-schedule';
+import { cleanupLaneAt, RATE_LIMIT_CRON } from './maintenance-schedule';
+import worker from './index';
 
 const logger: Logger = { log: vi.fn() };
 /** Semantically matches worker/migrations/0001_pegma_storage.sql. */
@@ -65,6 +67,65 @@ beforeEach(async () => {
   await env.IDENTITY_DB.prepare('DELETE FROM RECORDS').run();
   await env.IDENTITY_DB.prepare('DELETE FROM PEGMA_STORAGE_D1_TX_GUARD').run();
 });
+
+/** Count binding executions while all SQL still runs against the real D1. */
+function limitedD1(database: D1Database) {
+  let calls = 0;
+  const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+  const charge = () => {
+    calls += 1;
+    if (calls > 50)
+      throw new Error('Synthetic Workers Free D1 call limit exceeded.');
+  };
+  const statement = (original: D1PreparedStatement): D1PreparedStatement => {
+    const counted = new Proxy(original, {
+      get(target, property) {
+        if (property === 'bind')
+          return (...values: unknown[]) => statement(target.bind(...values));
+        const method = Reflect.get(target, property, target);
+        if (['first', 'run', 'all', 'raw'].includes(String(property))) {
+          return (...args: unknown[]) => {
+            charge();
+            return Reflect.apply(method, target, args);
+          };
+        }
+        return typeof method === 'function' ? method.bind(target) : method;
+      },
+    });
+    originals.set(counted, original);
+    return counted;
+  };
+  const binding = <T extends D1Database | D1DatabaseSession>(original: T): T =>
+    new Proxy(original, {
+      get(target, property) {
+        if (property === 'prepare')
+          return (query: string) => statement(target.prepare(query));
+        if (property === 'batch')
+          return (statements: D1PreparedStatement[]) => {
+            // D1 documents one invocation query for the entire batch call.
+            charge();
+            return target.batch(
+              statements.map((item) => originals.get(item) ?? item),
+            );
+          };
+        if (property === 'withSession' && 'withSession' in target) {
+          return (constraint?: D1SessionBookmark | D1SessionConstraint) =>
+            binding(target.withSession(constraint));
+        }
+        const method = Reflect.get(target, property, target);
+        if (property === 'exec' || property === 'dump') {
+          if (typeof method !== 'function')
+            throw new TypeError('Expected a callable D1 execution method.');
+          return (...args: unknown[]) => {
+            charge();
+            return Reflect.apply(method, target, args);
+          };
+        }
+        return typeof method === 'function' ? method.bind(target) : method;
+      },
+    });
+  return { database: binding(database), calls: () => calls };
+}
 
 function fixture() {
   const store = createCloudflareD1Store({
@@ -119,6 +180,107 @@ function fixture() {
 }
 
 describe('maintenance cursor writes over D1', () => {
+  it('runs two actual isolated scheduled pages within 50 D1 calls each and persists their continuation', async () => {
+    const { store } = fixture();
+    const start = new Date(Date.now() - 180_000).toISOString();
+    const limiter = createDurableLimiter(
+      { name: 'pegma.test.d1.knowledge.capacity', limit: 1, windowMs: 60_000 },
+      store,
+    );
+    for (let index = 0; index < 25; index++) {
+      expect(await limiter.allow(`192.0.2.${index + 1}`, start)).toEqual({
+        allowed: true,
+      });
+    }
+    const invoke = async () => {
+      const metered = limitedD1(env.IDENTITY_DB);
+      const pending: Promise<unknown>[] = [];
+      const secretRead = vi.fn(() => {
+        throw new Error('Rate maintenance must not read Identity secrets.');
+      });
+      const scheduledEnvironment: Parameters<typeof worker.scheduled>[1] = {
+        ...env,
+        IDENTITY_DB: metered.database,
+        DATADOG_API_KEY: undefined,
+        PEGMA_KNOWLEDGE_ENABLED: 'false',
+        get IDENTITY_EMAIL_CODE_SECRET_BASE64(): string {
+          return secretRead();
+        },
+      };
+      // Wrangler's generated type records the deployed default literal, while
+      // this test intentionally supplies malformed runtime configuration.
+      Object.defineProperty(scheduledEnvironment, 'PEGMA_AGENT_CLIENTS_JSON', {
+        value: 'not-json',
+      });
+      worker.scheduled(
+        {
+          cron: RATE_LIMIT_CRON,
+          scheduledTime: Math.floor(Date.now() / 120_000) * 120_000,
+          noRetry() {},
+        },
+        scheduledEnvironment,
+        {
+          waitUntil: (promise: Promise<unknown>) => {
+            pending.push(promise);
+          },
+          passThroughOnException() {},
+          props: {},
+          exports: {},
+        } as ExecutionContext,
+      );
+      await Promise.all(pending);
+      expect(pending).toHaveLength(1);
+      expect(secretRead).not.toHaveBeenCalled();
+      expect(metered.calls()).toBeGreaterThan(0);
+      expect(metered.calls()).toBeLessThanOrEqual(50);
+      return metered.calls();
+    };
+    const read = async () => {
+      const row = await env.IDENTITY_DB.prepare(
+        "SELECT record_json FROM RECORDS WHERE partition_key = 'pegma-dev-maintenance:knowledge' AND row_key = 'rate-limits' AND deleted = 0",
+      ).first<{ record_json: string }>();
+      return row === null ? null : JSON.parse(row.record_json);
+    };
+    const firstCalls = await invoke();
+    expect(await read()).toEqual({
+      partition: 'knowledge',
+      id: 'rate-limits',
+      cursor: expect.any(String),
+      generation: 1,
+    });
+    // Twenty deleted counters, five remaining counters, descriptor and bookmark.
+    expect(
+      await env.IDENTITY_DB.prepare(
+        'SELECT COUNT(*) AS count FROM RECORDS WHERE deleted = 0',
+      ).first('count'),
+    ).toBe(7);
+    const secondCalls = await invoke();
+    expect(await read()).toEqual({
+      partition: 'knowledge',
+      id: 'rate-limits',
+      cursor: null,
+      generation: 2,
+    });
+    expect(firstCalls).toBeGreaterThan(secondCalls);
+    expect([firstCalls, secondCalls]).toEqual([44, 14]);
+    // No other maintenance records were created by either scheduled invocation.
+    expect(
+      await env.IDENTITY_DB.prepare(
+        'SELECT COUNT(*) AS count FROM RECORDS WHERE deleted = 0',
+      ).first('count'),
+    ).toBe(2);
+    const batching = limitedD1(env.IDENTITY_DB);
+    const results = await batching.database.batch([
+      batching.database.prepare('SELECT 1 AS value'),
+      batching.database.prepare('SELECT 2 AS value'),
+    ]);
+    expect(results.map((result) => result.results[0])).toEqual([
+      { value: 1 },
+      { value: 2 },
+    ]);
+    expect(batching.calls()).toBe(1);
+  });
+
   it('drains real mail jobs one per tick and resumes safely after wrapping', async () => {
     const { store } = fixture();
     const send = vi.fn(async () => ({

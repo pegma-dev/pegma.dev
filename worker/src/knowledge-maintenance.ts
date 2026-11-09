@@ -30,7 +30,9 @@ interface Bookmark {
 }
 
 const KEY = { partition: 'knowledge', id: 'rate-limits' } as const;
-const PAGE_LIMIT = 10;
+// Isolated cron budget: at most 20 descriptor reads and 20 conditional deletes,
+// plus the scan and bookmark reads/write, within Workers Free's 50 D1 calls.
+const PAGE_LIMIT = 20;
 const MAX_CURSOR_LENGTH = 8_192;
 const maintenance = defineCollection<MaintenanceRecord>({
   name: 'pegma-dev-maintenance',
@@ -71,6 +73,19 @@ function bookmark(value: MaintenanceRecord | null): Bookmark {
     throw new TypeError('Invalid knowledge maintenance bookmark.');
   }
   return { cursor: value.cursor, generation: value.generation };
+}
+
+function report(
+  logger: Logger,
+  level: 'info' | 'error',
+  event: string,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  try {
+    logger.log(level, event, fields);
+  } catch {
+    // Diagnostics must not turn completed cleanup into a failed invocation.
+  }
 }
 
 /**
@@ -116,8 +131,14 @@ export async function runKnowledgeMaintenance(
         },
       };
     });
+    report(logger, 'info', 'knowledge.maintenance_page', {
+      task: 'rate_limits',
+      scanned: result.scanned,
+      deleted: result.deleted,
+      hasNext: nextCursor !== null,
+    });
   } catch (error) {
-    logger.log('error', 'knowledge.maintenance_failed', {
+    report(logger, 'error', 'knowledge.maintenance_failed', {
       task: 'rate_limits',
       error: error instanceof Error ? error.name : 'unknown',
     });

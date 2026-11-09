@@ -18,6 +18,8 @@ import {
   json,
   optionalKeysObject,
   readJson,
+  requireSameOriginMutation,
+  TOKEN_PATTERN,
 } from './api-auth';
 import {
   requireCurrentBrowserAccess,
@@ -338,6 +340,38 @@ export function createKnowledgeApi(
           ),
         );
       if (url.search !== '') throw new ApiError(400, 'invalid_request');
+      const staffCommand = url.pathname === '/api/staff/knowledge/command';
+      const credentialHeaders = staffCommand
+        ? Object.freeze(
+            [
+              'Cookie',
+              'Origin',
+              'X-Pegma-CSRF',
+              'Sec-Fetch-Site',
+              'Authorization',
+            ].map((name) =>
+              Object.freeze({ name, value: request.headers.get(name) }),
+            ),
+          )
+        : undefined;
+      function sameBrowserHeaders() {
+        if (
+          credentialHeaders?.some(
+            ({ name, value }) => request.headers.get(name) !== value,
+          )
+        )
+          throw new ApiError(403, 'browser_credential_changed');
+      }
+      if (staffCommand) {
+        if (request.headers.has('Authorization'))
+          throw new ApiError(403, 'browser_session_required');
+        requireSameOriginMutation(request);
+        const cookie = request.headers.get('Cookie');
+        if (cookie === null || cookie.trim() === '' || cookie.length > 8_192)
+          throw new ApiError(401, 'authentication_required');
+        if (!TOKEN_PATTERN.test(request.headers.get('X-Pegma-CSRF') ?? ''))
+          throw new ApiError(403, 'csrf_denied');
+      }
       await options.limitBrowser(request);
       if (state) {
         const { authenticated, access } = await requireCurrentBrowserAccess(
@@ -377,51 +411,95 @@ export function createKnowledgeApi(
           }),
         );
       }
-      // Authenticate before reading any browser command body. Per-operation
-      // permission is checked again before entering the actual SDK service.
-      await requireCurrentBrowserAccess(
-        request,
-        options,
-        url.pathname === '/api/knowledge/portal'
-          ? knowledgePermissions.articleRead
-          : knowledgePermissions.collectionRead,
-        true,
-      );
-      const envelope = exactObject(await readJson(request), [
-        'operation',
-        'input',
-      ]);
-      const operation = boundedString(envelope.operation, 1, 64);
-      if (url.pathname === '/api/knowledge/portal') {
-        if (!Object.hasOwn(portal, operation))
-          throw new ApiError(400, 'unknown_operation');
-        const method = portal[operation as keyof typeof portal];
-        const { access } = await requireCurrentBrowserAccess(
-          request,
-          options,
-          knowledgePermissions.articleRead,
-          true,
-        );
-        // The released method owns exact DTO validation. Reflect.apply forwards
-        // unknown JSON without asserting it is an already validated SDK DTO.
-        const result: unknown = await Reflect.apply(method, app, [
-          access,
-          sdkInput(operation, envelope.input),
-        ]);
+      // Staff POSTs parse at most64KiB after static browser/admission checks.
+      // Full current session/CSRF/operation authority follows the body and
+      // precedes EVERY protected read or application/report mutation.
+      if (!staffCommand)
         await requireCurrentBrowserAccess(
           request,
           options,
           knowledgePermissions.articleRead,
           true,
         );
+      const envelope = exactObject(
+        await readJson(
+          request,
+          staffCommand ? { timeoutMs: 10_000 } : undefined,
+        ),
+        ['operation', 'input'],
+      );
+      sameBrowserHeaders();
+      let commandIdentity:
+        { sessionId: string; principalId: string } | undefined;
+      async function commandAccess(permission: string) {
+        sameBrowserHeaders();
+        const current = await requireCurrentBrowserAccess(
+          request,
+          options,
+          permission,
+          true,
+        );
+        sameBrowserHeaders();
+        if (!hasPermission(current.access, knowledgePermissions.collectionRead))
+          throw new ApiError(403, 'forbidden');
+        if (commandIdentity === undefined)
+          commandIdentity = Object.freeze({
+            sessionId: current.authenticated.rawSessionId,
+            principalId: current.access.principalId,
+          });
+        else if (
+          current.authenticated.rawSessionId !== commandIdentity.sessionId ||
+          current.access.principalId !== commandIdentity.principalId
+        )
+          throw new ApiError(403, 'browser_credential_changed');
+        return current;
+      }
+      const operation = boundedString(envelope.operation, 1, 64);
+      if (url.pathname === '/api/knowledge/portal') {
+        if (!Object.hasOwn(portal, operation))
+          throw new ApiError(400, 'unknown_operation');
+        const method = portal[operation as keyof typeof portal];
+        const { authenticated, access } = await requireCurrentBrowserAccess(
+          request,
+          options,
+          knowledgePermissions.articleRead,
+          true,
+        );
+        const authority = Object.freeze({
+          sessionId: authenticated.rawSessionId,
+          principalId: access.principalId,
+          permissions: Object.freeze([...access.permissions]),
+        });
+        // The released method owns exact DTO validation. Reflect.apply forwards
+        // unknown JSON without asserting it is an already validated SDK DTO.
+        const result: unknown = await Reflect.apply(method, app, [
+          access,
+          sdkInput(operation, envelope.input),
+        ]);
+        const final = await requireCurrentBrowserAccess(
+          request,
+          options,
+          knowledgePermissions.articleRead,
+          true,
+        );
+        if (
+          final.authenticated.rawSessionId !== authority.sessionId ||
+          final.access.principalId !== authority.principalId
+        )
+          throw new ApiError(403, 'browser_credential_changed');
+        // Audience permissions can be narrower than the default article-read
+        // grant. A successful fresh login alone must not release their old DTO.
+        if (
+          authority.permissions.some(
+            (permission) => !hasPermission(final.access, permission),
+          )
+        )
+          throw new ApiError(403, 'forbidden');
         return secured(response(result));
       }
       if (reportOperations.has(operation)) {
-        const { access } = await requireCurrentBrowserAccess(
-          request,
-          options,
+        const { access } = await commandAccess(
           KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
-          true,
         );
         const result =
           operation === 'reportList'
@@ -443,12 +521,7 @@ export function createKnowledgeApi(
                             ? 'rejected'
                             : 'pending',
                       );
-        await requireCurrentBrowserAccess(
-          request,
-          options,
-          KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
-          true,
-        );
+        await commandAccess(KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION);
         return secured(response(result));
       }
       if (!Object.hasOwn(operations, operation))
@@ -460,12 +533,7 @@ export function createKnowledgeApi(
       )
         throw new ApiError(400, 'unsupported_source_references');
       const selected = operations[operation as keyof typeof operations];
-      const { access } = await requireCurrentBrowserAccess(
-        request,
-        options,
-        selected.permission,
-        true,
-      );
+      const { access } = await commandAccess(selected.permission);
       const result: unknown = await Reflect.apply(selected.method, app, [
         access,
         sdkInput(operation, envelope.input),
@@ -495,12 +563,7 @@ export function createKnowledgeApi(
           }
         }
       }
-      await requireCurrentBrowserAccess(
-        request,
-        options,
-        selected.permission,
-        true,
-      );
+      await commandAccess(selected.permission);
       return secured(response(result));
     } catch (error) {
       let status = 503;

@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
+import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   MAIL_CRON,
   MAIL_RECONCILE_CRON,
   CLEANUP_CRON,
+  RATE_LIMIT_CRON,
   cleanupLaneAt,
+  rateKnowledgeLaneAt,
 } from './maintenance-schedule';
 import {
   RELEASE_RECONCILIATION_CRON,
@@ -13,6 +16,7 @@ import {
 import { runIdentityMaintenance } from './identity-maintenance';
 import { runKnowledgeMaintenance } from './knowledge-maintenance';
 import { createKnowledgeRetrievalMaintenance } from './knowledge-retrieval-maintenance';
+import { createKnowledgeRetrievalReady } from './knowledge-retrieval-ready';
 import { runSupportMaintenance } from './support-maintenance';
 import worker from './index';
 
@@ -23,8 +27,16 @@ vi.mock('./knowledge-maintenance', () => ({
 vi.mock('./knowledge-retrieval-maintenance', () => ({
   createKnowledgeRetrievalMaintenance: vi.fn(() => ({
     runPage: vi.fn(async () => {}),
-    repairArticleBestEffort: vi.fn(async () => {}),
   })),
+}));
+vi.mock('./knowledge-retrieval-ready', () => ({
+  createKnowledgeRetrievalReady: vi.fn(() => ({
+    runPage: vi.fn(async () => {}),
+    enqueue: vi.fn(async () => {}),
+  })),
+}));
+vi.mock('@pegma/storage-cloudflare-d1', () => ({
+  createCloudflareD1Store: vi.fn(() => ({})),
 }));
 vi.mock('./support-maintenance', () => ({ runSupportMaintenance: vi.fn() }));
 vi.mock('./logger', () => ({ createAppLogger: () => ({ log: vi.fn() }) }));
@@ -91,6 +103,7 @@ async function scheduled(
     } as ExecutionContext,
   );
   await Promise.all(pending);
+  return pending.length;
 }
 
 function knowledgeCleanupTime(): number {
@@ -132,11 +145,14 @@ describe('maintenance dispatch', () => {
       new URL('../wrangler.jsonc', import.meta.url),
       'utf8',
     );
-    const crons = JSON.parse(config.match(/"crons":\s*(\[[^\]]*\])/)![1]!);
+    const crons = JSON.parse(
+      config.match(/"crons":\s*(\[[^\]]*\])/)![1]!.replace(/,\s*\]$/u, ']'),
+    );
     expect(crons).toEqual([
       MAIL_CRON,
       MAIL_RECONCILE_CRON,
       CLEANUP_CRON,
+      RATE_LIMIT_CRON,
       RELEASE_RECONCILIATION_CRON,
     ]);
   });
@@ -190,7 +206,7 @@ describe('maintenance dispatch', () => {
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
-  it('covers all 15 cleanup lanes once across a UTC day boundary', async () => {
+  it('preserves all 15 cleanup lanes across a UTC day boundary without sharing the global rate job', async () => {
     const lanes = [];
     const start = Date.parse('2026-10-15T23:53:00Z');
     for (let minute = 0; minute < 16; minute++) {
@@ -200,22 +216,23 @@ describe('maintenance dispatch', () => {
       lanes.push(JSON.stringify(lane));
       vi.clearAllMocks();
       await scheduled(CLEANUP_CRON, time);
+      expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
       const maintenance = {
         identity: runIdentityMaintenance,
         support: runSupportMaintenance,
-        knowledge: runKnowledgeMaintenance,
       };
-      const selected = maintenance[lane.kind];
-      expect(selected).toHaveBeenCalledExactlyOnceWith(
-        expect.anything(),
-        expect.anything(),
-        {
-          tasks: [lane.task],
-          ...(!('limiterIndex' in lane) || lane.limiterIndex === undefined
-            ? {}
-            : { limiterIndex: lane.limiterIndex }),
-        },
-      );
+      if (lane.kind !== 'knowledge') {
+        expect(maintenance[lane.kind]).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(),
+          expect.anything(),
+          {
+            tasks: [lane.task],
+            ...(lane.limiterIndex === undefined
+              ? {}
+              : { limiterIndex: lane.limiterIndex }),
+          },
+        );
+      }
       for (const [kind, other] of Object.entries(maintenance)) {
         if (kind !== lane.kind) expect(other).not.toHaveBeenCalled();
       }
@@ -241,22 +258,80 @@ describe('maintenance dispatch', () => {
     }
   });
 
-  it('dispatches knowledge cleanup while knowledge is disabled and client configuration is invalid', async () => {
+  it('isolates29 rate pages and29 ready pages in the same58-minute cron', async () => {
+    const range = /^(\d+)-(\d+) \* \* \* \*$/.exec(RATE_LIMIT_CRON);
+    expect(range).not.toBeNull();
     const start = Date.parse('2026-10-15T00:00:00Z');
-    let time: number | undefined;
-    for (let minute = 0; minute < 60; minute++) {
-      const candidate = start + minute * 60_000;
-      if (
-        new Date(candidate).getUTCMinutes() !== 59 &&
-        cleanupLaneAt(candidate).kind === 'knowledge'
-      ) {
-        time = candidate;
-        break;
+    let pages = 0;
+    let readyPages = 0;
+    for (
+      let minute = Number(range![1]);
+      minute <= Number(range![2]);
+      minute++
+    ) {
+      vi.clearAllMocks();
+      const time = start + minute * 60_000;
+      expect(
+        await scheduled(RATE_LIMIT_CRON, time, {
+          PEGMA_KNOWLEDGE_ENABLED: 'true',
+        }),
+      ).toBe(1);
+      if (rateKnowledgeLaneAt(time) === 'rate_limits') {
+        expect(runKnowledgeMaintenance).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(),
+          expect.anything(),
+          { tasks: ['rate_limits'] },
+        );
+        expect(createKnowledgeRetrievalReady).not.toHaveBeenCalled();
+      } else {
+        expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+        expect(createKnowledgeRetrievalReady).toHaveBeenCalledTimes(1);
+        const built = vi.mocked(createKnowledgeRetrievalReady).mock.results[0];
+        if (built?.type !== 'return')
+          throw new Error('Expected ready composition.');
+        expect(built.value.runPage).toHaveBeenCalledTimes(1);
+        readyPages += 1;
       }
+      pages += vi.mocked(runKnowledgeMaintenance).mock.calls.length;
+      expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
+      expect(runIdentityMaintenance).not.toHaveBeenCalled();
+      expect(runSupportMaintenance).not.toHaveBeenCalled();
+      expect(runReleaseReconciliation).not.toHaveBeenCalled();
     }
-    if (time === undefined)
-      throw new Error('Expected one knowledge cleanup lane.');
-    await scheduled(CLEANUP_CRON, time, {
+    expect(pages).toBe(29);
+    expect(readyPages).toBe(29);
+  });
+
+  it('isolates a failed rate invocation from later identity and support cleanup invocations', async () => {
+    const start = Date.parse('2026-10-15T00:00:00Z');
+    for (const kind of ['identity', 'support'] as const) {
+      const offset = Array.from({ length: 15 }, (_, minute) => minute).find(
+        (minute) => cleanupLaneAt(start + minute * 60_000).kind === kind,
+      );
+      if (offset === undefined)
+        throw new Error('Expected a rotating cleanup lane.');
+      vi.clearAllMocks();
+      vi.mocked(runKnowledgeMaintenance).mockRejectedValueOnce(
+        new Error('Synthetic limiter failure.'),
+      );
+      const time = start + offset * 60_000;
+      expect(await scheduled(RATE_LIMIT_CRON, start)).toBe(1);
+      expect(runKnowledgeMaintenance).toHaveBeenCalledTimes(1);
+      expect(runIdentityMaintenance).not.toHaveBeenCalled();
+      expect(runSupportMaintenance).not.toHaveBeenCalled();
+      expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
+      vi.clearAllMocks();
+      await scheduled(CLEANUP_CRON, time);
+      expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+      expect(
+        kind === 'identity' ? runIdentityMaintenance : runSupportMaintenance,
+      ).toHaveBeenCalledTimes(1);
+      expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
+    }
+  });
+
+  it('runs the isolated rate job while knowledge is disabled and client configuration is invalid', async () => {
+    await scheduled(RATE_LIMIT_CRON, Date.parse('2026-10-15T00:00:00Z'), {
       PEGMA_KNOWLEDGE_ENABLED: 'false',
       PEGMA_AGENT_CLIENTS_JSON: 'not-json',
     });
@@ -274,15 +349,25 @@ describe('maintenance dispatch', () => {
     expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
   });
 
-  it('runs one enabled KB page on the existing knowledge tick despite a limiter failure or invalid clients', async () => {
-    vi.mocked(runKnowledgeMaintenance).mockRejectedValueOnce(
-      new Error('Synthetic limiter failure.'),
-    );
+  it('does not construct a projection Store on a disabled odd tick, even with malformed OAuth configuration', async () => {
+    await scheduled(RATE_LIMIT_CRON, Date.parse('2026-10-15T00:01:00Z'), {
+      PEGMA_KNOWLEDGE_ENABLED: 'false',
+      PEGMA_AGENT_CLIENTS_JSON: 'not-json',
+    });
+    expect(createCloudflareD1Store).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalReady).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+    expect(runIdentityMaintenance).not.toHaveBeenCalled();
+    expect(runSupportMaintenance).not.toHaveBeenCalled();
+  });
+
+  it('runs one enabled KB page on the existing knowledge tick without running the global rate job', async () => {
     await scheduled(CLEANUP_CRON, knowledgeCleanupTime(), {
       PEGMA_KNOWLEDGE_ENABLED: 'true',
       PEGMA_AGENT_CLIENTS_JSON: 'not-json',
     });
-    expect(runKnowledgeMaintenance).toHaveBeenCalledTimes(1);
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
     expect(createKnowledgeRetrievalMaintenance).toHaveBeenCalledTimes(1);
     const invocation = vi.mocked(createKnowledgeRetrievalMaintenance).mock
       .results[0];
@@ -297,7 +382,7 @@ describe('maintenance dispatch', () => {
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
-  it('preserves the limiter lane when enabled KB composition fails', async () => {
+  it('keeps the isolated rate job available after enabled KB composition fails', async () => {
     vi.mocked(createKnowledgeRetrievalMaintenance).mockImplementationOnce(
       () => {
         throw new Error('Synthetic repair composition failure.');
@@ -306,6 +391,9 @@ describe('maintenance dispatch', () => {
     await scheduled(CLEANUP_CRON, knowledgeCleanupTime(), {
       PEGMA_KNOWLEDGE_ENABLED: 'true',
     });
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).toHaveBeenCalledTimes(1);
+    await scheduled(RATE_LIMIT_CRON, Date.parse('2026-10-15T00:00:00Z'));
     expect(runKnowledgeMaintenance).toHaveBeenCalledTimes(1);
     expect(createKnowledgeRetrievalMaintenance).toHaveBeenCalledTimes(1);
   });

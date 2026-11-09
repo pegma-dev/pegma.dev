@@ -39,17 +39,17 @@ importers:
         specifier: 0.1.2
         version: 0.1.2
       '@pegma/knowledge-base-application':
-        specifier: 0.1.3
-        version: 0.1.3
+        specifier: 0.1.4
+        version: 0.1.4
       '@pegma/knowledge-base-contracts':
-        specifier: 0.1.3
-        version: 0.1.3
+        specifier: 0.1.4
+        version: 0.1.4
       '@pegma/knowledge-base-core':
-        specifier: 0.1.3
-        version: 0.1.3
+        specifier: 0.1.4
+        version: 0.1.4
       '@pegma/knowledge-base-mcp':
-        specifier: 0.1.3
-        version: 0.1.3
+        specifier: 0.1.4
+        version: 0.1.4
       '@pegma/logger-cloudflare':
         specifier: ^0.1.1
         version: 0.1.1
@@ -75,8 +75,8 @@ importers:
         specifier: ^0.1.1
         version: 0.1.1
       '@pegma/storage-cloudflare-d1':
-        specifier: 0.4.1
-        version: 0.4.1
+        specifier: 0.4.6
+        version: 0.4.6
       '@pegma/storage-core':
         specifier: 0.4.0
         version: 0.4.0
@@ -1154,20 +1154,20 @@ packages:
     resolution: {integrity: sha512-r8AsVTnwCSBU2LZZjieW5FgIJ2TUWi5DlU9kp+4tuaWDFfl85EezkD6F5omAFjTnaFqCRN1T2d/KsHoESarB2A==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-application@0.1.3':
-    resolution: {integrity: sha512-X5vYihkaM5u+ewxDXQxNLzAv8Uc7bsH4rPcCU7oOG0hHhviNNQe9y9Qk+OXTKH8WPjpQNm8LQODHQr1yN4KjWQ==}
+  '@pegma/knowledge-base-application@0.1.4':
+    resolution: {integrity: sha512-j27QtdalETp3VW/bn92dmrGhzcorCuXeh79O1+2C0eY9QgRYP1eThN07op8DsQqjZJeyrwezU+I+mCvwkzV+Hg==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-contracts@0.1.3':
-    resolution: {integrity: sha512-4DYL5NXOZs7bL8ghsnsJxLFF2B7VL5iEyC+TNkFiabVzEEHrQmQqhxV+i6s10kp9vkCIYArOXYlCqwijEbpEog==}
+  '@pegma/knowledge-base-contracts@0.1.4':
+    resolution: {integrity: sha512-en4R5pLgKhMnnJqtA4A2A/5hUdQZWsUV+XbzlLdQCYqIABnJnLehL+MhwTvwZJfYdaddrhfBwPPJk/EL/DYajg==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-core@0.1.3':
-    resolution: {integrity: sha512-K6k8/8y/u3wdlGkAx1CjN+gKgQvpDgYw/2tuHngxCUOAl/q1HjQyILYRbjIMr1KwORKMXkay4h2XucXkfqEV9w==}
+  '@pegma/knowledge-base-core@0.1.4':
+    resolution: {integrity: sha512-eztpYFfXyTgvJTgx9PxitXkwLrFP+h03yJYxhQnM8mbNZNjulXF1j//eH8FjmQZzLRDGU1vW9Ec35T9xL43G1A==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-mcp@0.1.3':
-    resolution: {integrity: sha512-TY9vYnXbLtghb+lraQwqo8jjGTknsPxp3dmfHfNI5xx9bF458Orx0MYxVaIB0EfwLzv3XdmYKGQGJPvZnE327w==}
+  '@pegma/knowledge-base-mcp@0.1.4':
+    resolution: {integrity: sha512-Lk9Ig88bIWsxVEzutPJLLwv6yfK+e7QjdmnWPArDCe+NahmNtAWrLK7fomslmJ+PCEHMh3EeXzi85xxPuJHGow==}
     engines: {node: '>=22'}
 
   '@pegma/logger-cloudflare@0.1.1':
@@ -1206,8 +1206,8 @@ packages:
     resolution: {integrity: sha512-jueFYJ3oJUacKdiERkEZ7R34xDMiEWXqn4MSA5bpTXzsXhWSap4EJUzKXtXnXuLPPjwJWLn5uoQe98kWQ6NS8A==}
     engines: {node: '>=22'}
 
-  '@pegma/storage-cloudflare-d1@0.4.1':
-    resolution: {integrity: sha512-nVH+ppAWi3QwyEX8QVkPOLXNjtblO0jDnnGqCHpbZZzPvFQAVyd/1Bhxg8JdsuOD/UWGktJ26asAKzpNjRol0w==}
+  '@pegma/storage-cloudflare-d1@0.4.6':
+    resolution: {integrity: sha512-DjBRoRq5C6sWgL2KWdWOcW0F3N7HHuRu1i7Gr8SM4Aeh4FpEh1hQwIdMvkXpPHCd48CMqLJz8M5HYYR+/sRUgw==}
     engines: {node: '>=22'}
 
   '@pegma/storage-core@0.4.0':
@@ -3886,11 +3886,11 @@ snapshots:
       eventsource-parser: 3.1.0
       jose: 6.2.4
       pkce-challenge: 5.0.1
-      zod: 4.4.3
+      zod: 4.6.7
 
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.7
 
   '@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.6)(zod@4.4.3)':
     dependencies:
@@ -4122,31 +4122,31 @@ snapshots:
       unicode-case-folding: 1.1.1
       unorm: 1.6.0
 
-  '@pegma/knowledge-base-application@0.1.3':
+  '@pegma/knowledge-base-application@0.1.4':
     dependencies:
       '@pegma/audit': 0.2.0
       '@pegma/authorization-core': 0.4.0
-      '@pegma/knowledge-base-contracts': 0.1.3
-      '@pegma/knowledge-base-core': 0.1.3
+      '@pegma/knowledge-base-contracts': 0.1.4
+      '@pegma/knowledge-base-core': 0.1.4
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
 
-  '@pegma/knowledge-base-contracts@0.1.3':
+  '@pegma/knowledge-base-contracts@0.1.4':
     dependencies:
       '@pegma/spine': 0.1.2
 
-  '@pegma/knowledge-base-core@0.1.3':
+  '@pegma/knowledge-base-core@0.1.4':
     dependencies:
-      '@pegma/knowledge-base-contracts': 0.1.3
+      '@pegma/knowledge-base-contracts': 0.1.4
 
-  '@pegma/knowledge-base-mcp@0.1.3':
+  '@pegma/knowledge-base-mcp@0.1.4':
     dependencies:
       '@cfworker/json-schema': 4.1.6
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
       '@pegma/authorization-core': 0.4.0
-      '@pegma/knowledge-base-application': 0.1.3
-      '@pegma/knowledge-base-contracts': 0.1.3
-      '@pegma/knowledge-base-core': 0.1.3
+      '@pegma/knowledge-base-application': 0.1.4
+      '@pegma/knowledge-base-contracts': 0.1.4
+      '@pegma/knowledge-base-core': 0.1.4
       zod: 4.6.7
     transitivePeerDependencies:
       - supports-color
@@ -4187,7 +4187,7 @@ snapshots:
 
   '@pegma/spine@0.1.2': {}
 
-  '@pegma/storage-cloudflare-d1@0.4.1':
+  '@pegma/storage-cloudflare-d1@0.4.6':
     dependencies:
       '@pegma/storage-core': 0.4.0
 

@@ -1,6 +1,7 @@
 import type { PublicClient } from '@pegma/agent-access';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createRoleStore } from '@pegma/authorization-storage';
+import { KnowledgeBaseNotFoundError } from '@pegma/knowledge-base-application';
 import { createSessionStore } from '@pegma/sessions';
 import {
   createMemoryStore,
@@ -14,8 +15,10 @@ import {
   AGENT_RESOURCE,
 } from './agent-access-runtime';
 import { isPlainObject } from './api-auth';
+import { createAgentPrincipalResolver } from './agent-authority';
 import { IDENTITY_ISSUER, SESSION_COOKIE } from './identity-api';
 import { createIdentityRuntime } from './identity-runtime';
+import { createKnowledgeRuntime } from './knowledge-runtime';
 import {
   ADMIN_ROLE,
   AGENT_KNOWLEDGE_PERMISSIONS,
@@ -44,24 +47,41 @@ function barrier() {
 interface StoreHooks {
   afterGrantRead: (() => Promise<void>) | undefined;
   afterGrantCommit: (() => Promise<void>) | undefined;
+  afterKbRead: (() => Promise<void>) | undefined;
+  afterKbCommit: (() => Promise<void>) | undefined;
+  beforeSessionRead: (() => Promise<void>) | undefined;
 }
 
-/** Only delay actual AA adapter operations; all records and authority are real. */
+/** Only delay real adapter operations; all records and authority are real. */
 function observedStore(backing: Store, hooks: StoreHooks): Store {
   return {
     collection<T>(definition: CollectionDefinition<T>): CollectionStore<T> {
       const target = backing.collection(definition);
-      if (definition.name !== 'agent-access.records.v1') return target;
+      const grant = definition.name === 'agent-access.records.v1';
+      const kb = definition.name === 'knowledge-base.records.v1';
+      const session = definition.name === 'sessions';
+      if (!grant && !kb && !session) return target;
       return {
         ...target,
+        async get(key) {
+          if (session) await hooks.beforeSessionRead?.();
+          const result = await target.get(key);
+          if (kb) await hooks.afterKbRead?.();
+          return result;
+        },
         async getVersioned(key) {
+          if (session) await hooks.beforeSessionRead?.();
           const value = await target.getVersioned(key);
-          await hooks.afterGrantRead?.();
+          if (grant) await hooks.afterGrantRead?.();
+          if (kb) await hooks.afterKbRead?.();
           return value;
         },
         async transact(partition, actions) {
           const result = await target.transact(partition, actions);
-          if (result.committed) await hooks.afterGrantCommit?.();
+          if (result.committed) {
+            if (grant) await hooks.afterGrantCommit?.();
+            if (kb) await hooks.afterKbCommit?.();
+          }
           return result;
         },
       };
@@ -83,6 +103,9 @@ async function fixture() {
   const hooks: StoreHooks = {
     afterGrantRead: undefined,
     afterGrantCommit: undefined,
+    afterKbRead: undefined,
+    afterKbCommit: undefined,
+    beforeSessionRead: undefined,
   };
   const store = observedStore(backing, hooks);
   const logger = { log() {} };
@@ -130,19 +153,32 @@ async function fixture() {
     cookies.set(principalId, SESSION_COOKIE + '=' + sessionId);
     sessionIds.set(principalId, sessionId);
   }
-  const candidateRuntime = createAgentAccessRuntime({
+  const options = {
     store,
     clock,
     logger,
     identity,
     sessions,
     roleStore,
-    clients: [client],
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+  };
+  const candidateRuntime = createAgentAccessRuntime({
+    ...options,
+    clients: [client],
   });
   if (candidateRuntime === null)
     throw new Error('Expected the explicitly registered synthetic client.');
   const runtime = candidateRuntime;
+  const knowledge = createKnowledgeRuntime({
+    ...options,
+    agentAccess: runtime,
+  });
+  const resolve = createAgentPrincipalResolver(options);
+  async function access(principalId = other) {
+    const current = await resolve(principalId);
+    if (current === null) throw new Error('Expected a current real principal.');
+    return current;
+  }
   function cookie(principalId: string) {
     const found = cookies.get(principalId);
     if (found === undefined)
@@ -269,6 +305,9 @@ async function fixture() {
   }
   return {
     runtime,
+    knowledge,
+    access,
+    hooks,
     browser,
     cookie,
     prepared,
@@ -440,5 +479,303 @@ describe('actual current browser authority after AA service awaits', () => {
       grantId: grant.grantId,
       status: 'revoked',
     });
+  });
+});
+
+function staffInput(collectionId: string) {
+  return {
+    operation: 'createCollection',
+    input: {
+      commandId: 'create-' + collectionId,
+      correlationId: 'synthetic-browser-command',
+      expectedGeneration: 0,
+      collectionId,
+      name: 'Private synthetic collection',
+    },
+  };
+}
+
+function delayedCommand(base: Request, input: unknown) {
+  const reading = barrier();
+  const resume = barrier();
+  let pulled = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        pulled = true;
+        reading.release();
+        await resume.ready;
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(input)));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const options = {
+    method: 'POST',
+    headers: base.headers,
+    body,
+    duplex: 'half',
+  };
+  return {
+    request: new Request(base.url, options),
+    get pulled() {
+      return pulled;
+    },
+    waitFor: (operation: Promise<unknown>) =>
+      Promise.race([
+        reading.ready,
+        operation.then(() => {
+          throw new Error('Expected the bounded body read.');
+        }),
+      ]),
+    release: resume.release,
+  };
+}
+
+describe('staff KB command browser authority around bounded input and real SDK work', () => {
+  it('executes a current authorized browser command through the actual KB service', async () => {
+    const f = await fixture();
+    const input = staffInput('browser-allowed');
+    const result = await f.knowledge.handle(
+      f.browser('/api/staff/knowledge/command', 'POST', input),
+    );
+    expect(result?.status).toBe(200);
+    expect(await value(result)).toMatchObject({ replayed: false });
+    expect(
+      await f.knowledge.application.getCollection(await f.access(), {
+        collectionId: input.input.collectionId,
+      }),
+    ).toMatchObject({ collection: { name: input.input.name } });
+  });
+
+  it.each(['session', 'role'] as const)(
+    'refuses %s revocation during delayed input before any protected read or write',
+    async (kind) => {
+      const f = await fixture();
+      const input = staffInput('browser-body-' + kind);
+      const delayed = delayedCommand(
+        f.browser('/api/staff/knowledge/command', 'POST', input),
+        input,
+      );
+      let kbReads = 0;
+      f.hooks.afterKbRead = async () => {
+        kbReads += 1;
+      };
+      const pending = f.knowledge.handle(delayed.request);
+      await delayed.waitFor(pending);
+      expect(kbReads).toBe(0);
+      try {
+        if (kind === 'session') await f.revokeSession();
+        else await f.revokeAdmin();
+      } finally {
+        delayed.release();
+      }
+      const result = await pending;
+      expect(result?.status).toBe(kind === 'session' ? 401 : 403);
+      expect(kbReads).toBe(0);
+      await expect(
+        f.knowledge.application.getCollection(await f.access(), {
+          collectionId: input.input.collectionId,
+        }),
+      ).rejects.toBeInstanceOf(KnowledgeBaseNotFoundError);
+    },
+  );
+
+  it.each(['Cookie', 'Origin', 'X-Pegma-CSRF', 'Authorization'] as const)(
+    'refuses original %s changes during input even when another current session is valid',
+    async (header) => {
+      const f = await fixture();
+      const input = staffInput('browser-header-' + header);
+      const delayed = delayedCommand(
+        f.browser('/api/staff/knowledge/command', 'POST', input),
+        input,
+      );
+      const pending = f.knowledge.handle(delayed.request);
+      await delayed.waitFor(pending);
+      try {
+        delayed.request.headers.set(
+          header,
+          header === 'Cookie'
+            ? f.cookie(other)
+            : header === 'Origin'
+              ? 'https://foreign.example.test'
+              : header === 'X-Pegma-CSRF'
+                ? 'd'.repeat(43)
+                : 'Bearer synthetic-forbidden',
+        );
+      } finally {
+        delayed.release();
+      }
+      expect((await pending)?.status).toBe(403);
+      await expect(
+        f.knowledge.application.getCollection(await f.access(), {
+          collectionId: input.input.collectionId,
+        }),
+      ).rejects.toBeInstanceOf(KnowledgeBaseNotFoundError);
+    },
+  );
+
+  it('refuses a current session swap while full post-body authentication awaits real session storage', async () => {
+    const f = await fixture();
+    const input = staffInput('browser-auth-swap');
+    const blocked = f.block('beforeSessionRead');
+    const request = f.browser('/api/staff/knowledge/command', 'POST', input);
+    const pending = f.knowledge.handle(request);
+    await blocked.waitFor(pending);
+    try {
+      request.headers.set('Cookie', f.cookie(other));
+    } finally {
+      blocked.release();
+    }
+    expect((await pending)?.status).toBe(403);
+    await expect(
+      f.knowledge.application.getCollection(await f.access(), {
+        collectionId: input.input.collectionId,
+      }),
+    ).rejects.toBeInstanceOf(KnowledgeBaseNotFoundError);
+  });
+
+  it.each(['missing_cookie', 'bearer', 'origin', 'csrf', 'oversize'] as const)(
+    'rejects %s before consuming command bytes or reading KB facts',
+    async (kind) => {
+      const f = await fixture();
+      const input = staffInput('browser-static-' + kind);
+      const delayed = delayedCommand(
+        f.browser('/api/staff/knowledge/command', 'POST', input),
+        input,
+      );
+      if (kind === 'missing_cookie') delayed.request.headers.delete('Cookie');
+      if (kind === 'bearer')
+        delayed.request.headers.set(
+          'Authorization',
+          'Bearer synthetic-forbidden',
+        );
+      if (kind === 'origin')
+        delayed.request.headers.set('Origin', 'https://foreign.example.test');
+      if (kind === 'csrf') delayed.request.headers.delete('X-Pegma-CSRF');
+      if (kind === 'oversize')
+        delayed.request.headers.set('Content-Length', String(64 * 1024 + 1));
+      let kbReads = 0;
+      f.hooks.afterKbRead = async () => {
+        kbReads += 1;
+      };
+      try {
+        const result = await f.knowledge.handle(delayed.request);
+        expect(result?.status).toBe(
+          kind === 'missing_cookie' ? 401 : kind === 'oversize' ? 413 : 403,
+        );
+        expect(delayed.pulled).toBe(false);
+        expect(kbReads).toBe(0);
+      } finally {
+        delayed.release();
+      }
+    },
+  );
+
+  it('bounds actual input bytes and exposes the explicit malformed-cookie JSON-error precedence', async () => {
+    const f = await fixture();
+    const base = f.browser('/api/staff/knowledge/command', 'POST', {});
+    base.headers.set('Cookie', 'malformed-but-bounded');
+    const invalid = await f.knowledge.handle(
+      new Request(base.url, {
+        method: 'POST',
+        headers: base.headers,
+        body: '{',
+      }),
+    );
+    expect(invalid?.status).toBe(400);
+    expect(await value(invalid)).toEqual({ error: 'invalid_json' });
+    const oversized = await f.knowledge.handle(
+      new Request(base.url, {
+        method: 'POST',
+        headers: base.headers,
+        body: JSON.stringify({
+          operation: 'createCollection',
+          input: 'x'.repeat(64 * 1024),
+        }),
+      }),
+    );
+    expect(oversized?.status).toBe(413);
+  });
+
+  it.each(['session', 'role'] as const)(
+    'withholds private collection content after %s revocation during actual KB reads',
+    async (kind) => {
+      const f = await fixture();
+      const input = staffInput('browser-read-' + kind);
+      await f.knowledge.application.createCollection(
+        await f.access(),
+        input.input,
+      );
+      const blocked = f.block('afterKbRead');
+      const pending = f.knowledge.handle(
+        f.browser('/api/staff/knowledge/command', 'POST', {
+          operation: 'getCollection',
+          input: { collectionId: input.input.collectionId },
+        }),
+      );
+      await blocked.waitFor(pending);
+      try {
+        if (kind === 'session') await f.revokeSession();
+        else await f.revokeAdmin();
+      } finally {
+        blocked.release();
+      }
+      const result = await pending;
+      expect(result?.status).toBe(kind === 'session' ? 401 : 403);
+      expect(JSON.stringify(await value(result))).not.toContain(
+        input.input.name,
+      );
+    },
+  );
+
+  it.each(['session', 'role'] as const)(
+    'withholds a committed command ACK after %s revocation and preserves the actual collection',
+    async (kind) => {
+      const f = await fixture();
+      const input = staffInput('browser-commit-' + kind);
+      const blocked = f.block('afterKbCommit');
+      const pending = f.knowledge.handle(
+        f.browser('/api/staff/knowledge/command', 'POST', input),
+      );
+      await blocked.waitFor(pending);
+      try {
+        if (kind === 'session') await f.revokeSession();
+        else await f.revokeAdmin();
+      } finally {
+        blocked.release();
+      }
+      const result = await pending;
+      expect(result?.status).toBe(kind === 'session' ? 401 : 403);
+      expect(await value(result)).not.toHaveProperty('value');
+      expect(
+        await f.knowledge.application.getCollection(await f.access(), {
+          collectionId: input.input.collectionId,
+        }),
+      ).toMatchObject({ collection: { name: input.input.name } });
+    },
+  );
+
+  it('withholds a committed command ACK when another valid browser session replaces the original', async () => {
+    const f = await fixture();
+    const input = staffInput('browser-commit-cookie-swap');
+    const request = f.browser('/api/staff/knowledge/command', 'POST', input);
+    const blocked = f.block('afterKbCommit');
+    const pending = f.knowledge.handle(request);
+    await blocked.waitFor(pending);
+    try {
+      request.headers.set('Cookie', f.cookie(other));
+    } finally {
+      blocked.release();
+    }
+    const result = await pending;
+    expect(result?.status).toBe(403);
+    expect(await value(result)).not.toHaveProperty('value');
+    expect(
+      await f.knowledge.application.getCollection(await f.access(), {
+        collectionId: input.input.collectionId,
+      }),
+    ).toMatchObject({ collection: { name: input.input.name } });
   });
 });

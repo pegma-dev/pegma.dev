@@ -60,11 +60,20 @@ async function fixture(options: { browserLimitCount?: number } = {}) {
     ]),
   );
   const identity: IdentityPort = {
-    claimsFor: vi.fn(async (id: PrincipalId) => ({
-      issuer: IDENTITY_ISSUER,
-      subject: id,
-      emailVerified: true as const,
-    })),
+    claimsFor: vi.fn(async (id: PrincipalId) => {
+      const current = users.get(id);
+      if (current === undefined)
+        throw Object.assign(new Error('not found'), { code: 'not_found' });
+      if (current.status !== 'active' || !current.emailVerified)
+        throw Object.assign(new Error('not active and verified'), {
+          code: 'invalid_state',
+        });
+      return {
+        issuer: IDENTITY_ISSUER,
+        subject: id,
+        emailVerified: true as const,
+      };
+    }),
     getUser: vi.fn(async (id: PrincipalId) => users.get(id) ?? null),
     findUserByEmail: vi.fn(async () => null),
     beginPasskeyRegistration: vi.fn(),
