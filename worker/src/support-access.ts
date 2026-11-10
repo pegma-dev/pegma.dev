@@ -27,6 +27,10 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
   supportPermissions.manage,
   supportPermissions.auditRead,
   supportPermissions.takeOver,
+  supportPermissions.learningRead,
+  supportPermissions.learningEvidenceSubmit,
+  supportPermissions.learningReview,
+  supportPermissions.learningWithdraw,
 ] as const);
 
 /** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */
@@ -103,10 +107,11 @@ export const APPLICATION_SCOPE = Object.freeze({
  * with the Phase 5 surface. Version 3 adds Knowledge Base permissions and
  * administrator-only agent linking without replacing any stored assignment.
  * Version 4 adds owned human requests and explicit Support takeover.
+ * Version 5 adds human learning review; processing and KB grants stay separate.
  */
 export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
   schemaVersion: 1,
-  version: 'pegma.dev-policy-4',
+  version: 'pegma.dev-policy-5',
   defaults: [...SUPPORT_CUSTOMER_PERMISSIONS, knowledgePermissions.articleRead],
   roles: Object.freeze({
     [SUPPORT_ROLE]: [...SUPPORT_STAFF_PERMISSIONS],

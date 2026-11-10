@@ -3,9 +3,11 @@ import { createRoleStore } from '@pegma/authorization-storage';
 import type { PrincipalId } from '@pegma/spine';
 import { createMemoryStore } from '@pegma/storage-core';
 import { supportPermissions } from '@pegma/support-desk-application';
+import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import { describe, expect, it } from 'vitest';
 import {
   ADMIN_ROLE,
+  AGENT_KNOWLEDGE_PERMISSIONS,
   APPLICATION_SCOPE,
   AUTHORIZATION_APPLICATION_ID,
   customerAccessContext,
@@ -31,6 +33,10 @@ const staffPermissions = [
   supportPermissions.manage,
   supportPermissions.auditRead,
   supportPermissions.takeOver,
+  supportPermissions.learningRead,
+  supportPermissions.learningEvidenceSubmit,
+  supportPermissions.learningReview,
+  supportPermissions.learningWithdraw,
 ];
 
 function roleStore() {
@@ -92,6 +98,10 @@ describe('Support human-control grants', () => {
       );
       expect(access.permissions).not.toContain(supportPermissions.queueRead);
       expect(access.permissions).not.toContain(supportPermissions.takeOver);
+      for (const permission of [supportPermissions.learningRead, supportPermissions.learningEvidenceSubmit,
+        supportPermissions.learningReview, supportPermissions.learningWithdraw, supportPermissions.learningProcess]) {
+        expect(access.permissions).not.toContain(permission);
+      }
       expect(await staffAccessContextFromRoles(operator, store)).toBeNull();
 
       await grantRole(store, SUPPORT_ROLE);
@@ -102,6 +112,7 @@ describe('Support human-control grants', () => {
           .filter((permission) => permission.startsWith('support.'))
           .sort(),
       ).toEqual([...customerPermissions, ...staffPermissions].sort());
+      expect(staff?.permissions).not.toContain(supportPermissions.learningProcess);
 
       const current = await store.getRoleAssignment(
         `synthetic-${SUPPORT_ROLE}`,
@@ -126,4 +137,23 @@ describe('Support human-control grants', () => {
       );
     },
   );
+
+  it('keeps human learning separate from KB powers and the exact three delegated client scopes', async () => {
+    const store = roleStore();
+    await grantRole(store, SUPPORT_ROLE);
+    const staff = await staffAccessContextFromRoles(operator, store);
+    expect(staff).not.toBeNull();
+    for (const permission of [knowledgePermissions.draftRead, knowledgePermissions.draftWrite,
+      knowledgePermissions.evidenceSubmit, knowledgePermissions.provenanceRead, knowledgePermissions.review,
+      knowledgePermissions.publish, supportPermissions.learningProcess]) {
+      expect(staff?.permissions).not.toContain(permission);
+    }
+    expect([...AGENT_KNOWLEDGE_PERMISSIONS]).toEqual([
+      knowledgePermissions.draftRead, knowledgePermissions.draftWrite, knowledgePermissions.evidenceSubmit,
+    ]);
+    for (const permission of [supportPermissions.learningRead, supportPermissions.learningEvidenceSubmit,
+      supportPermissions.learningReview, supportPermissions.learningWithdraw, supportPermissions.learningProcess]) {
+      expect(AGENT_KNOWLEDGE_PERMISSIONS).not.toContain(permission);
+    }
+  });
 });

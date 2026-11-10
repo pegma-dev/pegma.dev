@@ -2,6 +2,7 @@ import { resolveAccess } from '@pegma/authorization-core';
 import {
   createKnowledgeBaseApplication,
   type RepairRetrievalPageResult,
+  type PrivateSourcesVerifier,
 } from '@pegma/knowledge-base-application';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import type { Clock, Logger } from '@pegma/spine';
@@ -16,6 +17,7 @@ export interface KnowledgeRetrievalMaintenanceOptions {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly isEnabled: () => boolean;
+  readonly privateSources?: PrivateSourcesVerifier;
 }
 
 interface BookmarkRecord {
@@ -111,12 +113,16 @@ function validPage(result: RepairRetrievalPageResult): boolean {
 /** Server-owned projection authority; never a human or delegated principal. */
 export const knowledgeIndexAccess = access;
 
-/** Phase01 is source-free: private source snapshots fail closed in the SDK. */
+/** An absent source verifier keeps private-source snapshots fail-closed. */
 export function createKnowledgeProjectionApplication(
   store: Store,
   clock: Clock,
+  privateSources?: PrivateSourcesVerifier,
 ) {
-  return createKnowledgeBaseApplication({ store, clock });
+  return createKnowledgeBaseApplication({
+    store, clock,
+    ...(privateSources === undefined ? {} : { privateSources }),
+  });
 }
 
 export function knowledgeRetrievalCurrent(
@@ -206,6 +212,7 @@ export function createKnowledgeRetrievalMaintenance(
         const application = createKnowledgeProjectionApplication(
           options.store,
           options.clock,
+          options.privateSources,
         );
         stage = 'repair';
         const result = await application.repairRetrievalPage(access, {

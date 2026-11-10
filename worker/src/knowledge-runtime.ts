@@ -5,6 +5,7 @@ import {
   createKnowledgeBaseApplication,
   KnowledgeBaseAuthorizationError,
   type KnowledgeBaseApplication,
+  type PrivateSourcesVerifier,
 } from '@pegma/knowledge-base-application';
 import {
   knowledgePermissions,
@@ -51,6 +52,7 @@ export interface KnowledgeRuntimeOptions
   readonly agentAccess: AgentAccessRuntime | null;
   readonly browserLimitCount?: number;
   readonly isEnabled?: () => boolean;
+  readonly privateSources?: PrivateSourcesVerifier;
 }
 export interface KnowledgeRuntime {
   readonly application: KnowledgeBaseApplication;
@@ -101,6 +103,7 @@ export function createKnowledgeRuntime(
     store: options.store,
     clock: options.clock,
     evidenceVerifier: evidence.verifier,
+    ...(options.privateSources === undefined ? {} : { privateSources: options.privateSources }),
   });
   const browserLimit = createDurableLimiter(
     defineRateLimitPolicy({
@@ -123,6 +126,7 @@ export function createKnowledgeRuntime(
       clock: options.clock,
       logger: options.logger,
       isEnabled: options.isEnabled ?? (() => true),
+      ...(options.privateSources === undefined ? {} : { privateSources: options.privateSources }),
     }).enqueue,
     async limitBrowser(request) {
       const key = await knowledgeDigest(

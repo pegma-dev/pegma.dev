@@ -1,4 +1,4 @@
-import type { ArticleIndexStatusDto } from '@pegma/knowledge-base-application';
+import type { ArticleIndexStatusDto, PrivateSourcesVerifier } from '@pegma/knowledge-base-application';
 import type { Clock, Logger } from '@pegma/spine';
 import { defineCollection, type Store } from '@pegma/storage-core';
 import {
@@ -14,6 +14,7 @@ export interface KnowledgeRetrievalReadyOptions {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly isEnabled: () => boolean;
+  readonly privateSources?: PrivateSourcesVerifier;
 }
 interface ReadyHint {
   readonly id: string;
@@ -160,6 +161,7 @@ export function createKnowledgeRetrievalReady(
             const result = await createKnowledgeProjectionApplication(
               options.store,
               options.clock,
+              options.privateSources,
             ).repairArticleIndex(knowledgeIndexAccess, {
               articleId: row.value.articleId,
               maxBatches: 1,
