@@ -50,7 +50,7 @@ verification qualify the producer; they do not qualify this host.
 Installed D1 and Core files match the original release archives byte for byte;
 actual public ESM imports resolve the same Core module and error classes.
 On Node `22.18.0`, the ordinary checked-in configurations pass type checks and
-all 524 tests: 475 Node tests across 45 files, 47 real D1 tests across five files,
+all 536 tests: 487 Node tests across 45 files, 47 real D1 tests across five files,
 and two Bench Ticket Worker/D1/R2 tests. The static build emits 21 pages, and
 Wrangler's explicit dry run packages the Worker without uploading it. These
 checks use the published registry graph, without source aliases. Earlier
@@ -122,6 +122,11 @@ an explicit decision. Existing login resumes only allowlisted same-origin
 agent paths; it never auto-approves. Consent pages/data are no-store and
 no-referrer. Untrusted text is rendered as text, using external CSP-compatible
 scripts; tokens are not placed in URLs or browser storage.
+
+Consent POSTs reauthenticate after validating the complete request body and
+immediately before approval. The fresh context must match the original session,
+principal and credential headers. A final check also withholds stale responses
+after the service returns; it does not roll back an approval already committed.
 
 `/api/agent-access/*` composes the released protocol plus browser-only consent
 and known-grant controls. Discovery is at
@@ -355,7 +360,7 @@ unqualified publication.
 
 Earlier local candidate measurements of the awaited inline path reached 118
 D1 calls for publication and 104 for evidence revocation, above the 50-call
-limit despite successful logical responses. The eight-case real-D1
+limit despite successful logical responses. The real-D1
 profiling fixture now passes on the canonical published graph. It exercises whole HTTP/MCP and scheduled
 invocations, including genuine 32-proof/96-revocation history, pending work,
 transport failure, newer enqueue races and lost-hint recovery, with a hard

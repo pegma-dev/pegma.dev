@@ -1,4 +1,8 @@
-import type { PublicClient } from '@pegma/agent-access';
+import type {
+  ApproveInput,
+  GrantType,
+  PublicClient,
+} from '@pegma/agent-access';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createRoleStore } from '@pegma/authorization-storage';
 import { KnowledgeBaseNotFoundError } from '@pegma/knowledge-base-application';
@@ -33,7 +37,7 @@ const client: PublicClient = {
   name: 'Synthetic browser freshness client',
   redirectUris: ['https://client.example.test/callback'],
   allowedScopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
-  grantTypes: ['device_code'],
+  grantTypes: ['device_code', 'authorization_code'],
 };
 
 function barrier() {
@@ -227,7 +231,7 @@ async function fixture() {
         decision: 'approve',
         userCode: device.user_code,
         approvedScopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
-      },
+      } satisfies ApproveInput,
     };
   }
   async function approved() {
@@ -247,6 +251,81 @@ async function fixture() {
     if (typeof grant.grantId !== 'string')
       throw new Error('Expected the actual returned GrantView identity.');
     return { ...pending, grantId: grant.grantId };
+  }
+  async function pendingApproval(flow: GrantType) {
+    if (flow === 'device_code') {
+      const pending = await prepared();
+      return {
+        requestId: pending.requestId,
+        input: pending.input,
+        viewPath:
+          '/api/agent-access/approval?user_code=' +
+          encodeURIComponent(pending.device.user_code),
+        async issue(result: Record<string, unknown>) {
+          expect(result).toMatchObject({ flow, approved: true });
+          return runtime.service.pollDeviceToken({
+            clientId: client.clientId,
+            resource: AGENT_RESOURCE,
+            deviceCode: pending.device.device_code,
+          });
+        },
+      };
+    }
+    const codeVerifier = 'v'.repeat(43);
+    const digest = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(codeVerifier),
+    );
+    const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/gu, '-')
+      .replace(/\//gu, '_')
+      .replace(/=+$/gu, '');
+    const request = await runtime.service.beginAuthorization(
+      { authentication: 'browser-session', access: await access(owner) },
+      {
+        clientId: client.clientId,
+        resource: AGENT_RESOURCE,
+        scopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
+        redirectUri: client.redirectUris[0]!,
+        codeChallenge,
+        codeChallengeMethod: 'S256',
+        state: 'synthetic-delayed-consent',
+      },
+    );
+    expect(request.status).toBe('pending');
+    return {
+      requestId: request.requestId,
+      input: {
+        requestId: request.requestId,
+        decision: 'approve',
+        approvedScopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
+      } satisfies ApproveInput,
+      viewPath:
+        '/api/agent-access/approval?request_id=' +
+        encodeURIComponent(request.requestId),
+      async issue(result: Record<string, unknown>) {
+        expect(result.flow).toBe(flow);
+        if (typeof result.redirectUri !== 'string')
+          throw new Error('Expected the actual PKCE approval redirect.');
+        const redirect = new URL(result.redirectUri);
+        expect(redirect.origin + redirect.pathname).toBe(
+          client.redirectUris[0],
+        );
+        expect(redirect.searchParams.get('state')).toBe(
+          'synthetic-delayed-consent',
+        );
+        const code = redirect.searchParams.get('code');
+        if (code === null)
+          throw new Error('Expected an actual authorization code.');
+        return runtime.service.exchangeAuthorizationCode({
+          clientId: client.clientId,
+          resource: AGENT_RESOURCE,
+          code,
+          redirectUri: client.redirectUris[0]!,
+          codeVerifier,
+        });
+      },
+    };
   }
   async function revokeAdmin() {
     const assignment = await roleStore.getRoleAssignment('admin-' + owner);
@@ -284,6 +363,20 @@ async function fixture() {
       throw new Error('Expected the actual owner session.');
     await sessions.destroy(sessionId);
   }
+  async function restoreSession() {
+    const sessionId = 'r'.repeat(43);
+    await sessions.create(sessionId, {
+      principalId: owner,
+      data: JSON.stringify({
+        version: 1,
+        csrfToken: 'c'.repeat(43),
+        issuer: IDENTITY_ISSUER,
+        subject: owner,
+      }),
+    });
+    cookies.set(owner, SESSION_COOKIE + '=' + sessionId);
+    sessionIds.set(owner, sessionId);
+  }
   function block(hook: keyof StoreHooks) {
     const entered = barrier();
     const resume = barrier();
@@ -311,10 +404,12 @@ async function fixture() {
     browser,
     cookie,
     prepared,
+    pendingApproval,
     approved,
     revokeAdmin,
     restoreAdmin,
     revokeSession,
+    restoreSession,
     block,
   };
 }
@@ -532,6 +627,172 @@ function delayedCommand(base: Request, input: unknown) {
     release: resume.release,
   };
 }
+
+describe('actual AA approval authority after delayed browser input', () => {
+  it.each(['device_code', 'authorization_code'] as const)(
+    'approves a pending %s request for the same current Admin after delayed input',
+    async (flow) => {
+      const f = await fixture();
+      const approval = await f.pendingApproval(flow);
+      let commits = 0;
+      f.hooks.afterGrantCommit = async () => {
+        commits += 1;
+      };
+      const delayed = delayedCommand(
+        f.browser('/api/agent-access/approval', 'POST', approval.input),
+        approval.input,
+      );
+      const pending = f.runtime.api(delayed.request);
+      try {
+        await delayed.waitFor(pending);
+        expect(commits).toBe(0);
+      } finally {
+        delayed.release();
+      }
+      const result = await pending;
+      expect(result?.status).toBe(200);
+      expect(commits).toBe(1);
+      const tokens = await approval.issue(await value(result));
+      expect(tokens.token_type).toBe('Bearer');
+      expect(tokens.access_token).toEqual(expect.any(String));
+      expect(tokens.refresh_token).toEqual(expect.any(String));
+      expect(
+        await f.runtime.service.authenticate({
+          token: tokens.access_token,
+          resource: AGENT_RESOURCE,
+        }),
+      ).toMatchObject({
+        clientId: client.clientId,
+        access: { principalId: owner },
+      });
+    },
+  );
+
+  it.each([
+    ['device_code', 'session'],
+    ['device_code', 'role'],
+    ['authorization_code', 'session'],
+    ['authorization_code', 'role'],
+  ] as const)(
+    'leaves the actual %s request pending when %s is revoked while reading its body',
+    async (flow, revoked) => {
+      const f = await fixture();
+      const approval = await f.pendingApproval(flow);
+      let commits = 0;
+      f.hooks.afterGrantCommit = async () => {
+        commits += 1;
+      };
+      const delayed = delayedCommand(
+        f.browser('/api/agent-access/approval', 'POST', approval.input),
+        approval.input,
+      );
+      const pending = f.runtime.api(delayed.request);
+      try {
+        await delayed.waitFor(pending);
+        expect(commits).toBe(0);
+        if (revoked === 'session') await f.revokeSession();
+        else await f.revokeAdmin();
+      } finally {
+        delayed.release();
+      }
+      const result = await pending;
+      expect(result?.status).toBe(revoked === 'session' ? 401 : 403);
+      const denied = await value(result);
+      expect(denied).not.toHaveProperty('approved');
+      expect(denied).not.toHaveProperty('redirectUri');
+      expect(denied).not.toHaveProperty('access_token');
+      expect(denied).not.toHaveProperty('refresh_token');
+      // Observe real AA commits, not just the final withheld HTTP response.
+      expect(commits).toBe(0);
+      if (revoked === 'session') await f.restoreSession();
+      else await f.restoreAdmin();
+      const retained = await f.runtime.api(f.browser(approval.viewPath));
+      expect(retained?.status).toBe(200);
+      expect(await value(retained)).toMatchObject({
+        requestId: approval.requestId,
+        flow,
+        status: 'pending',
+      });
+      expect(commits).toBe(0);
+    },
+  );
+
+  it.each([
+    ['device_code', 'same-owner'],
+    ['device_code', 'other-admin'],
+    ['authorization_code', 'same-owner'],
+    ['authorization_code', 'other-admin'],
+  ] as const)(
+    'refuses delayed %s consent after a %s browser-session replacement',
+    async (flow, replacement) => {
+      const f = await fixture();
+      const approval = await f.pendingApproval(flow);
+      let commits = 0;
+      f.hooks.afterGrantCommit = async () => {
+        commits += 1;
+      };
+      const delayed = delayedCommand(
+        f.browser('/api/agent-access/approval', 'POST', approval.input),
+        approval.input,
+      );
+      const pending = f.runtime.api(delayed.request);
+      try {
+        await delayed.waitFor(pending);
+        if (replacement === 'same-owner') await f.restoreSession();
+        delayed.request.headers.set(
+          'Cookie',
+          f.cookie(replacement === 'same-owner' ? owner : other),
+        );
+      } finally {
+        delayed.release();
+      }
+      expect((await pending)?.status).toBe(403);
+      expect(commits).toBe(0);
+      const retained = await f.runtime.api(f.browser(approval.viewPath));
+      expect(retained?.status).toBe(200);
+      expect(await value(retained)).toMatchObject({
+        requestId: approval.requestId,
+        status: 'pending',
+      });
+    },
+  );
+
+  it.each(['device_code', 'authorization_code'] as const)(
+    'refuses a header swap during awaited post-body session authentication for %s',
+    async (flow) => {
+      const f = await fixture();
+      const approval = await f.pendingApproval(flow);
+      let commits = 0;
+      f.hooks.afterGrantCommit = async () => {
+        commits += 1;
+      };
+      const delayed = delayedCommand(
+        f.browser('/api/agent-access/approval', 'POST', approval.input),
+        approval.input,
+      );
+      const pending = f.runtime.api(delayed.request);
+      let blocked: ReturnType<typeof f.block> | undefined;
+      try {
+        await delayed.waitFor(pending);
+        blocked = f.block('beforeSessionRead');
+        delayed.release();
+        await blocked.waitFor(pending);
+        delayed.request.headers.set('Cookie', f.cookie(other));
+      } finally {
+        delayed.release();
+        blocked?.release();
+      }
+      expect((await pending)?.status).toBe(403);
+      expect(commits).toBe(0);
+      const retained = await f.runtime.api(f.browser(approval.viewPath));
+      expect(retained?.status).toBe(200);
+      expect(await value(retained)).toMatchObject({
+        requestId: approval.requestId,
+        status: 'pending',
+      });
+    },
+  );
+});
 
 describe('staff KB command browser authority around bounded input and real SDK work', () => {
   it('executes a current authorized browser command through the actual KB service', async () => {

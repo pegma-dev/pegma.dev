@@ -57,13 +57,31 @@ export function createAgentAccessApi(
             },
           },
         );
+      const credentialHeaders = [
+        'Cookie',
+        'Origin',
+        'X-Pegma-CSRF',
+        'Sec-Fetch-Site',
+        'Authorization',
+      ].map((name) => ({ name, value: request.headers.get(name) }));
+      function sameBrowserHeaders() {
+        if (
+          credentialHeaders.some(
+            ({ name, value }) => request.headers.get(name) !== value,
+          )
+        )
+          throw new ApiError(403, 'browser_credential_changed');
+      }
       await options.limit(request);
+      sameBrowserHeaders();
       const { authenticated, context } = await requireAgentBrowserContext(
         request,
         options,
         request.method !== 'GET',
       );
+      sameBrowserHeaders();
       const principalId = context.access.principalId;
+      const sessionId = authenticated.rawSessionId;
       if (path === '/api/agent-access/state') {
         if (url.search !== '') throw new ApiError(400, 'invalid_request');
         response = json({
@@ -132,7 +150,23 @@ export function createAgentAccessApi(
             ? {}
             : { userCode: boundedString(body.userCode, 1, 128) }),
         };
-        response = json(await options.service.approve(context, command));
+        // Body input is an awaited browser boundary. Account/role authority in
+        // AA cannot establish that the original host session is still live.
+        sameBrowserHeaders();
+        const current = await requireAgentBrowserContext(
+          request,
+          options,
+          true,
+        );
+        sameBrowserHeaders();
+        if (
+          current.authenticated.rawSessionId !== sessionId ||
+          current.context.access.principalId !== principalId
+        )
+          throw new ApiError(403, 'browser_credential_changed');
+        response = json(
+          await options.service.approve(current.context, command),
+        );
       }
       // The service may have awaited private reads or a committed mutation.
       // Withhold its response if the original browser no longer has authority;
@@ -142,7 +176,11 @@ export function createAgentAccessApi(
         options,
         request.method !== 'GET',
       );
-      if (final.context.access.principalId !== principalId)
+      sameBrowserHeaders();
+      if (
+        final.authenticated.rawSessionId !== sessionId ||
+        final.context.access.principalId !== principalId
+      )
         throw new ApiError(403, 'forbidden');
     } catch (error) {
       if (error instanceof ApiError)
