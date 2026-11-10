@@ -12,6 +12,7 @@ const personButton = select('#request-person');
 const ticketId = new URL(window.location.href).searchParams.get('id') ?? '';
 let csrfToken = '';
 let viewer = null;
+let authorityReloadRequired = false;
 let currentView = null;
 let readGeneration = 0;
 let busy = null;
@@ -119,9 +120,13 @@ function updateHumanControl() {
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
   const state = ticket?.handling;
   const seconds = retrySeconds();
-  humanControls.hidden = ticket === undefined && personPacket === null;
-  humanStatus.textContent =
-    personPacket !== null
+  humanControls.hidden =
+    viewer === null ||
+    authorityReloadRequired ||
+    (ticket === undefined && personPacket === null);
+  humanStatus.textContent = humanControls.hidden
+    ? ''
+    : personPacket !== null
       ? packetOutcome === 'rate_limited'
         ? seconds > 0
           ? `The server rate limited this request. Wait at least ${seconds} seconds before retrying the same request.`
@@ -141,6 +146,7 @@ function updateHumanControl() {
   personButton.disabled =
     busy !== null ||
     viewer === null ||
+    authorityReloadRequired ||
     suspended ||
     seconds > 0 ||
     (ticket === undefined && personPacket === null);
@@ -155,6 +161,7 @@ function updateHumanControl() {
       busy !== null ||
       currentView === null ||
       personPacket !== null ||
+      authorityReloadRequired ||
       suspended ||
       seconds > 0;
   armRetryTimer();
@@ -222,10 +229,7 @@ async function api(path, init = {}) {
     requests.delete(controller);
   }
 }
-async function readViewer(
-  generation,
-  expected = viewer ?? personPacket?.viewer ?? null,
-) {
+async function readViewer(generation, expected = viewer) {
   const result = await api('/api/identity/session');
   guard(generation);
   if (
@@ -238,6 +242,11 @@ async function readViewer(
     subject: result.account.subject,
     csrfToken: result.csrfToken,
   });
+  // An unresolved command belongs to its original principal, not old credentials.
+  if (personPacket !== null && next.subject !== personPacket.subject) {
+    personPacket = null;
+    throw Object.assign(new Error('session_changed'), { status: 401 });
+  }
   if (
     expected !== null &&
     (next.subject !== expected.subject || next.csrfToken !== expected.csrfToken)
@@ -295,8 +304,11 @@ function renderTicket(view) {
 function failure(error, action, generation) {
   if (!isCurrent(generation) || error.stale) return;
   clearTicket();
-  if ([400, 401, 403, 404].includes(error.status)) personPacket = null;
+  if ([400, 404].includes(error.status)) personPacket = null;
   if (error.status === 401 || error.status === 403) {
+    // A denied ACK may follow a real commit. Retain exact JSON for its owner,
+    // but require a complete fresh ticket read before enabling another write.
+    authorityReloadRequired = true;
     viewer = null;
     csrfToken = '';
   }
@@ -341,6 +353,7 @@ async function loadTicket() {
     guard(generation);
     validateView(view);
     await readViewer(generation);
+    authorityReloadRequired = false;
     renderTicket(view);
     showStatus('Ticket loaded.');
     return { generation, loaded: true };
@@ -357,6 +370,7 @@ personButton.addEventListener('click', async () => {
     retrySeconds() > 0 ||
     suspended ||
     !onThisTicket() ||
+    authorityReloadRequired ||
     viewer === null
   )
     return;
@@ -370,22 +384,23 @@ personButton.addEventListener('click', async () => {
   )
     return;
   personPacket ??= Object.freeze({
-    viewer,
+    subject: viewer.subject,
     body: JSON.stringify(Object.freeze({ commandId: crypto.randomUUID() })),
   });
   const packet = personPacket;
+  const expectedViewer = viewer;
   const operation = beginOperation();
   const generation = operation.generation;
   updateHumanControl();
   try {
-    await readViewer(generation, packet.viewer);
+    await readViewer(generation, expectedViewer);
     const ack = await api(
       `/api/support/tickets/${encodeURIComponent(ticketId)}/request-person`,
       { method: 'POST', body: packet.body },
     );
     guard(generation);
     validateView(ack);
-    await readViewer(generation, packet.viewer);
+    await readViewer(generation, expectedViewer);
     personPacket = null;
     // An exact command replay may acknowledge a historical view; do not render it.
     const refreshed = await loadTicket();
@@ -417,6 +432,7 @@ replyForm.addEventListener('submit', async (event) => {
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
+    authorityReloadRequired ||
     personPacket !== null ||
     currentView === null ||
     !onThisTicket()

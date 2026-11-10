@@ -720,6 +720,351 @@ function ticketFor(surface: (typeof surfaces)[number], accepted = false) {
       );
 }
 
+describe('denied acknowledgement packet recovery', () => {
+  async function loaded(
+    page: ReturnType<typeof supportBrowser>,
+    surface: (typeof surfaces)[number],
+  ) {
+    const ids = controls(surface);
+    await page.until(
+      () =>
+        !page.node(ids.detail).hidden &&
+        !page.node(ids.action).disabled &&
+        page.node(ids.status).textContent === 'Ticket loaded.' &&
+        (surface !== 'staff' ||
+          page.node('staff-handoff-status').textContent ===
+            'Private handoff loaded.'),
+    );
+    await page.tick();
+  }
+  async function denied(
+    page: ReturnType<typeof supportBrowser>,
+    surface: (typeof surfaces)[number],
+  ) {
+    const ids = controls(surface);
+    await page.until(
+      () =>
+        page.node(ids.detail).hidden &&
+        (page.node(ids.status).textContent.includes('Sign in, then reload') ||
+          page
+            .node(ids.status)
+            .textContent.includes('access could not be confirmed')),
+    );
+    await page.tick();
+  }
+
+  it.each(
+    surfaces.flatMap((surface) =>
+      [401, 403].map((status) => ({ surface, status })),
+    ),
+  )(
+    'recovers the exact $surface packet after a $status ACK denial only after the same principal regains a current view',
+    async ({ surface, status }) => {
+      const ids = controls(surface);
+      const freshRead = browserGate<BrowserResponse>();
+      let phase = 'initial';
+      let identity = account;
+      let attempts = 0;
+      let readStarted = false;
+      let view = ticketFor(surface);
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: identity };
+        if (call.path.endsWith(ids.suffix)) {
+          if (++attempts === 1) {
+            // Model the real API's committed-command / denied-ACK boundary;
+            // separate Memory and native-D1 API tests prove persistence/replay.
+            view = ticketFor(surface, true);
+            phase = 'denied';
+            return { status, body: { error: 'closing_authority_denied' } };
+          }
+          return { body: { ...view, csrfToken: identity.csrfToken } };
+        }
+        if (phase === 'denied') return { status, body: {} };
+        if (phase === 'unavailable') return { status: 503, body: {} };
+        if (call.path.endsWith('/handoff'))
+          return { body: { ...handoff(), csrfToken: identity.csrfToken } };
+        if (phase === 'recover') {
+          readStarted = true;
+          return freshRead.promise;
+        }
+        return { body: { ...view, csrfToken: identity.csrfToken } };
+      });
+      try {
+        await loaded(page, surface);
+        page.node(ids.draft).value = 'LOCAL_UNSENT_DRAFT';
+        page.mode('internal');
+        page.node(ids.action).fire('click');
+        await denied(page, surface);
+        const original = posts(page.calls, ids.suffix)[0]!;
+        expect(original.body).toEqual(expect.any(String));
+        expect(page.node(ids.messages).textContent).toBe('');
+        expect(page.node(ids.action).disabled).toBe(true);
+        if (surface === 'staff') {
+          expect(page.node('staff-handoff-list').textContent).toBe('');
+          expect(page.node('staff-ticket-requester').textContent).toBe('');
+        }
+        const deniedCalls = page.calls.length;
+        page.node(ids.action).dispatchEvent(new Event('click'));
+        page
+          .node(surface === 'customer' ? 'reply-form' : 'staff-compose-form')
+          .fire('submit');
+        if (surface === 'staff')
+          page.node('action-assign').dispatchEvent(new Event('click'));
+        await page.tick();
+        expect(page.calls).toHaveLength(deniedCalls);
+
+        // A denied reload must not erase the unresolved command either.
+        page.node(ids.reload).fire('click');
+        await denied(page, surface);
+        expect(page.node(ids.detail).hidden).toBe(true);
+        expect(posts(page.calls, ids.suffix)).toHaveLength(1);
+
+        // Fresh credentials alone are insufficient: the current ticket read
+        // must also succeed before any retry can be sent.
+        identity = { ...account, csrfToken: 'synthetic-restored-session' };
+        phase = 'unavailable';
+        page.node(ids.reload).fire('click');
+        await page.until(() =>
+          page.node(ids.status).textContent.includes('Could not confirm'),
+        );
+        await page.tick();
+        expect(page.node(ids.action).disabled).toBe(true);
+        const unavailableCalls = page.calls.length;
+        page.node(ids.action).dispatchEvent(new Event('click'));
+        await page.tick();
+        expect(page.calls).toHaveLength(unavailableCalls);
+
+        phase = 'recover';
+        page.node(ids.reload).fire('click');
+        await page.until(() => readStarted);
+        expect(page.node(ids.action).disabled).toBe(true);
+        const pendingReadCalls = page.calls.length;
+        page.node(ids.action).dispatchEvent(new Event('click'));
+        await page.tick();
+        expect(page.calls).toHaveLength(pendingReadCalls);
+        phase = 'restored';
+        freshRead.resolve({
+          body: { ...view, csrfToken: identity.csrfToken },
+        });
+        await page.until(() => !page.node(ids.detail).hidden);
+        await page.tick();
+        expect(page.node(ids.detail).hidden).toBe(false);
+        expect(page.node(ids.action).disabled).toBe(false);
+        expect(page.node(ids.action).textContent).toContain('Retry');
+        expect(page.node(ids.draft).value).toBe('LOCAL_UNSENT_DRAFT');
+        page.node(ids.action).fire('click');
+        await page.until(() => posts(page.calls, ids.suffix).length === 2);
+        const success =
+          surface === 'customer'
+            ? 'Human support requested. Your unsent reply is kept.'
+            : 'Take over accepted. Assignment is unchanged.';
+        await page.until(() => page.node(ids.status).textContent === success);
+        await page.tick();
+        const sent = posts(page.calls, ids.suffix);
+        expect(sent).toHaveLength(2);
+        expect(sent[1]?.body).toBe(original.body);
+        expect(sent[1]?.headers.get('X-Pegma-CSRF')).toBe(identity.csrfToken);
+        expect(original.headers.get('X-Pegma-CSRF')).toBe(account.csrfToken);
+        if (surface === 'staff')
+          expect(JSON.parse(sent[1]?.body ?? '{}')).toMatchObject({
+            expectedRevision: 7,
+            expectedHandlingGeneration: 0,
+          });
+        expect(page.node(ids.status).textContent).toBe(success);
+        expect(page.node(ids.status).textContent).not.toContain(
+          'refresh failed',
+        );
+        expect(page.node(ids.detail).hidden).toBe(false);
+        if (surface === 'staff') {
+          expect(page.node('staff-handoff-status').textContent).toBe(
+            'Private handoff loaded.',
+          );
+          expect(page.node('staff-handoff-list').textContent).toContain(
+            'SYNTHETIC_PRIVATE_HANDOFF',
+          );
+        }
+      } finally {
+        freshRead.resolve({ body: view });
+        page.dispose();
+      }
+    },
+  );
+
+  it.each(
+    surfaces.flatMap((surface) =>
+      (surface === 'staff' ? ['ticket', 'handoff'] : ['ticket']).flatMap(
+        (read) => [401, 403].map((status) => ({ surface, read, status })),
+      ),
+    ),
+  )(
+    'retains an unknown $surface packet through a denied $read reload ($status)',
+    async ({ surface, read, status }) => {
+      const ids = controls(surface);
+      let phase = 'initial';
+      let attempts = 0;
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith(ids.suffix)) {
+          if (++attempts === 1) return { status: 503, body: {} };
+          return { body: ticketFor(surface, true) };
+        }
+        const isHandoff = call.path.endsWith('/handoff');
+        if (phase === 'denied' && (read === 'handoff') === isHandoff)
+          return { status, body: {} };
+        if (isHandoff) return { body: handoff() };
+        return { body: ticketFor(surface, phase !== 'initial') };
+      });
+      await loaded(page, surface);
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 1);
+      await page.until(() =>
+        page.node(ids.status).textContent.includes('Could not confirm'),
+      );
+      await page.tick();
+      const original = posts(page.calls, ids.suffix)[0]?.body;
+      expect(original).toEqual(expect.any(String));
+      phase = 'denied';
+      page.node(ids.reload).fire('click');
+      await denied(page, surface);
+      expect(page.node(ids.detail).hidden).toBe(true);
+      expect(page.node(ids.messages).textContent).toBe('');
+      expect(page.node(ids.action).disabled).toBe(true);
+      if (surface === 'staff')
+        expect(page.node('staff-handoff-list').textContent).toBe('');
+      phase = 'restored';
+      page.node(ids.reload).fire('click');
+      await page.until(() => !page.node(ids.detail).hidden);
+      await page.tick();
+      expect(page.node(ids.action).disabled).toBe(false);
+      expect(page.node(ids.action).textContent).toContain('Retry');
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 2);
+      await page.tick();
+      expect(posts(page.calls, ids.suffix)).toHaveLength(2);
+      expect(posts(page.calls, ids.suffix)[1]?.body).toBe(original);
+    },
+  );
+
+  it.each(surfaces)(
+    'forgets the denied $surface packet when a different principal is observed and never revives it for the old principal',
+    async (surface) => {
+      const ids = controls(surface);
+      let identity = account;
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: identity };
+        if (call.path.endsWith(ids.suffix)) return { status: 403, body: {} };
+        return {
+          body: {
+            ...(call.path.endsWith('/handoff')
+              ? handoff()
+              : ticketFor(surface)),
+            csrfToken: identity.csrfToken,
+          },
+        };
+      });
+      await loaded(page, surface);
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 1);
+      await denied(page, surface);
+      const original = posts(page.calls, ids.suffix)[0]?.body;
+      expect(original).toEqual(expect.any(String));
+      identity = {
+        account: { ...account.account, subject: 'synthetic-other-principal' },
+        csrfToken: 'synthetic-other-session',
+      };
+      page.node(ids.reload).fire('click');
+      await page.until(
+        () => page.node(ids.status).textContent !== 'Loading ticket…',
+      );
+      await page.tick();
+      // A changed identity may require a second explicit current-view read.
+      if (page.node(ids.detail).hidden) {
+        page.node(ids.reload).fire('click');
+        await page.until(
+          () => page.node(ids.status).textContent !== 'Loading ticket…',
+        );
+        await page.tick();
+      }
+      await loaded(page, surface);
+      expect(page.node(ids.detail).hidden).toBe(false);
+      expect(page.node(ids.action).textContent).not.toContain('Retry');
+      expect(posts(page.calls, ids.suffix)).toHaveLength(1);
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 2);
+      await denied(page, surface);
+      expect(posts(page.calls, ids.suffix)).toHaveLength(2);
+      expect(posts(page.calls, ids.suffix)[1]?.body).not.toBe(original);
+      expect(
+        posts(page.calls, ids.suffix)[1]?.headers.get('X-Pegma-CSRF'),
+      ).toBe(identity.csrfToken);
+      identity = account;
+      page.node(ids.reload).fire('click');
+      await page.until(
+        () => page.node(ids.status).textContent !== 'Loading ticket…',
+      );
+      await page.tick();
+      if (page.node(ids.detail).hidden) {
+        page.node(ids.reload).fire('click');
+        await page.until(
+          () => page.node(ids.status).textContent !== 'Loading ticket…',
+        );
+        await page.tick();
+      }
+      await loaded(page, surface);
+      expect(page.node(ids.action).textContent).not.toContain('Retry');
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 3);
+      await denied(page, surface);
+      expect(posts(page.calls, ids.suffix)).toHaveLength(3);
+      expect(posts(page.calls, ids.suffix)[2]?.body).not.toBe(original);
+    },
+  );
+
+  it.each(surfaces)(
+    'forgets the denied $surface packet after the ticket is deleted (404)',
+    async (surface) => {
+      const ids = controls(surface);
+      let deleted = false;
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith(ids.suffix)) return { status: 403, body: {} };
+        if (deleted) return { status: 404, body: {} };
+        return {
+          body: call.path.endsWith('/handoff') ? handoff() : ticketFor(surface),
+        };
+      });
+      await loaded(page, surface);
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 1);
+      await denied(page, surface);
+      const original = posts(page.calls, ids.suffix)[0]?.body;
+      expect(original).toEqual(expect.any(String));
+      deleted = true;
+      page.node(ids.reload).fire('click');
+      await page.until(
+        () => page.node(ids.status).textContent !== 'Loading ticket…',
+      );
+      await page.tick();
+      expect(page.node(ids.status).textContent).toBe('Ticket not found.');
+      expect(page.node(ids.detail).hidden).toBe(true);
+      expect(page.node(ids.action).disabled).toBe(true);
+      deleted = false;
+      page.node(ids.reload).fire('click');
+      await page.until(
+        () => page.node(ids.status).textContent !== 'Loading ticket…',
+      );
+      await page.tick();
+      await loaded(page, surface);
+      expect(page.node(ids.action).textContent).not.toContain('Retry');
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 2);
+      await denied(page, surface);
+      expect(posts(page.calls, ids.suffix)).toHaveLength(2);
+      expect(posts(page.calls, ids.suffix)[1]?.body).not.toBe(original);
+    },
+  );
+});
+
 describe('current-input recovery, retry and lifecycle boundaries', () => {
   it.each(
     surfaces.flatMap((surface) =>

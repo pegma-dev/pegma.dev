@@ -19,6 +19,7 @@ const handoffList = select('#staff-handoff-list');
 const ticketId = new URL(window.location.href).searchParams.get('id') ?? '';
 let csrfToken = '';
 let viewer = null;
+let authorityReloadRequired = false;
 let currentView = null;
 let readGeneration = 0;
 let handoffGeneration = 0;
@@ -123,7 +124,12 @@ function updateControls() {
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
   const state = ticket === undefined ? '' : effectiveHandling(ticket).state;
   const seconds = retrySeconds();
-  const blocked = busy !== null || viewer === null || suspended || seconds > 0;
+  const blocked =
+    busy !== null ||
+    viewer === null ||
+    authorityReloadRequired ||
+    suspended ||
+    seconds > 0;
   takeoverButton.textContent =
     seconds > 0
       ? `Retry take over in ${seconds}s`
@@ -234,10 +240,7 @@ async function api(path, init = {}) {
     requests.delete(controller);
   }
 }
-async function readViewer(
-  generation,
-  expected = viewer ?? takeoverPacket?.viewer ?? null,
-) {
+async function readViewer(generation, expected = viewer) {
   const result = await api('/api/identity/session');
   guard(generation);
   if (
@@ -250,6 +253,11 @@ async function readViewer(
     subject: result.account.subject,
     csrfToken: result.csrfToken,
   });
+  // An unresolved command belongs to its original principal, not old credentials.
+  if (takeoverPacket !== null && next.subject !== takeoverPacket.subject) {
+    takeoverPacket = null;
+    throw Object.assign(new Error('session_changed'), { status: 401 });
+  }
   if (
     expected !== null &&
     (next.subject !== expected.subject || next.csrfToken !== expected.csrfToken)
@@ -343,8 +351,11 @@ function failure(error, action, generation) {
   if (!isCurrent(generation) || error.stale) return;
   // A failed/unknown mutation is not a fresh basis for another staff write.
   hideAll();
-  if ([400, 401, 403, 404].includes(error.status)) takeoverPacket = null;
+  if ([400, 404].includes(error.status)) takeoverPacket = null;
   if (error.status === 401 || error.status === 403) {
+    // A denied ACK may follow a real commit. Retain exact JSON for its owner,
+    // but require a complete fresh ticket read before enabling another write.
+    authorityReloadRequired = true;
     viewer = null;
     csrfToken = '';
   }
@@ -458,6 +469,7 @@ async function loadTicket() {
     guard(generation);
     validateView(view);
     await readViewer(generation);
+    authorityReloadRequired = false;
     renderTicket(view);
     showStatus('Ticket loaded.');
     // Private handoff availability does not lock a fully refreshed ticket view.
@@ -479,6 +491,7 @@ async function patchTicket(action, extra = {}) {
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
+    authorityReloadRequired ||
     takeoverPacket !== null ||
     currentView === null ||
     !onThisTicket()
@@ -511,6 +524,7 @@ takeoverButton.addEventListener('click', async () => {
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
+    authorityReloadRequired ||
     viewer === null ||
     !onThisTicket()
   )
@@ -524,7 +538,7 @@ takeoverButton.addEventListener('click', async () => {
     const handling = effectiveHandling(currentView.ticket);
     if (handling.state === 'human-active') return;
     takeoverPacket = Object.freeze({
-      viewer,
+      subject: viewer.subject,
       body: JSON.stringify(
         Object.freeze({
           commandId: crypto.randomUUID(),
@@ -535,19 +549,20 @@ takeoverButton.addEventListener('click', async () => {
     });
   }
   const packet = takeoverPacket;
+  const expectedViewer = viewer;
   const operation = beginOperation();
   const generation = operation.generation;
   clearHandoff();
   updateControls();
   try {
-    await readViewer(generation, packet.viewer);
+    await readViewer(generation, expectedViewer);
     const ack = await api(
       `/api/support/admin/tickets/${encodeURIComponent(ticketId)}/take-over`,
       { method: 'POST', body: packet.body },
     );
     guard(generation);
     validateView(ack);
-    await readViewer(generation, packet.viewer);
+    await readViewer(generation, expectedViewer);
     takeoverPacket = null;
     // Exact SDK replay can acknowledge a historical view. Always read current state.
     const refreshed = await loadTicket();
@@ -590,6 +605,7 @@ composeForm.addEventListener('submit', async (event) => {
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
+    authorityReloadRequired ||
     takeoverPacket !== null ||
     currentView === null ||
     !onThisTicket() ||
