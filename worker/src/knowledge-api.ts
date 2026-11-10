@@ -422,10 +422,7 @@ export function createKnowledgeApi(
           true,
         );
       const envelope = exactObject(
-        await readJson(
-          request,
-          staffCommand ? { timeoutMs: 10_000 } : undefined,
-        ),
+        await readJson(request, { timeoutMs: 10_000 }),
         ['operation', 'input'],
       );
       sameBrowserHeaders();

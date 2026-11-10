@@ -125,7 +125,7 @@ export function createAgentAccessApi(
       } else {
         if (url.search !== '') throw new ApiError(400, 'invalid_request');
         const body = optionalKeysObject(
-          await readJson(request),
+          await readJson(request, { timeoutMs: 10_000 }),
           ['requestId', 'decision'],
           ['approvedScopes', 'userCode'],
         );

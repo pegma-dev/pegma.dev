@@ -50,7 +50,7 @@ verification qualify the producer; they do not qualify this host.
 Installed D1 and Core files match the original release archives byte for byte;
 actual public ESM imports resolve the same Core module and error classes.
 On Node `22.18.0`, the ordinary checked-in configurations pass type checks and
-all 539 tests: 490 Node tests across 45 files, 47 real D1 tests across five files,
+all 554 tests: 505 Node tests across 45 files, 47 real D1 tests across five files,
 and two Bench Ticket Worker/D1/R2 tests. The static build emits 21 pages, and
 Wrangler's explicit dry run packages the Worker without uploading it. These
 checks use the published registry graph, without source aliases. Earlier
@@ -127,6 +127,14 @@ Consent POSTs reauthenticate after validating the complete request body and
 immediately before approval. The fresh context must match the original session,
 principal and credential headers. A final check also withholds stale responses
 after the service returns; it does not roll back an approval already committed.
+
+Host-owned JSON POST bodies for portal reads, staff commands, agent test
+reports and consent approvals have a ten-second total read deadline, in
+addition to the byte limit. Trickle input does not restart that deadline.
+An expired body read returns `408 request_timeout`, cancels the reader and
+starts no KB read or consent/report command. This bounds body reading;
+authentication, storage work and SDK-owned protocol parsing keep their own
+boundaries.
 
 `/api/agent-access/*` composes the released protocol plus browser-only consent
 and known-grant controls. Discovery is at

@@ -47,6 +47,7 @@ type Operation = (typeof operations)[number];
 async function fixture() {
   const backing = createMemoryStore();
   let afterRead: (() => Promise<void>) | undefined;
+  let reads = 0;
   const store: Store = {
     collection<T>(definition: CollectionDefinition<T>): CollectionStore<T> {
       const target = backing.collection(definition);
@@ -56,6 +57,7 @@ async function fixture() {
       )
         return target;
       async function observed() {
+        reads += 1;
         const hook = afterRead;
         afterRead = undefined;
         await hook?.();
@@ -63,6 +65,18 @@ async function fixture() {
       // Pause only after the real adapter has returned its actual KB facts.
       return {
         ...target,
+        list(partition) {
+          reads += 1;
+          return target.list(partition);
+        },
+        listVersioned(partition) {
+          reads += 1;
+          return target.listVersioned(partition);
+        },
+        scan(options) {
+          reads += 1;
+          return target.scan(options);
+        },
         async get(key) {
           const value = await target.get(key);
           await observed();
@@ -407,7 +421,15 @@ async function fixture() {
     });
     expect(result.status).toBe('revoked');
   }
-  return { runtime, request, cookie, block, revokeReader, grant };
+  return {
+    runtime,
+    request,
+    cookie,
+    block,
+    revokeReader,
+    grant,
+    reads: () => reads,
+  };
 }
 
 async function expectPrivateResult(
@@ -423,6 +445,139 @@ async function expectPrivateResult(
   expect(encoded).not.toContain('Private test report.');
   expect(encoded).not.toContain('Private test details.');
 }
+
+async function controlledPortalBody(base: Request) {
+  const encoded = new TextEncoder().encode(await base.text());
+  let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let entered = () => {};
+  let resume = () => {};
+  const reading = new Promise<void>((resolve) => (entered = resolve));
+  const released = new Promise<void>((resolve) => (resume = resolve));
+  let closed = false;
+  let sent = 0;
+  const cancel = vi.fn(() => {
+    closed = true;
+  });
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        source = controller;
+      },
+      pull() {
+        entered();
+        return released;
+      },
+      cancel,
+    },
+    { highWaterMark: 0 },
+  );
+  const options: RequestInit & { duplex: 'half' } = {
+    method: 'POST',
+    headers: base.headers,
+    body: stream,
+    duplex: 'half',
+  };
+  return {
+    request: new Request(base.url, options),
+    reading,
+    cancel,
+    trickle() {
+      if (closed || source === undefined)
+        throw new Error('The actual portal body is no longer open.');
+      const end = Math.min(encoded.length, sent + 8);
+      source.enqueue(encoded.slice(sent, end));
+      sent = end;
+    },
+    complete() {
+      if (!closed && source !== undefined) {
+        source.enqueue(encoded.slice(sent));
+        sent = encoded.length;
+        source.close();
+        closed = true;
+      }
+      resume();
+    },
+  };
+}
+
+describe.each(operations)(
+  'authenticated portal %s body deadline',
+  (operation) => {
+    it.each(['stalled', 'trickled'] as const)(
+      'rejects a %s body at the total deadline before reading private KB facts',
+      async (kind) => {
+        const f = await fixture();
+        const body = await controlledPortalBody(f.request(operation));
+        const initialReads = f.reads();
+        vi.useFakeTimers({
+          toFake: ['setTimeout', 'clearTimeout', 'performance'],
+        });
+        let settled = false;
+        const pending = f.runtime.handle(body.request).finally(() => {
+          settled = true;
+        });
+        try {
+          await body.reading;
+          expect(f.reads()).toBe(initialReads);
+          await vi.advanceTimersByTimeAsync(9_000);
+          if (kind === 'trickled') body.trickle();
+          await vi.advanceTimersByTimeAsync(999);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          // Fail promptly on the old path; finally releases its real body so a
+          // ROOT RED run observes the defect without leaving a parked request.
+          expect(settled).toBe(true);
+          const result = await pending;
+          expect(result?.status).toBe(408);
+          expect(await result?.json()).toEqual({ error: 'request_timeout' });
+          expect(f.reads()).toBe(initialReads);
+          expect(body.cancel).toHaveBeenCalledTimes(1);
+          expect(body.request.body?.locked).toBe(false);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          body.complete();
+          try {
+            await pending;
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+      },
+    );
+
+    it('returns the actual restricted publication when the body completes before expiry', async () => {
+      const f = await fixture();
+      const body = await controlledPortalBody(f.request(operation));
+      const initialReads = f.reads();
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'performance'],
+      });
+      let settled = false;
+      const pending = f.runtime.handle(body.request).finally(() => {
+        settled = true;
+      });
+      try {
+        await body.reading;
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(settled).toBe(false);
+        expect(f.reads()).toBe(initialReads);
+        body.complete();
+        await expectPrivateResult(await pending, operation);
+        expect(f.reads()).toBeGreaterThan(initialReads);
+        expect(body.cancel).not.toHaveBeenCalled();
+        expect(body.request.body?.locked).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        body.complete();
+        try {
+          await pending;
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    });
+  },
+);
 
 describe('current permission-scoped portal authority after real KB reads', () => {
   it.each(operations)(

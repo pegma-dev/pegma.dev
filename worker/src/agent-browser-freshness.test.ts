@@ -13,7 +13,7 @@ import {
   type CollectionStore,
   type Store,
 } from '@pegma/storage-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createAgentAccessRuntime,
   AGENT_RESOURCE,
@@ -627,6 +627,172 @@ function delayedCommand(base: Request, input: unknown) {
     release: resume.release,
   };
 }
+
+function controlledApprovalBody(base: Request, input: ApproveInput) {
+  const encoded = new TextEncoder().encode(JSON.stringify(input));
+  const reading = barrier();
+  const releasePull = barrier();
+  let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let closed = false;
+  let sent = 0;
+  const cancel = vi.fn(() => {
+    closed = true;
+  });
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        source = controller;
+      },
+      pull() {
+        reading.release();
+        return releasePull.ready;
+      },
+      cancel,
+    },
+    { highWaterMark: 0 },
+  );
+  const options: RequestInit & { duplex: 'half' } = {
+    method: 'POST',
+    headers: base.headers,
+    body: stream,
+    duplex: 'half',
+  };
+  return {
+    request: new Request(base.url, options),
+    reading: reading.ready,
+    cancel,
+    trickle() {
+      if (closed || source === undefined)
+        throw new Error('The actual consent body is no longer open.');
+      const end = Math.min(encoded.length, sent + 8);
+      source.enqueue(encoded.slice(sent, end));
+      sent = end;
+    },
+    complete() {
+      if (!closed && source !== undefined) {
+        source.enqueue(encoded.slice(sent));
+        sent = encoded.length;
+        source.close();
+        closed = true;
+      }
+      releasePull.release();
+    },
+  };
+}
+
+describe.each(['device_code', 'authorization_code'] as const)(
+  'authenticated %s consent body deadline',
+  (flow) => {
+    it.each(['stalled', 'trickled'] as const)(
+      'rejects a %s body at the total deadline without persisting approval',
+      async (kind) => {
+        const f = await fixture();
+        const approval = await f.pendingApproval(flow);
+        let commits = 0;
+        f.hooks.afterGrantCommit = async () => {
+          commits += 1;
+        };
+        const body = controlledApprovalBody(
+          f.browser('/api/agent-access/approval', 'POST', approval.input),
+          approval.input,
+        );
+        vi.useFakeTimers({
+          toFake: ['setTimeout', 'clearTimeout', 'performance'],
+        });
+        let settled = false;
+        const pending = f.runtime.api(body.request).finally(() => {
+          settled = true;
+        });
+        try {
+          await body.reading;
+          expect(commits).toBe(0);
+          await vi.advanceTimersByTimeAsync(9_000);
+          if (kind === 'trickled') body.trickle();
+          await vi.advanceTimersByTimeAsync(999);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          // The old unbounded route fails here; finally releases its actual
+          // body so ROOT's RED run cannot leave the consent operation parked.
+          expect(settled).toBe(true);
+          const result = await pending;
+          expect(result?.status).toBe(408);
+          expect(await value(result)).toEqual({ error: 'request_timeout' });
+          expect(body.cancel).toHaveBeenCalledTimes(1);
+          expect(body.request.body?.locked).toBe(false);
+          expect(commits).toBe(0);
+          const retained = await f.runtime.api(f.browser(approval.viewPath));
+          expect(retained?.status).toBe(200);
+          expect(await value(retained)).toMatchObject({
+            requestId: approval.requestId,
+            flow,
+            status: 'pending',
+          });
+          expect(commits).toBe(0);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          body.complete();
+          try {
+            await pending;
+          } finally {
+            vi.useRealTimers();
+          }
+        }
+      },
+    );
+
+    it('approves the real request and issues tokens when its body completes before expiry', async () => {
+      const f = await fixture();
+      const approval = await f.pendingApproval(flow);
+      let commits = 0;
+      f.hooks.afterGrantCommit = async () => {
+        commits += 1;
+      };
+      const body = controlledApprovalBody(
+        f.browser('/api/agent-access/approval', 'POST', approval.input),
+        approval.input,
+      );
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'performance'],
+      });
+      let settled = false;
+      const pending = f.runtime.api(body.request).finally(() => {
+        settled = true;
+      });
+      try {
+        await body.reading;
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(settled).toBe(false);
+        expect(commits).toBe(0);
+        body.complete();
+        const result = await pending;
+        expect(result?.status).toBe(200);
+        expect(commits).toBe(1);
+        const tokens = await approval.issue(await value(result));
+        expect(tokens.token_type).toBe('Bearer');
+        expect(tokens.refresh_token).toEqual(expect.any(String));
+        expect(
+          await f.runtime.service.authenticate({
+            token: tokens.access_token,
+            resource: AGENT_RESOURCE,
+          }),
+        ).toMatchObject({
+          clientId: client.clientId,
+          access: { principalId: owner },
+        });
+        expect(body.cancel).not.toHaveBeenCalled();
+        expect(body.request.body?.locked).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        body.complete();
+        try {
+          await pending;
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    });
+  },
+);
 
 describe('actual AA approval authority after delayed browser input', () => {
   it.each(['device_code', 'authorization_code'] as const)(
