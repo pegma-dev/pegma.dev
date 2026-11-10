@@ -5,8 +5,8 @@
  * support-desk site with first-party Identity **email-code** login (not
  * Auth0, Entra, or passkeys-required), Sessions, Mail to a catcher,
  * Support Desk create/list/reply, and Health. Tests inject
- * `createMemoryStore()`. Cloud runbooks inject D1, Azure Tables, or the
- * forthcoming `@pegma/storage-dynamodb` adapter — same composition shape.
+ * `createMemoryStore()`. Cloud runbooks describe wiring D1, Azure Tables, or
+ * the published `@pegma/storage-dynamodb` adapter — same composition shape.
  *
  * Not pegma.dev’s production feedback API. Do not copy commercial route
  * maps, cookie names, or CSRF tokens from any live product.
@@ -72,7 +72,7 @@ export interface BenchTicketCompositionOptions {
   /**
    * Required injected store. Local Docker tests and compose use
    * `createMemoryStore()`. Production-shaped hosts pass a durable adapter
-   * (D1, Azure Tables, or `@pegma/storage-dynamodb` once published).
+   * (D1, Azure Tables, or the published `@pegma/storage-dynamodb`).
    * Memory is never the silent default.
    */
   readonly store: Store;

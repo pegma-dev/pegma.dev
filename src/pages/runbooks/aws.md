@@ -8,9 +8,9 @@ description: One-shot AWS runbook for the Bench Ticket Pegma demo. DynamoDB reco
 
 Same one-shot as [Local Docker](/runbooks/local-docker), [Cloudflare](/runbooks/cloudflare), and [Azure](/runbooks/azure): Bench Ticket with first-party email-code login, Sessions, Support Desk create/list/reply, Health. Mail is a **console catcher** (CloudWatch logs) — do not sign up for SES, SendGrid, ACS, or Resend. Do not add Stripe, Auth0, Entra, or Cognito.
 
-## Requires the storage-core DynamoDB adapter PR
+## Published DynamoDB adapter
 
-Record persistence on AWS uses the Storage Core adapter that passes `packages/storage-core/src/conformance.ts`. That package is being added in [pegma-dev/storage-core#7](https://github.com/pegma-dev/storage-core/pull/7) as **DynamoDB**, named to match siblings:
+Record persistence on AWS uses the published `@pegma/storage-dynamodb@0.4.5` adapter from the [qualified Storage Core release](https://github.com/pegma-dev/storage-core/releases/tag/v0.4.5), named to match siblings:
 
 | Sibling | Package | Factory |
 | --- | --- | --- |
@@ -18,9 +18,9 @@ Record persistence on AWS uses the Storage Core adapter that passes `packages/st
 | Cloudflare D1 | `@pegma/storage-cloudflare-d1` | `createCloudflareD1Store` |
 | AWS DynamoDB | `@pegma/storage-dynamodb` | `createDynamoDbStore` |
 
-**Do not implement that adapter in pegma.dev.** If `pnpm add @pegma/storage-dynamodb` fails because the package is not on npm yet, stop and merge/publish [storage-core#7](https://github.com/pegma-dev/storage-core/pull/7) first, then resume at step 4. Blobs are already published (`@pegma/storage-s3` / `createS3BlobStore`).
+**Use the published adapter rather than implementing it in pegma.dev.** Blobs are also published (`@pegma/storage-s3` / `createS3BlobStore`).
 
-Until that package is on npm, Local Docker, Cloudflare, and Azure still one-shot from this same fixture.
+The committed host and CI fixture use `createMemoryStore()`. This runbook describes AWS wiring; the adapter's qualified publication does not establish an AWS deployment or production validation of Bench Ticket.
 
 ## Prerequisites
 
@@ -77,13 +77,13 @@ aws s3api create-bucket --bucket "$BUCKET" --region "$REGION"
 
 The adapter can create the table on first use (`createTableIfMissing` defaults to true). This runbook provisions it in infrastructure instead, then passes `createTableIfMissing: false` so the task role does not need `CreateTable`. Do not invent a second table “for audit”.
 
-## 4. Point the host at DynamoDB (after the adapter is on npm)
+## 4. Point the host at DynamoDB
 
 ```sh
 pnpm add @pegma/storage-dynamodb @aws-sdk/client-dynamodb @pegma/storage-s3 @aws-sdk/client-s3
 ```
 
-Pin `@pegma/storage-dynamodb` to the exact version in [catalog.json](/catalog.json) once the compiler lists it. Until then, use the version the storage-core release publishes (do not invent a caret range).
+Pin `@pegma/storage-dynamodb` to the exact version in [catalog.json](/catalog.json); the qualified release cited here is `0.4.5`. Do not invent a caret range.
 
 In `recipes/bench-ticket/host.ts`, replace `createMemoryStore()` with the sibling-shaped factory:
 
@@ -98,7 +98,7 @@ const store = createDynamoDbStore({
 });
 ```
 
-If the published factory options differ, copy them from that package’s README — keep the call site a single `createDynamoDbStore({ … })` returning a Storage Core `Store`, then pass it to `createBenchTicketComposition` unchanged.
+Check factory options against the [versioned package README](https://github.com/pegma-dev/storage-core/blob/v0.4.5/packages/storage-dynamodb/README.md). Pass the returned Storage Core `Store` to `createBenchTicketComposition` unchanged.
 
 Optional blobs (provisioned above; not required for the ticket round-trip):
 
@@ -168,8 +168,8 @@ Follow logs with the platform’s tail (`aws logs tail … --follow` or App Runn
 | Sign | Next command |
 | --- | --- |
 | `aws sts get-caller-identity` fails | `aws login` / `aws configure sso` |
-| `pnpm add @pegma/storage-dynamodb` 404 | Adapter PR not merged/published. Do **not** implement DynamoDB here. Finish Local Docker / Cloudflare / Azure instead. See [storage-core#7](https://github.com/pegma-dev/storage-core/pull/7). |
-| `Cannot find module '@pegma/storage-dynamodb'` | Same — wait for the storage-core AWS package; name it `@pegma/storage-dynamodb` / `createDynamoDbStore`. |
+| `pnpm add @pegma/storage-dynamodb` 404 | Version `0.4.5` is published. Check the exact package/version spelling, registry configuration and connectivity; do not implement a local replacement. |
+| `Cannot find module '@pegma/storage-dynamodb'` | Install the exact published package in this host and check dependency resolution; its public factory is `createDynamoDbStore`. |
 | `ResourceNotFoundException` | `aws dynamodb describe-table --table-name bench-ticket`. Recreate using `pk` HASH + `sk` RANGE. |
 | Health 503 / storage fail | IAM: the task role needs DynamoDB on that table. `aws dynamodb scan --table-name bench-ticket --max-items 1`. |
 | Origin invalid / finish 400 | `BENCH_TICKET_ORIGIN` must be the public HTTPS origin with no path. |
@@ -193,7 +193,7 @@ rm -f /tmp/bench-ticket.cookies
 
 ## Store wiring (same composition)
 
-After the adapter exists, the host is the Azure/D1 shape:
+The published adapter uses the same injected-Store composition shape as Azure/D1:
 
 ```ts
 import { createDynamoDbStore } from "@pegma/storage-dynamodb";

@@ -17,7 +17,7 @@ Logged-out: sign in with a first-party **email code**. Logged-in: file a ticket,
 | Azure | `@pegma/storage-azure-tables` | Blob container (provisioned) | console / container logs | [Azure](/runbooks/azure) |
 | AWS | `@pegma/storage-dynamodb` | S3 (`@pegma/storage-s3`) | console / CloudWatch | [AWS](/runbooks/aws) |
 
-The AWS record adapter is `@pegma/storage-dynamodb` (`createDynamoDbStore`) from [storage-core#7](https://github.com/pegma-dev/storage-core/pull/7). The AWS runbook uses the same one-shot shape as Azure and D1; it requires that adapter PR to be merged before `pnpm add` succeeds.
+The AWS record adapter is the published `@pegma/storage-dynamodb@0.4.5` (`createDynamoDbStore`); see the [qualified release](https://github.com/pegma-dev/storage-core/releases/tag/v0.4.5). The AWS runbook describes the same composition shape as Azure and D1. The committed host and CI fixture use MemoryStore; package publication does not establish an AWS deployment of that fixture.
 
 **Fixture (CI-tested):** [`recipes/bench-ticket`](https://github.com/pegma-dev/pegma.dev/tree/main/recipes/bench-ticket) — catalog recipe `support-queue-slice`. Pin versions from [`catalog.json`](/catalog.json). Do not invent Auth0, Entra, or Stripe steps.
 

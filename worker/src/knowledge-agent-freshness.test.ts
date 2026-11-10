@@ -20,7 +20,7 @@ import {
   type CollectionStore,
   type Store,
 } from '@pegma/storage-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createAgentPrincipalResolver } from './agent-authority';
 import {
   AGENT_API_URL,
@@ -502,8 +502,185 @@ async function fixture() {
     identity,
     roleStore,
     resolve,
+    hooks,
   };
 }
+
+/** A real request body whose bytes remain controlled after bearer auth. */
+function controlledReportBody(token: string, input: unknown) {
+  const reading = barrier();
+  const releasePull = barrier();
+  let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let closed = false;
+  const encoded = new TextEncoder().encode(JSON.stringify(input));
+  let sent = 0;
+  const cancel = vi.fn(() => {
+    closed = true;
+  });
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        source = controller;
+      },
+      pull() {
+        reading.release();
+        return releasePull.ready;
+      },
+      cancel,
+    },
+    { highWaterMark: 0 },
+  );
+  function complete() {
+    if (!closed && source !== undefined) {
+      source.enqueue(encoded.slice(sent));
+      sent = encoded.length;
+      source.close();
+      closed = true;
+    }
+    releasePull.release();
+  }
+  const options: RequestInit & { duplex: 'half' } = {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'Content-Type': 'application/json',
+    },
+    body: stream,
+    duplex: 'half',
+  };
+  return {
+    request: new Request(IDENTITY_ISSUER + '/api/knowledge/reports', options),
+    reading: reading.ready,
+    cancel,
+    trickle() {
+      if (closed || source === undefined)
+        throw new Error('The actual request stream is no longer open.');
+      const next = Math.min(encoded.length, sent + 8);
+      source.enqueue(encoded.slice(sent, next));
+      sent = next;
+    },
+    complete,
+  };
+}
+
+describe('authenticated local-agent report body deadline', () => {
+  async function submission(articleId: string) {
+    const f = await fixture();
+    const input = await f.reportInput(articleId);
+    let commits = 0;
+    f.hooks.afterReportCommit = async () => {
+      commits += 1;
+    };
+    const body = controlledReportBody(f.credential.token, {
+      commandId: input.commandId,
+      articleId: input.articleId,
+      ledgerEpoch: input.ledgerEpoch,
+      evidence: input.evidence,
+      report: input.report,
+    });
+    return { f, input, body, commits: () => commits };
+  }
+
+  it.each(['stalled', 'trickled'] as const)(
+    'rejects an actual %s bearer report body at the total deadline without a report commit',
+    async (kind) => {
+      const { f, input, body, commits } = await submission('deadline-' + kind);
+      // Keep the actual Identity/AA/KB setup and its clocks real. Only the
+      // established readJson timer/performance boundary is advanced here.
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'performance'],
+      });
+      let settled = false;
+      const pending = f.knowledge.handle(body.request).finally(() => {
+        settled = true;
+      });
+      try {
+        await body.reading;
+        expect(commits()).toBe(0);
+        await vi.advanceTimersByTimeAsync(9_000);
+        if (kind === 'trickled') body.trickle();
+        await vi.advanceTimersByTimeAsync(999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        // This assertion fails promptly on the old unbounded route, while
+        // finally completes its real body so a RED run never parks forever.
+        expect(settled).toBe(true);
+        const result = await pending;
+        expect(result?.status).toBe(408);
+        expect(await result?.json()).toEqual({ error: 'request_timeout' });
+        expect(body.cancel).toHaveBeenCalledTimes(1);
+        expect(body.request.body?.locked).toBe(false);
+        expect(commits()).toBe(0);
+        expect(
+          await f.knowledge.evidence.list(await f.access(), {
+            articleId: input.articleId,
+          }),
+        ).toMatchObject({ reports: [] });
+        expect(
+          await f.agents.service.authenticate({
+            token: f.credential.token,
+            resource: AGENT_RESOURCE,
+          }),
+        ).toMatchObject({ grantId: f.credential.grantId });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        body.complete();
+        try {
+          await pending;
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    },
+  );
+
+  it('queues an actual report when its complete bearer body arrives before the deadline', async () => {
+    const { f, input, body, commits } = await submission('deadline-positive');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    let settled = false;
+    const pending = f.knowledge.handle(body.request).finally(() => {
+      settled = true;
+    });
+    try {
+      await body.reading;
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      expect(commits()).toBe(0);
+      body.complete();
+      const result = await pending;
+      expect(result?.status).toBe(200);
+      expect(await result?.json()).toMatchObject({
+        reportId: expect.any(String),
+      });
+      expect(commits()).toBe(1);
+      const retained = await f.knowledge.evidence.list(await f.access(), {
+        articleId: input.articleId,
+      });
+      expect(retained.reports).toHaveLength(1);
+      expect(retained.reports[0]).toMatchObject({
+        status: 'pending',
+        submittedBy: ownerId,
+      });
+      expect(
+        (
+          await f.knowledge.application.getEvidence(await f.access(), {
+            articleId: input.articleId,
+          })
+        ).evidence,
+      ).toEqual([]);
+      expect(body.cancel).not.toHaveBeenCalled();
+      expect(body.request.body?.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      body.complete();
+      try {
+        await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+});
 
 it('resolves stored roles before the actual active verified Identity claims without a duplicate user read', async () => {
   const f = await fixture();

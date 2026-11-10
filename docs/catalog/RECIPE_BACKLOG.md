@@ -90,7 +90,7 @@ deferred).
 | --- | --- |
 | **Intent** | A fictional makerspace helpdesk (“Bench Ticket”) runs a small support-desk site with first-party email-code login, sessions, mail to a catcher, and ticket create/list/reply. |
 | **Packages (published)** | `@pegma/identity`, `@pegma/sessions`, `@pegma/mail`, `@pegma/rate-limit`, `@pegma/health`, `@pegma/support-desk-*`, `@pegma/storage-core`, `@pegma/spine` |
-| **Adapters** | memory (local Docker); `storage-cloudflare-d1`; `storage-azure-tables`; forthcoming `storage-dynamodb` |
+| **Adapters** | memory (local Docker); `storage-cloudflare-d1`; `storage-azure-tables`; published `storage-dynamodb@0.4.5` |
 | **Host must provide** | HTTP, cookies, injected Store, mail catcher, email-code secret |
 | **Non-goals** | Auth0/Entra/Cognito, Stripe, production email, passkeys-required login |
 | **Anti-patterns** | Treating Support Desk as hosted SaaS; giving Audit/Mail their own store |

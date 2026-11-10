@@ -50,7 +50,7 @@ verification qualify the producer; they do not qualify this host.
 Installed D1 and Core files match the original release archives byte for byte;
 actual public ESM imports resolve the same Core module and error classes.
 On Node `22.18.0`, the ordinary checked-in configurations pass type checks and
-all 536 tests: 487 Node tests across 45 files, 47 real D1 tests across five files,
+all 539 tests: 490 Node tests across 45 files, 47 real D1 tests across five files,
 and two Bench Ticket Worker/D1/R2 tests. The static build emits 21 pages, and
 Wrangler's explicit dry run packages the Worker without uploading it. These
 checks use the published registry graph, without source aliases. Earlier
@@ -262,8 +262,15 @@ two isolated rate invocations followed by one ready-hint invocation:
 
 The original four other expressions and all 15 rotating cleanup lanes remain
 in place. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
-activation, confirm account-wide cron usage: this configuration already uses
-five expressions and does not add a sixth for retrieval.
+merging, inventory every Worker's current cron triggers in the deployment
+account: pushes to `main` deploy these schedules even while Knowledge is
+disabled. Deployment replaces this Worker's existing expressions with these
+five. The [Workers Free allowance is five triggers per account](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits),
+so this configuration leaves no capacity for another Worker's triggers.
+Require the account total after replacement to fit its effective allowance;
+if it does not, hold the merge and revise the scheduling design. Repeat this
+check before later deployments that change schedules. Retrieval shares the
+fifth expression and does not register a sixth.
 
 The limiter bookmark advances only after success, retaining the prior
 continuation on failure. Follow no-deletion pages and repeat complete cycles;

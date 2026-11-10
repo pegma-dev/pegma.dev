@@ -297,7 +297,7 @@ export function createKnowledgeApi(
         };
         if (request.method === 'POST') {
           if (url.search !== '') throw new ApiError(400, 'invalid_request');
-          const input = await readJson(request);
+          const input = await readJson(request, { timeoutMs: 10_000 });
           const latest = await currentAgent();
           if (latest instanceof Response) return secured(latest);
           const value = await options.evidence.report(latest.access, input);
