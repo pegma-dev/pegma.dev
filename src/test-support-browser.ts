@@ -11,6 +11,7 @@ export class BrowserNode extends EventTarget {
   hidden = false;
   disabled = false;
   checked = false;
+  noValidate = false;
   value = '';
   className = '';
   href = '';
@@ -98,6 +99,7 @@ function documentFromTemplate(template: string) {
     node.hidden = node.attributes.has('hidden');
     node.disabled = node.attributes.has('disabled');
     node.checked = node.attributes.has('checked');
+    node.noValidate = node.attributes.has('novalidate');
     node.value = node.attributes.get('value') ?? '';
     stack.at(-1)?.append(node);
     if (!voidTags.has(tag) && !attributes.endsWith('/')) stack.push(node);
@@ -156,10 +158,11 @@ async function withAbort<T>(
 }
 
 export function supportBrowser(
-  surface: 'customer' | 'staff' | 'queue',
+  surface: 'create' | 'customer' | 'staff' | 'queue',
   respond: (call: BrowserCall) => BrowserResponse | Promise<BrowserResponse>,
 ) {
   const paths = {
+    create: ['feedback.js', 'feedback.astro', '/feedback/'],
     customer: [
       'feedback-ticket.js',
       'feedback/ticket.astro',
@@ -281,6 +284,36 @@ export function supportBrowser(
       const node = document.querySelector(`#${id}`);
       if (!node) throw new Error(`Template has no #${id}.`);
       return node;
+    },
+    /** Models required-field validation BEFORE submit, for the actual forms
+     * loaded above. This is not a browser or a complete HTML validity engine. */
+    nativeSubmit(formId: string) {
+      const form = document.querySelector(`#${formId}`);
+      if (!form || form.tagName !== 'form')
+        throw new Error(`Template has no form #${formId}.`);
+      const submitter = form.querySelectorAll('button').find((node) =>
+        (node.attributes.get('type') ?? 'submit') === 'submit',
+      );
+      if (!submitter || submitter.disabled)
+        return { dispatched: false, blockedBy: 'disabled' };
+      if (!form.noValidate && !submitter.attributes.has('formnovalidate')) {
+        const required = form.querySelectorAll('input, textarea, select').filter(
+          (node) => node.attributes.has('required') && !node.disabled,
+        );
+        const missing = required.some((node) => {
+          const type = node.attributes.get('type');
+          if (type === 'checkbox') return !node.checked;
+          if (type === 'radio')
+            return !form.querySelectorAll('input').some((peer) =>
+              peer.attributes.get('name') === node.attributes.get('name') &&
+              peer.checked,
+            );
+          return node.value === '';
+        });
+        if (missing) return { dispatched: false, blockedBy: 'required' };
+      }
+      form.fire('submit');
+      return { dispatched: true, blockedBy: null };
     },
     mode(value: string) {
       for (const node of document.all()) {

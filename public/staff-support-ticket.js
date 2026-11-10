@@ -1,6 +1,9 @@
 const select = (selector) => document.querySelector(selector);
 const statusNode = select('#staff-ticket-status');
 const signedOut = select('#staff-ticket-signed-out');
+const signInLinks = [...signedOut.querySelectorAll('a')].map((node) => ({
+  node, target: node.target ?? '', rel: node.rel ?? '',
+}));
 const forbidden = select('#staff-ticket-forbidden');
 const detail = select('#staff-ticket-detail');
 const heading = select('#staff-ticket-heading');
@@ -25,6 +28,8 @@ let readGeneration = 0;
 let handoffGeneration = 0;
 let busy = null;
 let takeoverPacket = null;
+let ordinaryPacket = null;
+let ordinaryAcknowledged = false;
 let retryAt = 0;
 let retryTimer = null;
 let retryNotice = null;
@@ -120,6 +125,11 @@ function selectedComposeMode() {
   );
 }
 function updateControls() {
+  composeForm.noValidate = ordinaryPacket !== null && ordinaryPacket.kind !== 'patch';
+  for (const link of signInLinks) {
+    link.node.target = ordinaryPacket === null ? link.target : '_blank';
+    link.node.rel = ordinaryPacket === null ? link.rel : 'noopener noreferrer';
+  }
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
   const state = ticket === undefined ? '' : effectiveHandling(ticket).state;
@@ -138,17 +148,33 @@ function updateControls() {
         : 'Retry take over';
   takeoverButton.disabled =
     blocked ||
+    ordinaryPacket !== null ||
     (takeoverPacket === null &&
       (ticket === undefined || terminal || state === 'human-active'));
   const ordinaryBlocked =
     blocked || ticket === undefined || takeoverPacket !== null;
   for (const button of select('#staff-lifecycle').querySelectorAll('button'))
-    if (button !== takeoverButton) button.disabled = ordinaryBlocked;
-  prioritySelect.disabled = ordinaryBlocked;
+    if (button !== takeoverButton)
+      button.disabled =
+        ordinaryBlocked ||
+        ordinaryAcknowledged ||
+        (ordinaryPacket !== null &&
+          (ordinaryPacket.kind !== 'patch' ||
+            button !== select(ordinaryPacket.button)));
+  prioritySelect.disabled = ordinaryBlocked || ordinaryPacket !== null;
+  composeSubmit.textContent =
+    ordinaryPacket?.kind === 'public'
+      ? 'Retry previous public reply'
+      : ordinaryPacket?.kind === 'internal'
+        ? 'Retry previous internal note'
+        : 'Send';
   composeSubmit.disabled =
     ordinaryBlocked ||
-    !['public', 'internal'].includes(selectedComposeMode()) ||
-    composeBody.value.trim() === '';
+    ordinaryAcknowledged ||
+    ordinaryPacket?.kind === 'patch' ||
+    (ordinaryPacket === null &&
+      (!['public', 'internal'].includes(selectedComposeMode()) ||
+        composeBody.value.trim() === ''));
   composeForm.dataset.mode = selectedComposeMode() || 'unset';
   armRetryTimer();
 }
@@ -258,6 +284,9 @@ async function readViewer(generation, expected = viewer) {
     takeoverPacket = null;
     throw Object.assign(new Error('session_changed'), { status: 401 });
   }
+  if (ordinaryPacket !== null && next.subject !== ordinaryPacket.subject)
+    // Retain the original owner's unknown intent without exposing it here.
+    throw Object.assign(new Error('session_changed'), { status: 401 });
   if (
     expected !== null &&
     (next.subject !== expected.subject || next.csrfToken !== expected.csrfToken)
@@ -352,9 +381,13 @@ function failure(error, action, generation) {
   // A failed/unknown mutation is not a fresh basis for another staff write.
   hideAll();
   if ([400, 404].includes(error.status)) takeoverPacket = null;
-  if (error.status === 401 || error.status === 403) {
+  if (
+    error.status === 401 || error.status === 403 ||
+    (error.status === 404 && ordinaryPacket !== null)
+  ) {
     // A denied ACK may follow a real commit. Retain exact JSON for its owner,
-    // but require a complete fresh ticket read before enabling another write.
+    // including a not-found read under raced cookies. Neither 404 nor GET can
+    // settle it; require a complete fresh owner read before another write.
     authorityReloadRequired = true;
     viewer = null;
     csrfToken = '';
@@ -368,12 +401,14 @@ function failure(error, action, generation) {
   } else
     showStatus(
       error.status === 401
-        ? 'Sign in, then reload this ticket. Any request already sent may have completed.'
+        ? ordinaryPacket !== null
+          ? 'Sign in to the original account in another tab, then return here and reload this ticket. The action already sent may have completed.'
+          : 'Sign in, then reload this ticket. Any request already sent may have completed.'
         : error.status === 403
           ? 'Current staff access could not be confirmed. Any request already sent may have completed.'
           : error.status === 404
             ? 'Ticket not found.'
-            : `Could not confirm the ${action.toLowerCase()} result${error.timedOut ? ' before the request deadline' : ''}. ${action === 'Take over' && takeoverPacket !== null ? 'Reload or retry the same take-over request.' : 'Reload the ticket before another action.'}`,
+            : `Could not confirm the ${action.toLowerCase()} result${error.timedOut ? ' before the request deadline' : ''}. ${action === 'Take over' && takeoverPacket !== null ? 'Reload or retry the same take-over request.' : ordinaryPacket !== null ? 'Reload, then retry the same action. Your current draft is kept.' : 'Reload the ticket before another action.'}`,
       error.status !== 401,
     );
   updateControls();
@@ -462,7 +497,8 @@ async function loadTicket() {
   select('#staff-ticket-id-display').textContent = ticketId;
   showStatus('Loading ticket…');
   try {
-    await readViewer(generation);
+    // A new read may use current credentials for the retained packet owner.
+    await readViewer(generation, null);
     const view = await api(
       `/api/support/admin/tickets/${encodeURIComponent(ticketId)}`,
     );
@@ -470,6 +506,16 @@ async function loadTicket() {
     validateView(view);
     await readViewer(generation);
     authorityReloadRequired = false;
+    if (ordinaryPacket !== null && ordinaryAcknowledged) {
+      if (
+        ordinaryPacket.kind !== 'patch' &&
+        composeBody.value.trim() === ordinaryPacket.draft &&
+        selectedComposeMode() === ordinaryPacket.kind
+      )
+        composeForm.reset();
+      ordinaryPacket = null;
+      ordinaryAcknowledged = false;
+    }
     renderTicket(view);
     showStatus('Ticket loaded.');
     // Private handoff availability does not lock a fully refreshed ticket view.
@@ -486,6 +532,65 @@ async function loadTicket() {
     finishOperation(operation);
   }
 }
+function commandIdentity(includeMessage = false) {
+  if (viewer === null) return null;
+  const expectedAccountId = viewer.subject;
+  const commandId = `${expectedAccountId}~${crypto.randomUUID()}`;
+  const messageId = includeMessage
+    ? `${expectedAccountId}~${crypto.randomUUID()}`
+    : null;
+  if (
+    ![commandId, ...(messageId === null ? [] : [messageId])].every((id) =>
+      /^[A-Za-z0-9._~-]{1,128}$/u.test(id),
+    )
+  ) {
+    showStatus('Could not prepare a retry-safe action for this account.', true);
+    return null;
+  }
+  return Object.freeze({
+    version: 1,
+    expectedAccountId,
+    commandId,
+    ...(messageId === null ? {} : { messageId }),
+  });
+}
+async function sendOrdinaryPacket(packet, label) {
+  const expectedViewer = viewer;
+  const operation = beginOperation();
+  const generation = operation.generation;
+  clearHandoff();
+  updateControls();
+  try {
+    await readViewer(generation, expectedViewer);
+    const ack = await api(packet.path, {
+      method: packet.method,
+      headers: packet.headers,
+      body: packet.body,
+    });
+    guard(generation);
+    validateView(ack);
+    await readViewer(generation, expectedViewer);
+    ordinaryAcknowledged = true;
+    // A historical receipt is not a current view. An arbitrary earlier GET
+    // cannot settle an unknown write; this read follows its confirmed ACK.
+    const refreshed = await loadTicket();
+    if (isCurrent(refreshed.generation))
+      showStatus(
+        refreshed.loaded
+          ? packet.kind === 'patch'
+            ? `Action ${packet.action} applied.`
+            : packet.kind === 'public'
+              ? 'Public reply sent.'
+              : 'Internal note saved.'
+          : `${label} accepted. Current ticket refresh failed; reload before another action.`,
+        !refreshed.loaded,
+      );
+  } catch (error) {
+    failure(error, label, generation);
+  } finally {
+    finishOperation(operation);
+  }
+}
 async function patchTicket(action, extra = {}) {
   if (
     busy !== null ||
@@ -493,31 +598,29 @@ async function patchTicket(action, extra = {}) {
     suspended ||
     authorityReloadRequired ||
     takeoverPacket !== null ||
+    ordinaryAcknowledged ||
+    viewer === null ||
     currentView === null ||
-    !onThisTicket()
+    !onThisTicket() ||
+    (ordinaryPacket !== null &&
+      (ordinaryPacket.kind !== 'patch' || ordinaryPacket.action !== action))
   )
     return;
-  const operation = beginOperation();
-  const generation = operation.generation;
-  clearHandoff();
-  updateControls();
-  try {
-    await readViewer(generation);
-    const view = await api(
-      `/api/support/admin/tickets/${encodeURIComponent(ticketId)}`,
-      { method: 'PATCH', body: JSON.stringify({ action, ...extra }) },
-    );
-    guard(generation);
-    validateView(view);
-    await readViewer(generation);
-    renderTicket(view);
-    showStatus(`Action ${action} applied.`);
-    await loadHandoff();
-  } catch (error) {
-    failure(error, `Action ${action}`, generation);
-  } finally {
-    finishOperation(operation);
+  if (ordinaryPacket === null) {
+    const command = commandIdentity();
+    if (command === null) return;
+    ordinaryPacket = Object.freeze({
+      subject: viewer.subject,
+      kind: 'patch',
+      action,
+      button: action === 'change_priority' ? '#action-priority' : `#action-${action}`,
+      path: `/api/support/admin/tickets/${encodeURIComponent(ticketId)}`,
+      method: 'PATCH',
+      headers: Object.freeze({ 'X-Pegma-Support-Command': '1' }),
+      body: JSON.stringify({ action, ...extra, command }),
+    });
   }
+  await sendOrdinaryPacket(ordinaryPacket, `Action ${ordinaryPacket.action}`);
 }
 takeoverButton.addEventListener('click', async () => {
   if (
@@ -525,6 +628,7 @@ takeoverButton.addEventListener('click', async () => {
     retrySeconds() > 0 ||
     suspended ||
     authorityReloadRequired ||
+    ordinaryPacket !== null ||
     viewer === null ||
     !onThisTicket()
   )
@@ -607,42 +711,33 @@ composeForm.addEventListener('submit', async (event) => {
     suspended ||
     authorityReloadRequired ||
     takeoverPacket !== null ||
+    ordinaryAcknowledged ||
+    viewer === null ||
     currentView === null ||
     !onThisTicket() ||
-    !body ||
-    !['public', 'internal'].includes(mode)
+    ordinaryPacket?.kind === 'patch' ||
+    (ordinaryPacket === null &&
+      (!body || !['public', 'internal'].includes(mode)))
   )
     return;
-  const operation = beginOperation();
-  const generation = operation.generation;
-  clearHandoff();
-  updateControls();
-  try {
-    await readViewer(generation);
+  if (ordinaryPacket === null) {
+    const command = commandIdentity(true);
+    if (command === null) return;
     const suffix = mode === 'public' ? 'messages' : 'notes';
-    const view = await api(
-      `/api/support/admin/tickets/${encodeURIComponent(ticketId)}/${suffix}`,
-      { method: 'POST', body: JSON.stringify({ body }) },
-    );
-    guard(generation);
-    validateView(view);
-    await readViewer(generation);
-    if (composeBody.value.trim() === body && selectedComposeMode() === mode)
-      composeForm.reset();
-    renderTicket(view);
-    showStatus(
-      mode === 'public' ? 'Public reply sent.' : 'Internal note saved.',
-    );
-    await loadHandoff();
-  } catch (error) {
-    failure(
-      error,
-      mode === 'public' ? 'Public reply' : 'Internal note',
-      generation,
-    );
-  } finally {
-    finishOperation(operation);
+    ordinaryPacket = Object.freeze({
+      subject: viewer.subject,
+      kind: mode,
+      path: `/api/support/admin/tickets/${encodeURIComponent(ticketId)}/${suffix}`,
+      method: 'POST',
+      headers: Object.freeze({ 'X-Pegma-Support-Command': '1' }),
+      body: JSON.stringify({ body, command }),
+      draft: body,
+    });
   }
+  await sendOrdinaryPacket(
+    ordinaryPacket,
+    ordinaryPacket.kind === 'public' ? 'Public reply' : 'Internal note',
+  );
 });
 select('#staff-ticket-reload').addEventListener('click', () => {
   if (!onThisTicket()) window.location.reload();

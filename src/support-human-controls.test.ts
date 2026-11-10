@@ -39,7 +39,7 @@ function customerView(handling = 'assistant', status = 'open') {
       {
         id: 'message-1',
         ticketId: id,
-        visibility: 'public',
+        visibility: 'customer',
         authorKind: 'assistant',
         body: 'Fictional instructions.',
         createdAt: '2026-11-09T12:00:00.000Z',
@@ -416,9 +416,18 @@ describe('public Support human-control event handlers (synthetic browser adapter
     expect(posts(page.calls, '/take-over')).toHaveLength(0);
     page.node('action-reopen').fire('click');
     await page.until(() => !page.node('action-take-over').disabled);
-    expect(page.calls.find((call) => call.method === 'PATCH')?.body).toBe(
-      '{"action":"reopen"}',
-    );
+    const reopen = page.calls.find((call) => call.method === 'PATCH');
+    expect(reopen?.headers.get('X-Pegma-Support-Command')).toBe('1');
+    expect(JSON.parse(reopen?.body ?? '{}')).toEqual({
+      action: 'reopen',
+      command: {
+        version: 1,
+        expectedAccountId: account.account.subject,
+        commandId: expect.stringMatching(
+          /^synthetic-reader~[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/u,
+        ),
+      },
+    });
   });
 
   it('renders private handoff as text without fetching guide references or leaking extra fields', async () => {

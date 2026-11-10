@@ -1,6 +1,7 @@
 import type { Logger, PrincipalId } from '@pegma/spine';
 import type { SessionStore } from '@pegma/sessions';
 import type { DurableRateLimiter } from '@pegma/rate-limit';
+import { hasPermission } from '@pegma/authorization-core';
 import type {
   CustomerTicketSummary,
   CustomerTicketView,
@@ -64,6 +65,11 @@ import {
   supportHumanBrowser,
   type SupportHumanCoordinates,
 } from './support-human-auth';
+import {
+  SUPPORT_BROWSER_COMMAND_HEADER,
+  supportBrowserCommand,
+  supportBrowserCommandMode,
+} from './support-browser-commands';
 
 const TICKET_ID_PATH =
   /^\/api\/support\/tickets\/([A-Za-z0-9._~-]{1,200})(?:\/(replies))?$/u;
@@ -418,11 +424,25 @@ async function humanAccess(
   authenticated: SupportHumanCoordinates,
   options: SupportApiOptions,
   staff: boolean,
+  observeCurrentUser?: (user: IdentityUser) => void,
 ) {
   const access = staff
     ? await requireStaffAccess(authenticated, options)
     : customerAccessContext(authenticated.link.subject);
   try {
+    if (observeCurrentUser !== undefined) {
+      const user = await options.identity.getUser(authenticated.link.subject);
+      if (
+        user === null ||
+        user.principalId !== authenticated.link.subject ||
+        user.status !== 'active' ||
+        user.emailVerified !== true
+      )
+        throw new ApiError(401, 'authentication_required');
+      if (typeof user.email !== 'string' || user.email.length === 0)
+        throw new ApiError(503, 'service_unavailable');
+      observeCurrentUser(user);
+    }
     const claims = await options.identity.claimsFor(authenticated.link.subject);
     const link = options.identityLinkFromClaims(claims);
     if (
@@ -444,6 +464,265 @@ async function humanAccess(
   return access;
 }
 
+type StableBrowserRoute =
+  | { readonly kind: 'create' }
+  | {
+      readonly kind: 'customer-reply' | 'staff-reply' | 'note' | 'patch';
+      readonly ticketId: string;
+    };
+
+function stableBrowserRoute(request: Request): StableBrowserRoute {
+  const url = new URL(request.url);
+  if (url.search !== '') throw new ApiError(400, 'invalid_request');
+  if (url.pathname === '/api/support/tickets' && request.method === 'POST')
+    return { kind: 'create' };
+  const customer = TICKET_ID_PATH.exec(url.pathname);
+  if (
+    customer?.[1] !== undefined &&
+    customer[2] === 'replies' &&
+    request.method === 'POST'
+  )
+    return { kind: 'customer-reply', ticketId: customer[1] };
+  const staff = ADMIN_TICKET_PATH.exec(url.pathname);
+  if (staff?.[1] !== undefined) {
+    if (staff[2] === undefined && request.method === 'PATCH')
+      return { kind: 'patch', ticketId: staff[1] };
+    if (
+      request.method === 'POST' &&
+      (staff[2] === 'messages' || staff[2] === 'notes')
+    )
+      return {
+        kind: staff[2] === 'messages' ? 'staff-reply' : 'note',
+        ticketId: staff[1],
+      };
+  }
+  throw new ApiError(400, 'invalid_request');
+}
+
+/** Optional browser retries reuse SDK receipts; this host stores no intent state. */
+async function stableBrowserMutation(
+  request: Request,
+  options: SupportApiOptions,
+): Promise<Response> {
+  const route = stableBrowserRoute(request);
+  const staff = route.kind !== 'create' && route.kind !== 'customer-reply';
+  const entryPermission =
+    route.kind === 'create'
+      ? supportPermissions.create
+      : route.kind === 'customer-reply'
+        ? supportPermissions.replyOwn
+        : route.kind === 'staff-reply'
+          ? supportPermissions.replyAny
+          : route.kind === 'note'
+            ? supportPermissions.note
+            : supportPermissions.queueRead;
+  let requesterEmail: string | undefined;
+  let observeContact = false;
+  const browser = supportHumanBrowser(request, {
+    sessions: options.sessions,
+    authenticate: (incoming) => requireAuthentication(incoming, options),
+    access: (authenticated) =>
+      humanAccess(
+        authenticated,
+        options,
+        staff,
+        observeContact
+          ? (user) => {
+              requesterEmail = user.email;
+            }
+          : undefined,
+      ),
+    permission: entryPermission,
+    mutation: true,
+  });
+  async function current(permission: string = entryPermission) {
+    if (request.headers.get(SUPPORT_BROWSER_COMMAND_HEADER) !== '1')
+      throw new ApiError(403, 'browser_credential_changed');
+    const fresh = await browser.current();
+    if (request.headers.get(SUPPORT_BROWSER_COMMAND_HEADER) !== '1')
+      throw new ApiError(403, 'browser_credential_changed');
+    if (!hasPermission(fresh.access, permission))
+      throw new ApiError(403, 'forbidden');
+    return fresh;
+  }
+  const initial = await current();
+  if (route.kind !== 'patch')
+    await enforceRateLimit(
+      route.kind === 'create' ? options.createLimiter : options.replyLimiter,
+      initial.authenticated.link.subject,
+    );
+  const raw = await readJson(request, { timeoutMs: 10_000 });
+  const body =
+    route.kind === 'create'
+      ? exactObject(raw, ['command', 'subject', 'body', 'category'])
+      : route.kind === 'patch'
+        ? optionalKeysObject(raw, ['command', 'action'], ['priority'])
+        : exactObject(raw, ['command', 'body']);
+  const action =
+    route.kind === 'patch' ? parseStaffPatchAction(body.action) : undefined;
+  if (
+    route.kind === 'patch' &&
+    action !== 'change_priority' &&
+    Object.hasOwn(body, 'priority')
+  )
+    throw new ApiError(400, 'invalid_request');
+  const permission =
+    route.kind === 'patch'
+      ? action === 'assign' || action === 'unassign'
+        ? supportPermissions.assign
+        : supportPermissions.manage
+      : entryPermission;
+  // No full second bootstrap: resolve current roles, active verified Identity
+  // and the same immutable session after the limiter and awaited body.
+  // Create contact observations precede the existing claims and closing session
+  // reads. They never supply principal or permission authority.
+  observeContact = route.kind === 'create';
+  const admitted = await current(permission);
+  const access = admitted.access;
+  const correlationId = mintSupportId();
+  if (route.kind === 'create') {
+    const { expectedRequesterEmail, ...command } = supportBrowserCommand(
+      body.command,
+      access.principalId,
+      'create',
+    );
+    const subject = boundedString(body.subject, 1, 200);
+    const messageBody = boundedString(body.body, 1, 20_000, {
+      allowMultiline: true,
+    });
+    const category = parseCategory(body.category);
+    if (requesterEmail === undefined)
+      throw new ApiError(503, 'service_unavailable');
+    let createAccess = access;
+    if (expectedRequesterEmail !== requesterEmail) {
+      // An obsolete contact can only describe a possible receipt replay on a
+      // currently owned target. This read is not a command-outcome ACK.
+      await options.application.readCustomerTicket(access, command.ticketId);
+      createAccess = (await current(permission)).access;
+    }
+    const view = await options.application.createCustomerTicket(createAccess, {
+      ...command,
+      correlationId,
+      subject,
+      body: messageBody,
+      category,
+      ...(expectedRequesterEmail === null
+        ? {}
+        : { requesterEmail: expectedRequesterEmail }),
+    });
+    await current(permission);
+    options.logger.log('info', 'support.ticket_created', {
+      ticketNumber: view.ticket.number,
+      category,
+    });
+    // Preserve the existing create DTO; no browser protocol metadata is public.
+    return json(publicTicketView(view), { status: 201 });
+  }
+  if (route.kind === 'customer-reply') {
+    const command = supportBrowserCommand(
+      body.command,
+      access.principalId,
+      'message',
+    );
+    const messageBody = boundedString(body.body, 1, 20_000, {
+      allowMultiline: true,
+    });
+    const view = await options.application.replyToCustomerTicket(access, {
+      ...command,
+      correlationId,
+      ticketId: route.ticketId,
+      body: messageBody,
+    });
+    const final = await current(permission);
+    options.logger.log('info', 'support.ticket_replied', {
+      ticketNumber: view.ticket.number,
+    });
+    return json(
+      { ...publicTicketView(view), csrfToken: final.authenticated.csrfToken },
+      { status: 201 },
+    );
+  }
+  if (route.kind === 'staff-reply' || route.kind === 'note') {
+    const command = supportBrowserCommand(
+      body.command,
+      access.principalId,
+      'message',
+    );
+    const messageBody = boundedString(body.body, 1, 20_000, {
+      allowMultiline: true,
+    });
+    const input = {
+      ...command,
+      correlationId,
+      ticketId: route.ticketId,
+      body: messageBody,
+    };
+    const view =
+      route.kind === 'staff-reply'
+        ? await options.application.replyAsStaff(access, input)
+        : await options.application.addNote(access, input);
+    const final = await current(permission);
+    options.logger.log(
+      'info',
+      route.kind === 'staff-reply'
+        ? 'support.staff_replied'
+        : 'support.staff_note_added',
+      { ticketNumber: view.ticket.number },
+    );
+    return json(
+      { ...staffTicketView(view), csrfToken: final.authenticated.csrfToken },
+      { status: 201 },
+    );
+  }
+  const command = supportBrowserCommand(
+    body.command,
+    access.principalId,
+    'patch',
+  );
+  const input = { ...command, correlationId, ticketId: route.ticketId };
+  let view: StaffTicketView;
+  switch (action) {
+    case 'assign':
+      view = await options.application.assignTicket(access, {
+        ...input,
+        assigneeId: access.principalId,
+      });
+      break;
+    case 'unassign':
+      view = await options.application.assignTicket(access, {
+        ...input,
+        assigneeId: null,
+      });
+      break;
+    case 'change_priority':
+      view = await options.application.changePriority(access, {
+        ...input,
+        priority: parseTicketPriority(body.priority),
+      });
+      break;
+    case 'resolve':
+      view = await options.application.resolveTicket(access, input);
+      break;
+    case 'close':
+      view = await options.application.closeTicket(access, input);
+      break;
+    case 'reopen':
+      view = await options.application.reopenTicket(access, input);
+      break;
+    default:
+      throw new ApiError(400, 'invalid_request');
+  }
+  const final = await current(permission);
+  options.logger.log('info', 'support.staff_ticket_patched', {
+    ticketNumber: view.ticket.number,
+    action,
+  });
+  return json({
+    ...staffTicketView(view),
+    csrfToken: final.authenticated.csrfToken,
+  });
+}
+
 /**
  * Authenticated Support Desk customer and staff API.
  *
@@ -461,6 +740,8 @@ export function createSupportApi(
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      if (supportBrowserCommandMode(request))
+        return await stableBrowserMutation(request, options);
       const person = PERSON_PATH.exec(path);
       const humanStaff = HUMAN_STAFF_PATH.exec(path);
       if (person !== null || humanStaff !== null) {
