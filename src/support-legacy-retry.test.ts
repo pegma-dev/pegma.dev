@@ -562,7 +562,7 @@ describe('legacy Support intent retry packets (actual scripts, released SDK)', (
         const first = writes(page)[0]!;
         const readCount = page.calls.filter((call) => call.method === 'GET').length;
         reload(page, kind);
-        await until(page, 
+        await until(page,
           () =>
             page.calls.filter((call) => call.method === 'GET').length > readCount,
         );
