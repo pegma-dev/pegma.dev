@@ -262,7 +262,16 @@ createForm.addEventListener('submit', async (event) => {
   if (viewer === null || !viewReady || authorityReloadRequired) return;
   if (createPacket === null) {
     const draft = formDraft();
-    if (Object.values(draft).some((value) => typeof value !== 'string' || value.trim() === '')) return;
+    if (
+      Object.values(draft).some((value) => typeof value !== 'string' || value.trim() === '') ||
+      draft.subject.length > 200 || draft.body.length > 20_000 ||
+      /[\u0000-\u001F\u007F-\u009F]/u.test(draft.subject) ||
+      /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(draft.body) ||
+      !['feedback', 'bug', 'feature_request', 'documentation', 'question'].includes(draft.category)
+    ) {
+      showStatus('Check the subject, details and category. Remove unsupported control characters and stay within the field limits.', true);
+      return;
+    }
     const expectedAccountId = viewer.subject;
     const expectedRequesterEmail = viewer.email;
     const commandId = `${expectedAccountId}~${crypto.randomUUID()}`;

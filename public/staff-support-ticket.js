@@ -721,6 +721,13 @@ composeForm.addEventListener('submit', async (event) => {
   )
     return;
   if (ordinaryPacket === null) {
+    if (
+      body.length > 20_000 ||
+      /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(body)
+    ) {
+      showStatus('Check the message. Remove unsupported control characters and stay within the field limit.', true);
+      return;
+    }
     const command = commandIdentity(true);
     if (command === null) return;
     const suffix = mode === 'public' ? 'messages' : 'notes';

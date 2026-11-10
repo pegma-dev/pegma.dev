@@ -948,3 +948,155 @@ describe('legacy Support intent retry packets (actual scripts, released SDK)', (
     },
   );
 });
+
+/** A real terminal ticket keeps the customer request-person control relevant.
+ * Host-only draft validation remains outside the published SDK fixture. */
+async function resolvedCustomerDraftLedger() {
+  const application = createSupportDeskApplication({
+    store: createMemoryStore(), clock: { now: () => new Date().toISOString() },
+  });
+  const customer = resolveAccess({ principalId: 'synthetic-customer' }, {
+    version: 'synthetic-rejected-draft-customer', defaults: [
+      supportPermissions.create, supportPermissions.readOwn,
+      supportPermissions.replyOwn, supportPermissions.requestPerson,
+    ],
+  });
+  const staff = resolveAccess({ principalId: 'synthetic-staff' }, {
+    version: 'synthetic-rejected-draft-staff',
+    defaults: [supportPermissions.queueRead, supportPermissions.manage],
+  });
+  await application.createCustomerTicket(customer, {
+    commandId: randomUUID(), correlationId: randomUUID(), ticketId,
+    messageId: randomUUID(), subject: 'Fictional resolved question',
+    body: 'Fictional original question.',
+  });
+  await application.resolveTicket(staff, {
+    commandId: randomUUID(), correlationId: randomUUID(), ticketId,
+  });
+  const baseline = (await application.readStaffTicket(staff, ticketId)).ticket.revision;
+  const identity = { account: { subject: customer.principalId, email: 'fictional-reader@example.test' },
+    csrfToken: 'synthetic-current-csrf' };
+  function wire<T extends { ticket: { number: number } }>(view: T) {
+    return { ...view, ticket: { ...view.ticket, marker: `[PEG-${view.ticket.number}]` }, csrfToken: identity.csrfToken };
+  }
+  return {
+    async read(call: BrowserCall): Promise<BrowserResponse> {
+      return { body: call.path.startsWith('/api/identity/')
+        ? identity : wire(await application.readCustomerTicket(customer, ticketId)) };
+    },
+    async commit(call: BrowserCall): Promise<BrowserResponse> {
+      const input = JSON.parse(call.body ?? '{}') as {
+        body: string; command: { commandId: string; messageId: string };
+      };
+      const view = await application.replyToCustomerTicket(customer, {
+        commandId: input.command.commandId, messageId: input.command.messageId,
+        correlationId: randomUUID(), ticketId, body: input.body,
+      });
+      return { status: 201, body: wire(view) };
+    },
+    async effects() {
+      return (await application.readStaffTicket(staff, ticketId)).ticket.revision - baseline;
+    },
+  };
+}
+
+describe('invalid new draft before ordinary packet ownership', () => {
+  it.each(['create', 'customer-reply', 'staff-reply', 'note'] as const)(
+    'allows a corrected %s draft after host-only C1 rejection without holding a phantom pending packet',
+    async (kind) => {
+      // Import the actual shared host validator rather than copying its regex.
+      // Support020's nonempty body check itself does not reject C1; this is
+      // explicitly a host400 adapter plus real SDK success/effect proof.
+      const { ApiError, boundedString } = await import('../worker/src/api-auth');
+      const sdk = kind === 'customer-reply' ? await resolvedCustomerDraftLedger() : await ledger(kind);
+      const invalidBody = 'A fictional rejected \u009b draft.';
+      const rejected: { call: BrowserCall; body: string; status: number; code: string }[] = [];
+      let successfulSdkCommands = 0;
+      const page = supportBrowser(surface(kind), async (call) => {
+        if (call.method === 'GET') return sdk.read(call);
+        const parsed = JSON.parse(call.body ?? '{}') as { subject?: unknown; body?: unknown };
+        try {
+          if (kind === 'create') boundedString(parsed.subject, 1, 200);
+          boundedString(parsed.body, 1, 20_000, { allowMultiline: true });
+        } catch (error) {
+          if (!(error instanceof ApiError)) throw error;
+          rejected.push({ call, body: String(parsed.body), status: error.status, code: error.code });
+          return { status: error.status, body: { error: error.code } };
+        }
+        const result = await sdk.commit(call);
+        successfulSdkCommands += 1;
+        return result;
+      });
+      await ready(page, kind);
+      const ids = controls(kind);
+      edit(page, kind);
+      page.node(ids.draft).value = invalidBody;
+      page.node(ids.form).fire('input'); page.node(ids.form).fire('change');
+      // The actual form's required/maxlength constraints do not exclude C1.
+      // Its modeled native activation reaches the genuine script listener.
+      expect(page.nativeSubmit(ids.form).dispatched).toBe(true);
+      await until(page, () => {
+        const status = page.node(ids.status);
+        const visibleError = status.dataset.tone === 'error' && status.textContent !== '';
+        // Native SDK hashing can yield beyond drain's microtask window. Wait
+        // for the server refusal to reach the UI, or a positively observed
+        // local validation error with a settled editable form and no write.
+        return visibleError && (rejected.length > 0 || (
+          writes(page).length === 0 && !page.node(ids.detail).hidden &&
+          page.node(ids.form).querySelector('button')?.disabled === false
+        ));
+      });
+      await page.drain();
+      const invalidCalls = [...writes(page)];
+      for (const refusal of rejected) {
+        expect(refusal.status).toBe(400); expect(refusal.code).toBe('invalid_request');
+        expect(refusal.body).toBe(invalidBody);
+        expect(JSON.parse(refusal.call.body ?? '{}').body).toBe(invalidBody);
+      }
+      expect(successfulSdkCommands).toBe(0);
+      expect(await sdk.effects()).toBe(0);
+      expect(page.node(ids.draft).value).toBe(invalidBody);
+      // A corrected implementation may refuse locally before packet/IDs,
+      // without any HTTP write; the existing source instead gets real host400.
+      expect(invalidCalls).toHaveLength(rejected.length);
+      reload(page, kind); await ready(page, kind);
+      const phantomOwnership = page.node(ids.form).noValidate;
+      const human = kind === 'create' ? null
+        : page.node(kind === 'customer-reply' ? 'request-person' : 'action-take-over');
+      const humanAvailable = human === null ? null : !human.hidden && !human.disabled;
+      edit(page, kind, true);
+      // The shared later-draft helper deliberately flips mode for immutable
+      // retry tests. This is a fresh corrected intent of this case's kind.
+      if (kind === 'staff-reply' || kind === 'note')
+        page.mode(kind === 'note' ? 'internal' : 'public');
+      page.node(ids.form).fire('input'); page.node(ids.form).fire('change');
+      const writesBeforeCorrection = writes(page).length;
+      expect(page.nativeSubmit(ids.form).dispatched).toBe(true);
+      await until(page, () => writes(page).length > writesBeforeCorrection);
+      const corrected = writes(page).at(-1)!;
+      expect(corrected.path).toBe(kind === 'create' ? '/api/support/tickets'
+        : kind === 'customer-reply' ? `/api/support/tickets/${ticketId}/replies`
+          : `/api/support/admin/tickets/${ticketId}/${kind === 'staff-reply' ? 'messages' : 'notes'}`);
+      expect(JSON.parse(corrected.body ?? '{}').body).toBe(nextDraft);
+      expect(corrected.body).not.toContain(invalidBody);
+      command(corrected, kind);
+      if (invalidCalls[0]) {
+        const old = JSON.parse(invalidCalls[0].body ?? '{}').command;
+        const next = JSON.parse(corrected.body ?? '{}').command;
+        expect(next.commandId).not.toBe(old.commandId);
+        expect(next.messageId).not.toBe(old.messageId);
+        if (kind === 'create') expect(next.ticketId).not.toBe(old.ticketId);
+      }
+      expect(phantomOwnership).toBe(false);
+      if (humanAvailable !== null) expect(humanAvailable).toBe(true);
+      const success = kind === 'create' ? 'Ticket created.' : kind === 'customer-reply' ? 'Reply sent.'
+        : kind === 'staff-reply' ? 'Public reply sent.' : 'Internal note saved.';
+      await until(page, () => page.node(ids.status).textContent.includes(success));
+      await page.drain();
+      expect(successfulSdkCommands).toBe(1);
+      expect(await sdk.effects()).toBe(1);
+      expect(page.node(ids.form).noValidate).toBe(false);
+      expect(page.node(ids.draft).value).toBe('');
+    },
+  );
+});

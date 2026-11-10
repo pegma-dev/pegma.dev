@@ -477,7 +477,13 @@ replyForm.addEventListener('submit', async (event) => {
     return;
   if (replyPacket === null) {
     const body = new FormData(replyForm).get('body');
-    if (typeof body !== 'string' || body.trim() === '') return;
+    if (
+      typeof body !== 'string' || body.trim() === '' || body.length > 20_000 ||
+      /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(body)
+    ) {
+      showStatus('Check the reply. Remove unsupported control characters and stay within the field limit.', true);
+      return;
+    }
     const expectedAccountId = viewer.subject;
     const commandId = `${expectedAccountId}~${crypto.randomUUID()}`;
     const messageId = `${expectedAccountId}~${crypto.randomUUID()}`;
