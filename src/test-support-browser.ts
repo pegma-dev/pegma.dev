@@ -120,10 +120,39 @@ export interface BrowserCall {
   readonly method: string;
   readonly body?: string;
   readonly headers: Headers;
+  readonly signal?: AbortSignal;
 }
 export interface BrowserResponse {
   readonly status?: number;
   readonly body: unknown;
+  readonly headers?: HeadersInit;
+  readonly json?: () => Promise<unknown>;
+}
+
+const disposers = new Set<() => void>();
+export function disposeSupportBrowsers() {
+  for (const dispose of disposers) dispose();
+  disposers.clear();
+}
+
+async function withAbort<T>(
+  pending: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return pending;
+  let rejectAbort: (reason: unknown) => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () =>
+    rejectAbort(new DOMException('Aborted browser request', 'AbortError'));
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  try {
+    return await Promise.race([pending, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 export function supportBrowser(
@@ -147,16 +176,33 @@ export function supportBrowser(
   const document = documentFromTemplate(
     readFileSync(new URL(`./pages/${page}`, import.meta.url), 'utf8'),
   );
+  let reloads = 0;
   const window = Object.assign(new EventTarget(), {
-    location: { href: `https://pegma.dev${path}?id=ticket-example` },
+    location: {
+      href: `https://pegma.dev${path}?id=ticket-example`,
+      reload: () => {
+        ++reloads;
+      },
+    },
   });
   const calls: BrowserCall[] = [];
   let activeReads = 0;
   class BrowserJsonResponse extends Response {
+    constructor(
+      body: string | undefined,
+      init: ResponseInit,
+      readonly reader?: () => Promise<unknown>,
+      readonly signal?: AbortSignal,
+    ) {
+      super(body, init);
+    }
     override async json(): Promise<unknown> {
       ++activeReads;
       try {
-        return await super.json();
+        return await withAbort(
+          this.reader ? this.reader() : super.json(),
+          this.signal,
+        );
       } finally {
         --activeReads;
       }
@@ -179,6 +225,10 @@ export function supportBrowser(
       URL,
       URLSearchParams,
       Headers,
+      Date,
+      setTimeout,
+      clearTimeout,
+      AbortController,
       FormData: BrowserFormData,
       crypto: { randomUUID },
       fetch: async (request: string, init: RequestInit = {}) => {
@@ -189,14 +239,24 @@ export function supportBrowser(
           method: init.method ?? 'GET',
           ...(typeof init.body === 'string' ? { body: init.body } : {}),
           headers: new Headers(init.headers),
+          ...(init.signal ? { signal: init.signal } : {}),
         };
         calls.push(call);
         ++activeReads;
         try {
-          const response = await respond(call);
-          return new BrowserJsonResponse(JSON.stringify(response.body), {
-            status: response.status ?? 200,
-          });
+          const response = await withAbort(
+            Promise.resolve().then(() => respond(call)),
+            call.signal,
+          );
+          return new BrowserJsonResponse(
+            JSON.stringify(response.body),
+            {
+              status: response.status ?? 200,
+              ...(response.headers ? { headers: response.headers } : {}),
+            },
+            response.json,
+            call.signal,
+          );
         } finally {
           --activeReads;
         }
@@ -204,10 +264,19 @@ export function supportBrowser(
     },
     { filename: script },
   );
+  const dispose = () => {
+    window.dispatchEvent(new Event('pagehide'));
+    disposers.delete(dispose);
+  };
+  disposers.add(dispose);
   return {
     document,
     window,
     calls,
+    dispose,
+    get reloads() {
+      return reloads;
+    },
     node(id: string) {
       const node = document.querySelector(`#${id}`);
       if (!node) throw new Error(`Template has no #${id}.`);
@@ -236,6 +305,9 @@ export function supportBrowser(
         if (idleTurns === 5) return;
       }
       throw new Error('Browser fixture still has unresolved HTTP work.');
+    },
+    async tick() {
+      for (let turn = 0; turn < 30; ++turn) await Promise.resolve();
     },
   };
 }

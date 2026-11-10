@@ -14,8 +14,9 @@ const NO_STAGES: Record<string, string | null> = Object.fromEntries(
 );
 
 /**
- * Deterministic npm pins matching known-good published versions used by
- * recipe backlog pins and the site worker. Never hits the network.
+ * Deterministic released-version fixture for recipe/catalog evaluations.
+ * The site's manifest/lockfile define its separate installed graph; these
+ * recipe pins are not a claim about that graph. Never hits the network.
  */
 const EVAL_NPM: Record<string, string | null> = {
   '@pegma/spine': '0.1.1',

@@ -1,10 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createMemoryStore } from '@pegma/storage-core';
+import { resolveAccess } from '@pegma/authorization-core';
+import {
+  createSupportDeskApplication,
+  supportPermissions,
+} from '@pegma/support-desk-application';
 import {
   browserGate,
+  disposeSupportBrowsers,
   supportBrowser,
   type BrowserCall,
   type BrowserResponse,
 } from './test-support-browser';
+
+afterEach(() => {
+  disposeSupportBrowsers();
+  vi.useRealTimers();
+});
 
 const id = 'ticket-example';
 const account = {
@@ -103,15 +115,15 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('retries the exact customer packet after lost ACK and preserves the reply draft', async () => {
     const lost = browserGate<BrowserResponse>();
     let attempts = 0;
+    let view = customerView();
     const page = supportBrowser('customer', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       if (call.path.endsWith('/request-person')) {
         ++attempts;
-        return attempts === 1
-          ? lost.promise
-          : { body: customerView('human-pending') };
+        if (attempts === 2) view = customerView('human-pending');
+        return attempts === 1 ? lost.promise : { body: view };
       }
-      return { body: customerView() };
+      return { body: view };
     });
     await page.until(() => !page.node('ticket-detail').hidden);
     expect(page.node('message-list').textContent).toContain('Assistant');
@@ -145,7 +157,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
     async (state) => {
       const page = supportBrowser('customer', (call) => ({
         body:
-          call.path === '/api/identity/account' ? account : customerView(state),
+          call.path === '/api/identity/session' ? account : customerView(state),
       }));
       await page.until(() => !page.node('ticket-detail').hidden);
       expect(page.node('request-person').hidden).toBe(true);
@@ -159,7 +171,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('offers request-person for a terminal ticket and creates a new intent only after conflict refresh', async () => {
     let attempts = 0;
     const page = supportBrowser('customer', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       if (call.path.endsWith('/request-person')) {
         ++attempts;
         return attempts === 1
@@ -185,7 +197,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
     'clears customer private content on a %s command response',
     async (status) => {
       const page = supportBrowser('customer', (call) => {
-        if (call.path === '/api/identity/account') return { body: account };
+        if (call.path === '/api/identity/session') return { body: account };
         if (call.path.endsWith('/request-person'))
           return { status, body: { error: 'denied' } };
         return { body: customerView() };
@@ -204,7 +216,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('does not replay an unresolved customer packet as a changed account/session', async () => {
     let changed = false;
     const page = supportBrowser('customer', (call) => {
-      if (call.path === '/api/identity/account')
+      if (call.path === '/api/identity/session')
         return {
           body: changed
             ? {
@@ -237,7 +249,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
       body: 'WRONG_TICKET_BODY',
     };
     const page = supportBrowser('customer', (call) => ({
-      body: call.path === '/api/identity/account' ? account : view,
+      body: call.path === '/api/identity/session' ? account : view,
     }));
     await page.until(() =>
       page.node('ticket-status').textContent.includes('Could not confirm'),
@@ -253,7 +265,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
     let attempts = 0;
     const lost = browserGate<BrowserResponse>();
     const page = supportBrowser('staff', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       if (call.path.endsWith('/handoff')) return { body: handoff() };
       if (call.path.endsWith('/take-over')) {
         ++attempts;
@@ -312,7 +324,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
     let view = staffView();
     let attempts = 0;
     const page = supportBrowser('staff', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       if (call.path.endsWith('/handoff')) return { body: handoff() };
       if (call.path.endsWith('/take-over')) {
         ++attempts;
@@ -349,7 +361,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
     async (field) => {
       let changed = false;
       const page = supportBrowser('staff', (call) => {
-        if (call.path === '/api/identity/account')
+        if (call.path === '/api/identity/session')
           return {
             body: changed
               ? field === 'subject'
@@ -393,7 +405,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('keeps terminal takeover disabled until the separate reopen command succeeds', async () => {
     let view = staffView(7, undefined, 'closed');
     const page = supportBrowser('staff', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       if (call.path.endsWith('/handoff')) return { body: handoff() };
       if (call.method === 'PATCH') view = staffView(8);
       return { body: view };
@@ -412,7 +424,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('renders private handoff as text without fetching guide references or leaking extra fields', async () => {
     const page = supportBrowser('staff', (call) => ({
       body:
-        call.path === '/api/identity/account'
+        call.path === '/api/identity/session'
           ? account
           : call.path.endsWith('/handoff')
             ? handoff()
@@ -450,7 +462,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
       const old = browserGate<BrowserResponse>();
       let denied = false;
       const page = supportBrowser('staff', (call) => {
-        if (call.path === '/api/identity/account') return { body: account };
+        if (call.path === '/api/identity/session') return { body: account };
         if (call.path.endsWith('/handoff')) return old.promise;
         return denied
           ? { status, body: { error: 'denied' } }
@@ -483,7 +495,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
         result.handoff[0]!.transcript.ticketId = 'another-ticket';
       const page = supportBrowser('staff', (call) => ({
         body:
-          call.path === '/api/identity/account'
+          call.path === '/api/identity/session'
             ? account
             : call.path.endsWith('/handoff')
               ? result
@@ -504,7 +516,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
     async (status) => {
       let denied = false;
       const page = supportBrowser('staff', (call) => {
-        if (call.path === '/api/identity/account') return { body: account };
+        if (call.path === '/api/identity/session') return { body: account };
         if (call.path.endsWith('/handoff'))
           return denied
             ? { status, body: { error: 'denied' } }
@@ -534,7 +546,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('clears the old private pane when the next staff ticket response identifies another ticket', async () => {
     let wrong = false;
     const page = supportBrowser('staff', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       if (call.path.endsWith('/handoff')) return { body: handoff() };
       const view = staffView();
       return {
@@ -571,7 +583,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('invalidates a pending private read when the page changes ticket', async () => {
     const old = browserGate<BrowserResponse>();
     const page = supportBrowser('staff', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       return call.path.endsWith('/handoff')
         ? old.promise
         : { body: staffView() };
@@ -594,7 +606,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
     async (surface) => {
       const pending = browserGate<BrowserResponse>();
       const page = supportBrowser(surface, (call) => {
-        if (call.path === '/api/identity/account') return { body: account };
+        if (call.path === '/api/identity/session') return { body: account };
         if (call.method === 'POST') return pending.promise;
         if (call.path.endsWith('/handoff')) return { body: handoff() };
         return { body: surface === 'customer' ? customerView() : staffView() };
@@ -622,7 +634,7 @@ describe('public Support human-control event handlers (synthetic browser adapter
   it('preserves a newer compose draft while the prior public reply is awaiting acknowledgement', async () => {
     const reply = browserGate<BrowserResponse>();
     const page = supportBrowser('staff', (call) => {
-      if (call.path === '/api/identity/account') return { body: account };
+      if (call.path === '/api/identity/session') return { body: account };
       if (call.path.endsWith('/handoff')) return { body: handoff() };
       return call.path.endsWith('/messages')
         ? reply.promise
@@ -675,4 +687,653 @@ describe('public Support human-control event handlers (synthetic browser adapter
     expect(page.node('queue-list').textContent).toBe('');
     expect(page.node('staff-queue-email').textContent).toBe('');
   });
+});
+
+const surfaces = ['customer', 'staff'] as const;
+function controls(surface: (typeof surfaces)[number]) {
+  return surface === 'customer'
+    ? {
+        detail: 'ticket-detail',
+        status: 'ticket-status',
+        action: 'request-person',
+        reload: 'ticket-reload',
+        suffix: '/request-person',
+        messages: 'message-list',
+        draft: 'reply-body',
+      }
+    : {
+        detail: 'staff-ticket-detail',
+        status: 'staff-ticket-status',
+        action: 'action-take-over',
+        reload: 'staff-ticket-reload',
+        suffix: '/take-over',
+        messages: 'staff-message-list',
+        draft: 'compose-body',
+      };
+}
+function ticketFor(surface: (typeof surfaces)[number], accepted = false) {
+  return surface === 'customer'
+    ? customerView(accepted ? 'human-pending' : 'assistant')
+    : staffView(
+        accepted ? 8 : 7,
+        accepted ? { state: 'human-active', generation: 1 } : undefined,
+      );
+}
+
+describe('current-input recovery, retry and lifecycle boundaries', () => {
+  it.each(
+    surfaces.flatMap((surface) =>
+      [401, 403, 503].map((status) => ({ surface, status })),
+    ),
+  )(
+    'ignores an older $surface reload rejection after a newer successful view ($status)',
+    async ({ surface, status }) => {
+      const old = browserGate<BrowserResponse>();
+      const ids = controls(surface);
+      let reads = 0;
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        if (++reads === 1) return old.promise;
+        const view = ticketFor(surface);
+        view.ticket.subject = 'CURRENT_VIEW';
+        return { body: view };
+      });
+      try {
+        await page.until(() => reads === 1);
+        page.node(ids.reload).fire('click');
+        await page.until(() => !page.node(ids.detail).hidden);
+        old.resolve({ status, body: { error: 'old_denial' } });
+        await page.tick();
+        expect(page.node(ids.detail).hidden).toBe(false);
+        expect(
+          page.node(
+            surface === 'customer' ? 'ticket-heading' : 'staff-ticket-heading',
+          ).textContent,
+        ).toContain('CURRENT_VIEW');
+        expect(page.node(ids.status).textContent).toBe('Ticket loaded.');
+        expect(
+          page.calls.some((call) => call.path === '/api/identity/account'),
+        ).toBe(false);
+      } finally {
+        old.resolve({ status, body: {} });
+        page.dispose();
+      }
+    },
+  );
+
+  it.each(['reply', 'compose', 'patch'] as const)(
+    'ignores a late legacy %s rejection after page invalidation',
+    async (kind) => {
+      const old = browserGate<BrowserResponse>();
+      const surface = kind === 'reply' ? 'customer' : 'staff';
+      const ids = controls(surface);
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        if (call.method !== 'GET') return old.promise;
+        return { body: ticketFor(surface) };
+      });
+      try {
+        await page.until(() => !page.node(ids.detail).hidden);
+        page.mode('public');
+        page.node(ids.draft).value = 'LOCAL_DRAFT';
+        if (kind === 'patch') page.node('action-assign').fire('click');
+        else
+          page
+            .node(kind === 'reply' ? 'reply-form' : 'staff-compose-form')
+            .fire('submit');
+        await page.until(() =>
+          page.calls.some((call) => call.method !== 'GET'),
+        );
+        page.window.dispatchEvent(new Event('pagehide'));
+        const neutral = page.node(ids.status).textContent;
+        old.resolve({ status: 401, body: { error: 'old_denial' } });
+        await page.tick();
+        expect(page.node(ids.status).textContent).toBe(neutral);
+        expect(neutral).toContain('view cleared');
+        expect(neutral).not.toContain('loaded');
+        expect(page.node(ids.messages).textContent).toBe('');
+        expect(page.node(ids.draft).value).toBe('LOCAL_DRAFT');
+      } finally {
+        old.resolve({ body: {} });
+        page.dispose();
+      }
+    },
+  );
+
+  it('reads current customer state after a historical request-person acknowledgement', async () => {
+    let view = customerView();
+    let attempts = 0;
+    const current = customerView('human-active', 'closed');
+    current.ticket.subject = 'CURRENT_CLOSED_TICKET';
+    const page = supportBrowser('customer', (call) => {
+      if (call.path === '/api/identity/session') return { body: account };
+      if (call.path.endsWith('/request-person')) {
+        if (++attempts === 1) throw new TypeError('Lost acknowledgement');
+        view = current;
+        return { body: customerView('human-pending', 'waiting_on_support') };
+      }
+      return { body: view };
+    });
+    await page.until(() => !page.node('ticket-detail').hidden);
+    page.node('reply-body').value = 'UNSENT';
+    page.node('request-person').fire('click');
+    await page.until(() =>
+      page.node('ticket-status').textContent.includes('Could not confirm'),
+    );
+    page.node('request-person').fire('click');
+    await page.until(() =>
+      page.node('ticket-status').textContent.includes('requested.'),
+    );
+    expect(page.node('ticket-heading').textContent).toContain(
+      'CURRENT_CLOSED_TICKET',
+    );
+    expect(page.node('ticket-meta').textContent).toContain('closed');
+    expect(page.node('ticket-meta').textContent).not.toContain(
+      'waiting_on_support',
+    );
+    expect(page.node('reply-body').value).toBe('UNSENT');
+    const sent = posts(page.calls, '/request-person');
+    expect(sent[0]?.body).toBe(sent[1]?.body);
+    expect(
+      page.calls
+        .slice(page.calls.lastIndexOf(sent[1]!))
+        .some(
+          (call) =>
+            call.method === 'GET' && call.path === `/api/support/tickets/${id}`,
+        ),
+    ).toBe(true);
+  });
+
+  it.each(surfaces)(
+    'reports accepted $surface command separately from a failed current-state refresh',
+    async (surface) => {
+      const ids = controls(surface);
+      let accepted = false;
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        if (call.path.endsWith(ids.suffix)) {
+          accepted = true;
+          return { body: ticketFor(surface, true) };
+        }
+        return accepted
+          ? { status: 503, body: {} }
+          : { body: ticketFor(surface) };
+      });
+      await page.until(() => !page.node(ids.detail).hidden);
+      page.node(ids.action).fire('click');
+      await page.until(() =>
+        page
+          .node(ids.status)
+          .textContent.includes('accepted. Current ticket refresh failed'),
+      );
+      expect(page.node(ids.status).textContent).not.toContain('Retry the same');
+      expect(page.node(ids.detail).hidden).toBe(true);
+      expect(posts(page.calls, ids.suffix)).toHaveLength(1);
+    },
+  );
+
+  it.each(
+    surfaces.flatMap((surface) =>
+      ['seconds', 'date'].map((format) => ({ surface, format })),
+    ),
+  )(
+    'honors $format Retry-After for $surface without a premature identity probe or changed packet',
+    async ({ surface, format }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-10T05:00:00.000Z'));
+      const ids = controls(surface);
+      let attempts = 0;
+      let view = ticketFor(surface);
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        if (call.path.endsWith(ids.suffix)) {
+          if (++attempts === 1)
+            return {
+              status: 429,
+              headers: {
+                'Retry-After':
+                  format === 'seconds'
+                    ? '3'
+                    : new Date(Date.now() + 3000).toUTCString(),
+              },
+              body: {},
+            };
+          view = ticketFor(surface, true);
+          return { body: view };
+        }
+        return { body: view };
+      });
+      try {
+        await page.until(() => !page.node(ids.detail).hidden);
+        page.node(ids.action).fire('click');
+        await page.until(() =>
+          page.node(ids.status).textContent.includes('rate limited'),
+        );
+        const calls = page.calls.length;
+        page.node(ids.action).fire('click');
+        await page.tick();
+        expect(page.calls).toHaveLength(calls);
+        expect(page.node(ids.action).disabled).toBe(true);
+        expect(page.node(ids.status).textContent).toContain('3 seconds');
+        await vi.advanceTimersByTimeAsync(2999);
+        page.node(ids.action).fire('click');
+        await page.tick();
+        expect(page.calls).toHaveLength(calls);
+        expect(page.node(ids.action).disabled).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(page.node(ids.action).disabled).toBe(false);
+        page.node(ids.action).fire('click');
+        await page.until(() => attempts === 2);
+        await page.drain();
+        const sent = posts(page.calls, ids.suffix);
+        expect(sent).toHaveLength(2);
+        expect(sent[0]?.body).toBe(sent[1]?.body);
+      } finally {
+        page.dispose();
+      }
+    },
+  );
+
+  it.each(surfaces)(
+    'holds ordinary %s writes while an unknown human command remains unresolved, even after reload',
+    async (surface) => {
+      const ids = controls(surface);
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        if (call.path.endsWith(ids.suffix)) return { status: 503, body: {} };
+        return { body: ticketFor(surface) };
+      });
+      await page.until(() => !page.node(ids.detail).hidden);
+      page.node(ids.draft).value = 'UNSENT';
+      page.mode('public');
+      page.node(ids.action).fire('click');
+      await page.until(() =>
+        page.node(ids.status).textContent.includes('Could not confirm'),
+      );
+      expect(page.node(ids.detail).hidden).toBe(true);
+      page.node(ids.reload).fire('click');
+      await page.until(() => !page.node(ids.detail).hidden);
+      if (surface === 'staff')
+        await page.until(
+          () =>
+            page.node('staff-handoff-status').textContent ===
+            'Private handoff loaded.',
+        );
+      await page.drain();
+      const original = posts(page.calls, ids.suffix)[0]?.body;
+      expect(original).toEqual(expect.any(String));
+      const count = page.calls.length;
+      page
+        .node(surface === 'customer' ? 'reply-form' : 'staff-compose-form')
+        .fire('submit');
+      if (surface === 'staff') {
+        expect(page.node('action-assign').disabled).toBe(true);
+        // Exercise the actual handler even though a normal browser click is disabled.
+        page
+          .node('action-assign')
+          .dispatchEvent(new Event('click', { cancelable: true }));
+      }
+      await page.tick();
+      expect(page.calls).toHaveLength(count);
+      expect(page.node(ids.draft).value).toBe('UNSENT');
+      expect(page.node(ids.action).disabled).toBe(false);
+      page.node(ids.action).fire('click');
+      await page.until(
+        () =>
+          posts(page.calls, ids.suffix).length === 2 &&
+          page.node(ids.status).textContent.includes('Could not confirm'),
+      );
+      expect(posts(page.calls, ids.suffix)[1]?.body).toBe(original);
+      expect(page.node(ids.draft).value).toBe('UNSENT');
+    },
+  );
+
+  it.each(['reply', 'compose', 'patch'] as const)(
+    'clears an unknown legacy %s view and describes that action without an unrelated human retry',
+    async (kind) => {
+      const surface = kind === 'reply' ? 'customer' : 'staff';
+      const ids = controls(surface);
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        return call.method === 'GET'
+          ? { body: ticketFor(surface) }
+          : { status: 503, body: {} };
+      });
+      await page.until(() => !page.node(ids.detail).hidden);
+      page.mode('internal');
+      page.node(ids.draft).value = 'UNSENT';
+      if (kind === 'patch') page.node('action-assign').fire('click');
+      else
+        page
+          .node(kind === 'reply' ? 'reply-form' : 'staff-compose-form')
+          .fire('submit');
+      await page.until(() =>
+        page.node(ids.status).textContent.includes('Could not confirm'),
+      );
+      expect(page.node(ids.detail).hidden).toBe(true);
+      expect(page.node(ids.messages).textContent).toBe('');
+      expect(page.node(ids.status).textContent).not.toContain('same human');
+      expect(page.node(ids.status).textContent).not.toContain('same take-over');
+      expect(page.node(ids.status).textContent).toContain(
+        kind === 'reply'
+          ? 'reply'
+          : kind === 'patch'
+            ? 'action assign'
+            : 'internal note',
+      );
+      expect(page.node(ids.draft).value).toBe('UNSENT');
+    },
+  );
+
+  it.each(
+    surfaces.flatMap((surface) =>
+      ['fetch', 'body'].map((phase) => ({ surface, phase })),
+    ),
+  )(
+    'bounds the complete $surface $phase wait and preserves the ambiguous human packet',
+    async ({ surface, phase }) => {
+      vi.useFakeTimers();
+      const ids = controls(surface);
+      const stalled = browserGate<BrowserResponse>();
+      const body = browserGate<unknown>();
+      let attempts = 0;
+      let bodyStarted = false;
+      let view = ticketFor(surface);
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        if (call.path.endsWith(ids.suffix)) {
+          if (++attempts === 1)
+            return phase === 'fetch'
+              ? stalled.promise
+              : {
+                  body: {},
+                  json: () => {
+                    bodyStarted = true;
+                    return body.promise;
+                  },
+                };
+          view = ticketFor(surface, true);
+          return { body: view };
+        }
+        return { body: view };
+      });
+      try {
+        await page.until(() => !page.node(ids.detail).hidden);
+        page.node(ids.draft).value = 'UNSENT';
+        page.node(ids.action).fire('click');
+        await page.until(
+          () => attempts === 1 && (phase === 'fetch' || bodyStarted),
+        );
+        const first = posts(page.calls, ids.suffix)[0]!;
+        await vi.advanceTimersByTimeAsync(14_999);
+        expect(page.node(ids.action).disabled).toBe(true);
+        expect(first.signal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await page.until(() =>
+          page.node(ids.status).textContent.includes('request deadline'),
+        );
+        expect(first.signal?.aborted).toBe(true);
+        expect(page.node(ids.action).disabled).toBe(false);
+        expect(page.node(ids.detail).hidden).toBe(true);
+        page.node(ids.action).fire('click');
+        await page.until(() => attempts === 2);
+        await page.drain();
+        expect(posts(page.calls, ids.suffix)[1]?.body).toBe(first.body);
+        expect(page.node(ids.draft).value).toBe('UNSENT');
+      } finally {
+        stalled.resolve({ body: {} });
+        body.resolve({});
+        page.dispose();
+      }
+    },
+  );
+
+  it.each(surfaces)(
+    'lets explicit $surface Reload supersede a stalled mutation without an old finally unlocking the newer read',
+    async (surface) => {
+      const ids = controls(surface);
+      const post = browserGate<BrowserResponse>();
+      const fresh = browserGate<BrowserResponse>();
+      let posted = false;
+      let refreshing = false;
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        if (call.path.endsWith(ids.suffix)) {
+          posted = true;
+          return post.promise;
+        }
+        if (posted) {
+          refreshing = true;
+          return fresh.promise;
+        }
+        return { body: ticketFor(surface) };
+      });
+      try {
+        await page.until(() => !page.node(ids.detail).hidden);
+        page.node(ids.action).fire('click');
+        await page.until(() => posted);
+        page.node(ids.reload).fire('click');
+        await page.until(() => refreshing);
+        expect(posts(page.calls, ids.suffix)[0]?.signal?.aborted).toBe(true);
+        post.resolve({ status: 401, body: {} });
+        await page.tick();
+        expect(page.node(ids.action).disabled).toBe(true);
+        expect(page.node(ids.status).textContent).toBe('Loading ticket…');
+        fresh.resolve({ body: ticketFor(surface) });
+        await page.until(() => !page.node(ids.detail).hidden);
+        await page.drain();
+        expect(page.node(ids.action).disabled).toBe(false);
+        expect(posts(page.calls, ids.suffix)).toHaveLength(1);
+      } finally {
+        post.resolve({ body: {} });
+        fresh.resolve({ body: ticketFor(surface) });
+        page.dispose();
+      }
+    },
+  );
+
+  it.each(surfaces)(
+    'restores the $surface page with fresh GETs after pageshow while retaining an unresolved packet',
+    async (surface) => {
+      const ids = controls(surface);
+      const page = supportBrowser(surface, (call) => {
+        if (call.path === '/api/identity/session') return { body: account };
+        if (call.path.endsWith('/handoff')) return { body: handoff() };
+        return call.method === 'POST'
+          ? { status: 503, body: {} }
+          : { body: ticketFor(surface) };
+      });
+      await page.until(() => !page.node(ids.detail).hidden);
+      page.node(ids.draft).value = 'LOCAL';
+      page.node(ids.action).fire('click');
+      await page.until(() =>
+        page.node(ids.status).textContent.includes('Could not confirm'),
+      );
+      const original = posts(page.calls, ids.suffix)[0]?.body;
+      page.window.dispatchEvent(new Event('pagehide'));
+      expect(page.node(ids.status).textContent).toContain('view cleared');
+      const getCount = page.calls.filter(
+        (call) => call.method === 'GET',
+      ).length;
+      page.window.dispatchEvent(new Event('pageshow'));
+      await page.until(() => !page.node(ids.detail).hidden);
+      await page.drain();
+      expect(
+        page.calls.filter((call) => call.method === 'GET').length,
+      ).toBeGreaterThan(getCount);
+      expect(posts(page.calls, ids.suffix)).toHaveLength(1);
+      page.node(ids.action).fire('click');
+      await page.until(() => posts(page.calls, ids.suffix).length === 2);
+      expect(posts(page.calls, ids.suffix)[1]?.body).toBe(original);
+      expect(page.node(ids.draft).value).toBe('LOCAL');
+    },
+  );
+
+  it.each(surfaces)(
+    'uses an actual page reload after the $surface address changes instead of reading the old ticket',
+    async (surface) => {
+      const ids = controls(surface);
+      const page = supportBrowser(surface, (call) => ({
+        body:
+          call.path === '/api/identity/session'
+            ? account
+            : call.path.endsWith('/handoff')
+              ? handoff()
+              : ticketFor(surface),
+      }));
+      await page.until(() => !page.node(ids.detail).hidden);
+      page.window.location.href =
+        'https://pegma.dev/feedback/ticket/?id=changed';
+      page.window.dispatchEvent(new Event('popstate'));
+      const count = page.calls.length;
+      expect(page.node(ids.status).textContent).toContain('address changed');
+      page.node(ids.reload).fire('click');
+      await page.tick();
+      expect(page.reloads).toBe(1);
+      expect(page.calls).toHaveLength(count);
+      expect(page.node(ids.detail).hidden).toBe(true);
+    },
+  );
+
+  it.each(['empty', 'invalid-status'] as const)(
+    'keeps a valid staff ticket visible for a %s handoff result',
+    async (kind) => {
+      const result =
+        kind === 'empty'
+          ? { handoff: [], csrfToken: account.csrfToken }
+          : handoff();
+      if (kind === 'invalid-status') result.handoff[0]!.status = 'completed';
+      const page = supportBrowser('staff', (call) => ({
+        body:
+          call.path === '/api/identity/session'
+            ? account
+            : call.path.endsWith('/handoff')
+              ? result
+              : staffView(),
+      }));
+      await page.until(() =>
+        page
+          .node('staff-handoff-status')
+          .textContent.includes(
+            kind === 'empty' ? 'No handoff records' : 'unavailable',
+          ),
+      );
+      expect(page.node('staff-ticket-detail').hidden).toBe(false);
+      expect(page.node('staff-message-list').textContent).toContain(
+        'SYNTHETIC_INTERNAL_NOTE',
+      );
+      expect(page.node('staff-handoff-list').textContent).toBe('');
+    },
+  );
+
+  it.each(['human-pending', 'assistant', 'human-active'] as const)(
+    'preserves the real SDK default human queue for %s and renders its admitted DTOs',
+    async (state) => {
+      const application = createSupportDeskApplication({
+        store: createMemoryStore(),
+        clock: { now: () => new Date().toISOString() },
+        assistantHandlingEnabled: true,
+      });
+      const customer = resolveAccess(
+        { principalId: 'synthetic-reader' },
+        {
+          version: 'browser-queue-fixture',
+          defaults: [
+            supportPermissions.create,
+            supportPermissions.assistantStart,
+          ],
+        },
+      );
+      const staff = resolveAccess(
+        { principalId: 'synthetic-operator' },
+        {
+          version: 'browser-queue-fixture',
+          defaults: [supportPermissions.queueRead, supportPermissions.takeOver],
+        },
+      );
+      const ticket = crypto.randomUUID();
+      await application.createCustomerTicket(customer, {
+        commandId: crypto.randomUUID(),
+        correlationId: crypto.randomUUID(),
+        ticketId: ticket,
+        messageId: crypto.randomUUID(),
+        subject: 'Fictional queue case',
+        body: 'Fictional guide request',
+        ...(state === 'assistant'
+          ? { initialHandling: 'assistant' as const }
+          : {}),
+      });
+      if (state === 'human-active') {
+        const view = await application.readStaffTicket(staff, ticket);
+        await application.takeOverTicket(staff, {
+          commandId: crypto.randomUUID(),
+          correlationId: crypto.randomUUID(),
+          ticketId: ticket,
+          expectedRevision: view.ticket.revision,
+          expectedHandlingGeneration: view.ticket.handling?.generation ?? 0,
+        });
+      }
+      const result = await application.listStaffQueue(staff, {});
+      if (state === 'assistant') {
+        expect(result.items).toEqual([]);
+        const all = await application.listStaffQueue(staff, {
+          handling: 'all',
+        });
+        expect(all).toMatchObject({
+          items: [
+            expect.objectContaining({
+              ticketId: ticket,
+              handling: 'assistant',
+            }),
+          ],
+        });
+      } else {
+        expect(result).toMatchObject({
+          items: [
+            expect.objectContaining({ ticketId: ticket, handling: state }),
+          ],
+        });
+      }
+      // Host HTTP preservation is independently exercised by support-human-control.test.ts.
+      const page = supportBrowser('queue', (call) => ({
+        body:
+          call.path === '/api/identity/account'
+            ? account
+            : { items: result.items, csrfToken: account.csrfToken },
+      }));
+      await page.until(() => !page.node('staff-queue-panel').hidden);
+      if (state === 'assistant') {
+        expect(page.node('queue-list').textContent).toBe(
+          'No tickets match these filters.',
+        );
+        expect(page.node('queue-list').textContent).not.toContain(
+          'Assistant handling',
+        );
+        expect(page.node('queue-list').textContent).not.toContain(ticket);
+      } else {
+        expect(page.node('queue-list').textContent).toContain(
+          state === 'human-active'
+            ? 'Human support active'
+            : 'Waiting for human support',
+        );
+      }
+      for (const call of page.calls.filter((entry) =>
+        entry.path.startsWith('/api/support/admin/queue'),
+      ))
+        expect(
+          new URL(call.path, 'https://pegma.dev').searchParams.has('handling'),
+        ).toBe(false);
+      expect(page.node('queue-list').textContent).not.toContain(
+        '[object Object]',
+      );
+    },
+  );
 });

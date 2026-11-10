@@ -1,6 +1,8 @@
 import { createMemoryStore } from '@pegma/storage-core';
+import type { Logger } from '@pegma/spine';
 import { describe, expect, it, vi } from 'vitest';
 import { isPlainObject } from './api-auth';
+import { createSupportApi } from './support-api';
 import {
   humanControlFixture,
   controlledHumanBody,
@@ -118,6 +120,60 @@ describe('public SDK human controls with real Identity, sessions and audited rol
     ).toBe(404);
   });
 
+  it('returns an empty handoff list for a real legacy ticket without changing its records', async () => {
+    const f = await fixture();
+    const ticket = await f.createTicket();
+    const before = await f.rows(ticket);
+    expect(before.some((row) => row.kind === 'handoff_work')).toBe(false);
+    const response = await f.api(f.request('handoff', ticket, 'operator'));
+    expect(response.status).toBe(200);
+    expect(await value(response)).toEqual({
+      handoff: [],
+      csrfToken: f.csrf.get('operator'),
+    });
+    expect(await f.rows(ticket)).toEqual(before);
+  });
+
+  it.each(['human-pending', 'assistant', 'human-active'] as const)(
+    'keeps the default human queue boundary for actual SDK %s handling',
+    async (handling) => {
+      const f = await fixture();
+      const ticket = await f.createTicket(handling === 'assistant');
+      if (handling === 'human-active')
+        expect(
+          (
+            await f.api(
+              f.request(
+                'take-over',
+                ticket,
+                'operator',
+                await f.packet(ticket),
+              ),
+            )
+          ).status,
+        ).toBe(200);
+      const source = await f.runtime.application.listStaffQueue(
+        await f.staffAccess(),
+        { handling: 'all' },
+      );
+      expect(source.items).toHaveLength(1);
+      expect(source.items[0]?.handling).toBe(handling);
+      const response = await f.api(
+        new Request('https://pegma.dev/api/support/admin/queue', {
+          headers: { Cookie: f.cookies.get('operator')! },
+        }),
+      );
+      expect(response.status).toBe(200);
+      const result = await value(response);
+      expect(result.csrfToken).toBe(f.csrf.get('operator'));
+      if (handling === 'assistant') expect(result.items).toEqual([]);
+      else
+        expect(result.items).toEqual([
+          expect.objectContaining({ ticketId: ticket, handling }),
+        ]);
+    },
+  );
+
   it('returns the explicit private handoff projection only to current Support, with no Admin/Knowledge implication', async () => {
     const f = await fixture();
     const ticket = await f.createTicket(true);
@@ -128,6 +184,7 @@ describe('public SDK human controls with real Identity, sessions and audited rol
       handoff: [
         {
           ticketId: ticket,
+          status: 'pending',
           summary: humanPrivateSummary,
           attemptedGuideIds: [humanPrivateGuide],
           transcript: { ticketId: ticket },
@@ -261,6 +318,101 @@ describe('public SDK human controls with real Identity, sessions and audited rol
     expect(visible).toContain(reply);
     expect(visible).not.toContain(note);
   });
+
+  it('returns the current browser CSRF token after an actual customer reply without private context leakage', async () => {
+    const f = await fixture();
+    const ticket = await f.createTicket(true, 1);
+    await f.privateEscalation(ticket);
+    const before = await f.rows(ticket);
+    expect(before.some((row) => row.kind === 'handoff_work')).toBe(true);
+    const reply = 'A fictional public customer follow-up.';
+    const response = await f.api(
+      new Request(
+        'https://pegma.dev/api/support/tickets/' + ticket + '/replies',
+        {
+          method: 'POST',
+          headers: f.request('request-person', ticket, 'owner', {}).headers,
+          body: JSON.stringify({ body: reply }),
+        },
+      ),
+    );
+    expect(response.status).toBe(201);
+    const stored = await f.runtime.application.readStaffTicket(
+      await f.staffAccess(),
+      ticket,
+    );
+    expect(
+      stored.messages.filter((message) => message.body === reply),
+    ).toHaveLength(1);
+    expect(
+      stored.messages.some((message) =>
+        message.body.includes(humanPrivateNote),
+      ),
+    ).toBe(true);
+    const result = await value(response);
+    expect(result).toMatchObject({
+      ticket: { id: ticket },
+      messages: expect.arrayContaining([
+        expect.objectContaining({ body: reply, authorKind: 'customer' }),
+      ]),
+    });
+    const encoded = JSON.stringify(result);
+    expect(encoded).not.toContain(humanPrivateNote);
+    expect(encoded).not.toContain(humanPrivateSummary);
+    expect(encoded).not.toContain(humanPrivateGuide);
+    expect(encoded).not.toContain('transcript');
+    expect(result.csrfToken).toBe(f.csrf.get('owner'));
+  });
+
+  it.each(['request-person', 'take-over'] as const)(
+    'logs only a coarse ticket number after an actual %s success',
+    async (route) => {
+      const f = await fixture();
+      const ticket = await f.createTicket(true, 1);
+      if (route === 'take-over') await f.privateEscalation(ticket);
+      const events: Parameters<Logger['log']>[] = [];
+      const logger: Logger = {
+        log(...event) {
+          events.push(event);
+        },
+      };
+      const api = createSupportApi({ ...f.runtime, logger });
+      const actor = route === 'request-person' ? 'owner' : 'operator';
+      const packet =
+        route === 'request-person'
+          ? { commandId: crypto.randomUUID() }
+          : await f.packet(ticket);
+      const response = await api(f.request(route, ticket, actor, packet));
+      expect(response.status).toBe(200);
+      const stored = await f.runtime.application.readStaffTicket(
+        await f.staffAccess(),
+        ticket,
+      );
+      expect(stored.ticket.handling?.state).toBe(
+        route === 'request-person' ? 'human-pending' : 'human-active',
+      );
+      expect(events).toEqual([
+        [
+          'info',
+          route === 'request-person'
+            ? 'support.ticket_human_requested'
+            : 'support.staff_ticket_taken_over',
+          { ticketNumber: stored.ticket.number },
+        ],
+      ]);
+      const encoded = JSON.stringify(events);
+      for (const privateValue of [
+        humanPrivateNote,
+        humanPrivateSummary,
+        humanPrivateGuide,
+        f.cookies.get(actor)!,
+        f.csrf.get(actor)!,
+        ticket,
+        'A fictional public fixture question.',
+      ])
+        expect(encoded).not.toContain(privateValue);
+    },
+  );
 
   it.each(['request-person', 'take-over'] as const)(
     'validates the closed immutable %s packet and method/query boundary',

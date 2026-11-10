@@ -22,19 +22,49 @@ let viewer = null;
 let currentView = null;
 let readGeneration = 0;
 let handoffGeneration = 0;
-let busy = false;
+let busy = null;
 let takeoverPacket = null;
+let retryAt = 0;
+let retryTimer = null;
+let retryNotice = null;
+let suspended = false;
+const requests = new Set();
+const requestTimeoutMs = 15_000;
 
-function showStatus(message, error = false) {
+function paintStatus(message, error = false) {
   statusNode.textContent = message;
   statusNode.dataset.tone = error ? 'error' : 'neutral';
+}
+function showStatus(message, error = false) {
+  retryNotice = null;
+  paintStatus(message, error);
 }
 function onThisTicket() {
   return new URL(window.location.href).searchParams.get('id') === ticketId;
 }
+function isCurrent(generation) {
+  return generation === readGeneration && onThisTicket() && !suspended;
+}
 function guard(generation) {
-  if (generation !== readGeneration || !onThisTicket())
+  if (!isCurrent(generation))
     throw Object.assign(new Error('stale_view'), { stale: true });
+}
+function cancelRequests() {
+  for (const controller of requests) controller.abort();
+  requests.clear();
+}
+function beginOperation() {
+  suspended = false;
+  const operation = { generation: ++readGeneration };
+  cancelRequests();
+  busy = operation;
+  return operation;
+}
+function finishOperation(operation) {
+  if (busy === operation) {
+    busy = null;
+    updateControls();
+  }
 }
 function clearHandoff() {
   ++handoffGeneration;
@@ -58,10 +88,20 @@ function hideAll() {
 }
 function invalidate() {
   ++readGeneration;
+  suspended = true;
+  cancelRequests();
+  busy = null;
   viewer = null;
   csrfToken = '';
-  takeoverPacket = null;
+  if (!onThisTicket()) takeoverPacket = null;
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
   hideAll();
+  showStatus(
+    onThisTicket()
+      ? 'Ticket view cleared. Reload to check current access and state.'
+      : 'The ticket address changed. Reload this page to open it.',
+  );
 }
 function effectiveHandling(ticket) {
   const handling = ticket.handling ?? { state: 'human-pending', generation: 0 };
@@ -82,42 +122,123 @@ function updateControls() {
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
   const state = ticket === undefined ? '' : effectiveHandling(ticket).state;
+  const seconds = retrySeconds();
+  const blocked = busy !== null || viewer === null || suspended || seconds > 0;
   takeoverButton.textContent =
-    takeoverPacket === null ? 'Take over' : 'Retry take over';
+    seconds > 0
+      ? `Retry take over in ${seconds}s`
+      : takeoverPacket === null
+        ? 'Take over'
+        : 'Retry take over';
   takeoverButton.disabled =
-    busy ||
+    blocked ||
     (takeoverPacket === null &&
       (ticket === undefined || terminal || state === 'human-active'));
-  for (const button of select('#staff-lifecycle').querySelectorAll('button')) {
-    if (button !== takeoverButton)
-      button.disabled = busy || ticket === undefined;
-  }
+  const ordinaryBlocked =
+    blocked || ticket === undefined || takeoverPacket !== null;
+  for (const button of select('#staff-lifecycle').querySelectorAll('button'))
+    if (button !== takeoverButton) button.disabled = ordinaryBlocked;
+  prioritySelect.disabled = ordinaryBlocked;
   composeSubmit.disabled =
-    busy ||
-    ticket === undefined ||
+    ordinaryBlocked ||
     !['public', 'internal'].includes(selectedComposeMode()) ||
     composeBody.value.trim() === '';
   composeForm.dataset.mode = selectedComposeMode() || 'unset';
+  armRetryTimer();
+}
+function retrySeconds() {
+  return Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+}
+function paintRetryNotice() {
+  if (retryNotice === null) return;
+  const seconds = retrySeconds();
+  paintStatus(
+    seconds > 0
+      ? `${retryNotice} Wait at least ${seconds} seconds before retrying.`
+      : `${retryNotice} The retry delay has elapsed; you can retry the same request.`,
+    true,
+  );
+  if (seconds === 0) retryNotice = null;
+}
+function armRetryTimer() {
+  if (suspended || retryTimer !== null || retrySeconds() === 0) return;
+  retryTimer = setTimeout(
+    () => {
+      retryTimer = null;
+      paintRetryNotice();
+      updateControls();
+    },
+    Math.min(1000, Math.max(1, retryAt - Date.now())),
+  );
+}
+function retryDeadline(value) {
+  if (value !== null) {
+    const trimmed = value.trim();
+    const now = Date.now();
+    const seconds = /^\d+$/u.test(trimmed) ? Number(trimmed) : null;
+    const deadline =
+      seconds === null ? Date.parse(trimmed) : now + seconds * 1000;
+    if (Number.isSafeInteger(deadline)) return Math.max(now, deadline);
+  }
+  // A missing or malformed server hint never triggers a tight retry loop.
+  return Date.now() + 30_000;
 }
 async function api(path, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) headers.set('Content-Type', 'application/json');
   if (csrfToken !== '') headers.set('X-Pegma-CSRF', csrfToken);
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'same-origin',
-    cache: 'no-store',
-    referrerPolicy: 'no-referrer',
+  const controller = new AbortController();
+  requests.add(controller);
+  let timedOut = false;
+  let rejectAbort;
+  const aborted = new Promise((_resolve, reject) => {
+    rejectAbort = reject;
   });
-  if (!response.ok)
-    throw Object.assign(new Error('request_failed'), {
-      status: response.status,
-    });
-  return response.json();
+  const onAbort = () =>
+    rejectAbort(
+      Object.assign(
+        new Error(timedOut ? 'request_timeout' : 'request_aborted'),
+        { timedOut },
+      ),
+    );
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, requestTimeoutMs);
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(path, {
+          ...init,
+          headers,
+          signal: controller.signal,
+          credentials: 'same-origin',
+          cache: 'no-store',
+          referrerPolicy: 'no-referrer',
+        });
+        if (!response.ok)
+          throw Object.assign(new Error('request_failed'), {
+            status: response.status,
+            ...(response.status === 429
+              ? { retryAt: retryDeadline(response.headers.get('Retry-After')) }
+              : {}),
+          });
+        return await response.json();
+      })(),
+      aborted,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
+    requests.delete(controller);
+  }
 }
-async function readViewer(generation, expected = viewer) {
-  const result = await api('/api/identity/account');
+async function readViewer(
+  generation,
+  expected = viewer ?? takeoverPacket?.viewer ?? null,
+) {
+  const result = await api('/api/identity/session');
   guard(generation);
   if (
     typeof result.account?.subject !== 'string' ||
@@ -218,39 +339,32 @@ function renderTicket(view) {
   detail.hidden = false;
   updateControls();
 }
-function failure(error) {
-  if (error.stale) {
-    if (!onThisTicket()) invalidate();
-    return;
-  }
-  clearHandoff();
-  if (
-    [401, 403, 404].includes(error.status) ||
-    error.message === 'invalid_response'
-  ) {
-    ++readGeneration;
-    hideAll();
-  }
+function failure(error, action, generation) {
+  if (!isCurrent(generation) || error.stale) return;
+  // A failed/unknown mutation is not a fresh basis for another staff write.
+  hideAll();
+  if ([400, 401, 403, 404].includes(error.status)) takeoverPacket = null;
   if (error.status === 401 || error.status === 403) {
-    takeoverPacket = null;
     viewer = null;
     csrfToken = '';
   }
-  if (error.status === 400 || error.status === 404) takeoverPacket = null;
   signedOut.hidden = error.status !== 401;
   forbidden.hidden = error.status !== 403;
-  showStatus(
-    error.status === 401
-      ? 'Sign in, then reload this ticket.'
-      : error.status === 403
-        ? 'You do not have staff access.'
-        : error.status === 404
-          ? 'Ticket not found.'
-          : takeoverPacket !== null
-            ? 'Could not confirm the result. Reload or retry the same take-over request.'
-            : 'Could not confirm the result. Reload the ticket before another action.',
-    error.status !== 401,
-  );
+  if (error.status === 429) {
+    retryAt = Math.max(retryAt, error.retryAt);
+    retryNotice = `${action} was rate limited.`;
+    paintRetryNotice();
+  } else
+    showStatus(
+      error.status === 401
+        ? 'Sign in, then reload this ticket. Any request already sent may have completed.'
+        : error.status === 403
+          ? 'Current staff access could not be confirmed. Any request already sent may have completed.'
+          : error.status === 404
+            ? 'Ticket not found.'
+            : `Could not confirm the ${action.toLowerCase()} result${error.timedOut ? ' before the request deadline' : ''}. ${action === 'Take over' && takeoverPacket !== null ? 'Reload or retry the same take-over request.' : 'Reload the ticket before another action.'}`,
+      error.status !== 401,
+    );
   updateControls();
 }
 function validateHandoff(result) {
@@ -285,6 +399,8 @@ async function loadHandoff() {
   handoffPanel.hidden = false;
   handoffStatus.textContent = 'Loading private handoff…';
   try {
+    await readViewer(generation);
+    if (handoffRead !== handoffGeneration) return;
     const result = await api(
       `/api/support/admin/tickets/${encodeURIComponent(ticketId)}/handoff`,
     );
@@ -314,7 +430,8 @@ async function loadHandoff() {
     if (generation !== readGeneration || handoffRead !== handoffGeneration)
       return;
     clearHandoff();
-    if ([401, 403, 404].includes(error.status) || error.stale) failure(error);
+    if ([401, 403, 404].includes(error.status) || error.stale)
+      failure(error, 'Private handoff read', generation);
     else {
       handoffPanel.hidden = false;
       handoffStatus.textContent =
@@ -323,14 +440,16 @@ async function loadHandoff() {
   }
 }
 async function loadTicket() {
-  if (busy) return false;
-  const generation = ++readGeneration;
+  const operation = beginOperation();
+  const generation = operation.generation;
   hideAll();
   if (ticketId === '' || !onThisTicket()) {
-    showStatus('Missing or changed ticket id.', true);
-    return false;
+    showStatus('Missing or changed ticket id. Reload this page.', true);
+    finishOperation(operation);
+    return { generation, loaded: false };
   }
   select('#staff-ticket-id-display').textContent = ticketId;
+  showStatus('Loading ticket…');
   try {
     await readViewer(generation);
     const view = await api(
@@ -341,29 +460,39 @@ async function loadTicket() {
     await readViewer(generation);
     renderTicket(view);
     showStatus('Ticket loaded.');
+    // Private handoff availability does not lock a fully refreshed ticket view.
+    finishOperation(operation);
     await loadHandoff();
-    return (
-      generation === readGeneration && onThisTicket() && currentView !== null
-    );
+    return {
+      generation,
+      loaded: isCurrent(generation) && currentView !== null,
+    };
   } catch (error) {
-    failure(error);
-    return false;
+    failure(error, 'Ticket read', generation);
+    return { generation, loaded: false };
+  } finally {
+    finishOperation(operation);
   }
 }
 async function patchTicket(action, extra = {}) {
-  if (busy || currentView === null || !onThisTicket()) return;
-  const generation = ++readGeneration;
-  busy = true;
+  if (
+    busy !== null ||
+    retrySeconds() > 0 ||
+    suspended ||
+    takeoverPacket !== null ||
+    currentView === null ||
+    !onThisTicket()
+  )
+    return;
+  const operation = beginOperation();
+  const generation = operation.generation;
   clearHandoff();
   updateControls();
   try {
     await readViewer(generation);
     const view = await api(
       `/api/support/admin/tickets/${encodeURIComponent(ticketId)}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ action, ...extra }),
-      },
+      { method: 'PATCH', body: JSON.stringify({ action, ...extra }) },
     );
     guard(generation);
     validateView(view);
@@ -372,14 +501,20 @@ async function patchTicket(action, extra = {}) {
     showStatus(`Action ${action} applied.`);
     await loadHandoff();
   } catch (error) {
-    failure(error);
+    failure(error, `Action ${action}`, generation);
   } finally {
-    busy = false;
-    updateControls();
+    finishOperation(operation);
   }
 }
 takeoverButton.addEventListener('click', async () => {
-  if (busy || viewer === null || !onThisTicket()) return;
+  if (
+    busy !== null ||
+    retrySeconds() > 0 ||
+    suspended ||
+    viewer === null ||
+    !onThisTicket()
+  )
+    return;
   if (takeoverPacket === null) {
     if (
       currentView === null ||
@@ -400,8 +535,8 @@ takeoverButton.addEventListener('click', async () => {
     });
   }
   const packet = takeoverPacket;
-  const generation = ++readGeneration;
-  busy = true;
+  const operation = beginOperation();
+  const generation = operation.generation;
   clearHandoff();
   updateControls();
   try {
@@ -414,27 +549,28 @@ takeoverButton.addEventListener('click', async () => {
     validateView(ack);
     await readViewer(generation, packet.viewer);
     takeoverPacket = null;
-    busy = false;
     // Exact SDK replay can acknowledge a historical view. Always read current state.
-    if (await loadTicket())
-      showStatus('Take over accepted. Assignment is unchanged.');
+    const refreshed = await loadTicket();
+    if (isCurrent(refreshed.generation))
+      showStatus(
+        refreshed.loaded
+          ? 'Take over accepted. Assignment is unchanged.'
+          : 'Take over accepted. Current ticket refresh failed; reload before another action.',
+        !refreshed.loaded,
+      );
   } catch (error) {
-    if (generation !== readGeneration || !onThisTicket()) {
-      failure({ stale: true });
-      return;
-    }
+    if (!isCurrent(generation) || error.stale) return;
     if (error.status === 409) {
       takeoverPacket = null;
-      busy = false;
-      if (await loadTicket())
+      const refreshed = await loadTicket();
+      if (refreshed.loaded && isCurrent(refreshed.generation))
         showStatus(
           'The ticket changed. Review it before choosing Take over again.',
           true,
         );
-    } else failure(error);
+    } else failure(error, 'Take over', generation);
   } finally {
-    busy = false;
-    updateControls();
+    finishOperation(operation);
   }
 });
 for (const action of ['assign', 'unassign', 'resolve', 'close', 'reopen'])
@@ -451,15 +587,18 @@ composeForm.addEventListener('submit', async (event) => {
   const mode = selectedComposeMode();
   const body = composeBody.value.trim();
   if (
-    busy ||
+    busy !== null ||
+    retrySeconds() > 0 ||
+    suspended ||
+    takeoverPacket !== null ||
     currentView === null ||
     !onThisTicket() ||
     !body ||
     !['public', 'internal'].includes(mode)
   )
     return;
-  const generation = ++readGeneration;
-  busy = true;
+  const operation = beginOperation();
+  const generation = operation.generation;
   clearHandoff();
   updateControls();
   try {
@@ -467,10 +606,7 @@ composeForm.addEventListener('submit', async (event) => {
     const suffix = mode === 'public' ? 'messages' : 'notes';
     const view = await api(
       `/api/support/admin/tickets/${encodeURIComponent(ticketId)}/${suffix}`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ body }),
-      },
+      { method: 'POST', body: JSON.stringify({ body }) },
     );
     guard(generation);
     validateView(view);
@@ -483,19 +619,26 @@ composeForm.addEventListener('submit', async (event) => {
     );
     await loadHandoff();
   } catch (error) {
-    failure(error);
+    failure(
+      error,
+      mode === 'public' ? 'Public reply' : 'Internal note',
+      generation,
+    );
   } finally {
-    busy = false;
-    updateControls();
+    finishOperation(operation);
   }
 });
 select('#staff-ticket-reload').addEventListener('click', () => {
-  void loadTicket();
+  if (!onThisTicket()) window.location.reload();
+  else void loadTicket();
 });
 select('#staff-handoff-reload').addEventListener('click', () => {
   void loadHandoff();
 });
 window.addEventListener('pagehide', invalidate);
 window.addEventListener('popstate', invalidate);
+window.addEventListener('pageshow', () => {
+  if (suspended && onThisTicket()) void loadTicket();
+});
 updateControls();
 void loadTicket();

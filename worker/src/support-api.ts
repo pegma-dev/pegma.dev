@@ -530,6 +530,9 @@ export function createSupportApi(
             command,
           );
           const final = await browser.current();
+          options.logger.log('info', 'support.ticket_human_requested', {
+            ticketNumber: view.ticket.number,
+          });
           return json({
             ...publicTicketView(view),
             csrfToken: final.authenticated.csrfToken,
@@ -547,6 +550,9 @@ export function createSupportApi(
           throw error;
         }
         const final = await browser.current();
+        options.logger.log('info', 'support.staff_ticket_taken_over', {
+          ticketNumber: view.ticket.number,
+        });
         return json({
           ...staffTicketView(view),
           csrfToken: final.authenticated.csrfToken,
@@ -878,7 +884,10 @@ export function createSupportApi(
           ticketNumber: view.ticket.number,
         });
 
-        return json(publicTicketView(view), { status: 201 });
+        return json(
+          { ...publicTicketView(view), csrfToken: authenticated.csrfToken },
+          { status: 201 },
+        );
       }
 
       throw new ApiError(404, 'not_found');

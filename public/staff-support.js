@@ -8,6 +8,9 @@ const filterForm = document.querySelector('#queue-filters');
 
 let csrfToken = '';
 let queueGeneration = 0;
+let suspended = false;
+const requests = new Set();
+const requestTimeoutMs = 15_000;
 
 function showStatus(message, isError = false) {
   statusNode.textContent = message;
@@ -23,32 +26,69 @@ function hideAll() {
   emailNode.textContent = '';
 }
 
+function retryDeadline(value) {
+  if (value !== null) {
+    const trimmed = value.trim();
+    const now = Date.now();
+    const seconds = /^\d+$/u.test(trimmed) ? Number(trimmed) : null;
+    const deadline =
+      seconds === null ? Date.parse(trimmed) : now + seconds * 1000;
+    if (Number.isSafeInteger(deadline)) return Math.max(now, deadline);
+  }
+  // A missing or malformed server hint never triggers a tight retry loop.
+  return Date.now() + 30_000;
+}
 async function api(path, init = {}) {
   const headers = new Headers(init.headers);
-  if (init.body !== undefined) {
-    headers.set('Content-Type', 'application/json');
-  }
-  if (csrfToken !== '') {
-    headers.set('X-Pegma-CSRF', csrfToken);
-  }
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'same-origin',
-    cache: 'no-store',
-    referrerPolicy: 'no-referrer',
+  if (init.body !== undefined) headers.set('Content-Type', 'application/json');
+  if (csrfToken !== '') headers.set('X-Pegma-CSRF', csrfToken);
+  const controller = new AbortController();
+  requests.add(controller);
+  let timedOut = false;
+  let rejectAbort;
+  const aborted = new Promise((_resolve, reject) => {
+    rejectAbort = reject;
   });
-  const body = await response.json();
-  if (!response.ok) {
-    const error = new Error(
-      typeof body.error === 'string' ? body.error : 'request_failed',
+  const onAbort = () =>
+    rejectAbort(
+      Object.assign(
+        new Error(timedOut ? 'request_timeout' : 'request_aborted'),
+        { timedOut },
+      ),
     );
-    error.status = response.status;
-    throw error;
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, requestTimeoutMs);
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(path, {
+          ...init,
+          headers,
+          signal: controller.signal,
+          credentials: 'same-origin',
+          cache: 'no-store',
+          referrerPolicy: 'no-referrer',
+        });
+        if (!response.ok)
+          throw Object.assign(new Error('request_failed'), {
+            status: response.status,
+            ...(response.status === 429
+              ? { retryAt: retryDeadline(response.headers.get('Retry-After')) }
+              : {}),
+          });
+        return await response.json();
+      })(),
+      aborted,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
+    requests.delete(controller);
   }
-  return body;
 }
-
 function renderQueue(items) {
   queueList.replaceChildren();
   if (items.length === 0) {
@@ -70,7 +110,9 @@ function renderQueue(items) {
         ? 'Human support active'
         : item.handling === 'assistant'
           ? 'Assistant handling'
-          : 'Waiting for human support',
+          : item.handling === 'human-pending'
+            ? 'Waiting for human support'
+            : 'Handling unavailable',
       item.priority,
       item.category ?? 'uncategorized',
       item.requesterAssociation,
@@ -101,7 +143,10 @@ function filterQuery() {
 }
 
 async function refreshQueue() {
+  if (suspended) return false;
   const generation = ++queueGeneration;
+  for (const controller of requests) controller.abort();
+  requests.clear();
   let result;
   try {
     result = await api(filterQuery());
@@ -118,12 +163,16 @@ async function refreshQueue() {
 }
 
 async function start() {
+  suspended = false;
   hideAll();
+  const generation = queueGeneration;
   try {
     const account = await api('/api/identity/account');
+    if (generation !== queueGeneration || suspended) return;
     csrfToken = account.csrfToken;
     emailNode.textContent = account.account.email;
   } catch (error) {
+    if (generation !== queueGeneration || suspended) return;
     if (error.status === 401) {
       signedOut.hidden = false;
       showStatus('Sign in to use the staff queue.');
@@ -179,4 +228,17 @@ filterForm.addEventListener('submit', async (event) => {
   }
 });
 
-start();
+function invalidate() {
+  suspended = true;
+  for (const controller of requests) controller.abort();
+  requests.clear();
+  csrfToken = '';
+  hideAll();
+  showStatus('Queue view cleared. Reload to check current access.');
+}
+window.addEventListener('pagehide', invalidate);
+window.addEventListener('popstate', invalidate);
+window.addEventListener('pageshow', () => {
+  if (suspended) void start();
+});
+void start();

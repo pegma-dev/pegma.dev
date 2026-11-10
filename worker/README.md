@@ -194,14 +194,15 @@ public acknowledgement endpoint.
 
 ## Support Desk composition
 
-Authenticated product feedback uses exact `@pegma/support-desk-*@0.1.0` over
+Authenticated product feedback uses the four exact `@pegma/support-desk-*`
+packages at `0.2.0` over
 the same `IDENTITY_DB` D1 binding. Support Desk collections
 (`support-desk.*.v1`) and host cursor collection
 `pegma-dev-support-maintenance` are isolated from Identity mail cursors and
 session rows. Customer permissions are granted to any authenticated account
 via AccessContext defaults (not a paid entitlement). Categories:
 `feedback`, `bug`, `feature_request`, `documentation`, `question`. Subject
-marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/{ticketId}`.
+marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/ticket/?id=…`.
 
 Create and reply use durable rate limits `pegma.support.ticket.create` and
 `pegma.support.ticket.reply`. Rotating cleanup runs queue repair and
@@ -210,6 +211,11 @@ create/reply are omitted in this slice; Pegma templates are composed for a
 later mail activation. Health lists Support Desk package detail without
 message content; set `SUPPORT_HEALTH_PROBE=true` only when an explicit store
 probe is wanted.
+
+Customers can request human support; stored Support role holders can take
+over separately from assignment and read private handoff work. Exact retries
+share the reply quota and honor `Retry-After`. Assistant handling stays
+disabled, independently of Knowledge and local-agent access.
 
 See `docs/SUPPORT_COMPOSITION.md`.
 
@@ -223,6 +229,8 @@ See `docs/SUPPORT_COMPOSITION.md`.
   `ok`/`degraded`, `503` for status `fail` (log event `health.failed`).
 - `GET /api/identity/capabilities` — issuer, RP ID, and live flow availability.
 - `GET /api/identity/account` — verified account and passkey snapshot.
+- `GET /api/identity/session` — browser subject and CSRF token, without a
+  passkey snapshot; Authorization credentials are rejected.
 - `POST /api/identity/passkeys/authentication/options|verify` — passkey sign-in.
 - `POST /api/identity/passkeys/registration/options|verify` — authenticated
   passkey enrollment.
@@ -237,6 +245,12 @@ See `docs/SUPPORT_COMPOSITION.md`.
 - `GET /api/support/tickets/:id` — read an owned ticket; missing and non-owned
   tickets share one content-free `404`.
 - `POST /api/support/tickets/:id/replies` — customer reply (CSRF + rate limit).
+- `POST /api/support/tickets/:id/request-person` — owned human request,
+  body `{ commandId }` (CSRF + shared reply limit).
+- `POST /api/support/admin/tickets/:id/take-over` — current Support takeover,
+  body `{ commandId, expectedRevision, expectedHandlingGeneration }`.
+- `GET /api/support/admin/tickets/:id/handoff` — private handoff work for
+  current Support role holders.
 - `GET /api/releases` — public current-stable release summaries for allowlisted
   Pegma repositories, in component-registry order. JSON schema
   `pegma.releases.v1`; short public cache (`max-age=300`) and `ETag`; no

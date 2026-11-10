@@ -56,7 +56,7 @@ unified host policy's `defaults` (no paid entitlement):
 - `support.ticket.reply.own`
 - `support.ticket.request_person.own`
 
-Policy version: `pegma.dev-policy-3` — one `PolicyDocumentV1` for the whole
+Policy version: `pegma.dev-policy-4` — one `PolicyDocumentV1` for the whole
 host, schema-validated in tests (see `docs/ROLE_ADOPTION_PLAN.md`).
 
 ### Staff (stored `Support` role)
@@ -161,6 +161,12 @@ session; bearer `Authorization` is rejected. Mutations use the current
 rechecks current Identity, stored Support authority where required, original
 session metadata and absolute expiry after awaited work before releasing a
 result. Local-agent credentials cannot take over or read private handoff work.
+Ticket pages use the lightweight `/api/identity/session` subject/CSRF probe,
+which does not list passkeys. Each browser HTTP request, including response
+body consumption, has a fifteen-second total deadline. Reload invalidates old
+callbacks while retaining an unresolved human-command packet. A confirmed
+command followed by a failed refresh is reported separately from an unknown
+acknowledgement.
 
 Human-control POST packets are closed objects with a client UUID `commandId`.
 Takeover includes both SDK concurrency fences. Bodies use the existing

@@ -14,19 +14,50 @@ let csrfToken = '';
 let viewer = null;
 let currentView = null;
 let readGeneration = 0;
-let busy = false;
+let busy = null;
 let personPacket = null;
+let packetOutcome = 'unconfirmed';
+let retryAt = 0;
+let retryTimer = null;
+let retryNotice = null;
+let suspended = false;
+const requests = new Set();
+const requestTimeoutMs = 15_000;
 
-function showStatus(message, error = false) {
+function paintStatus(message, error = false) {
   statusNode.textContent = message;
   statusNode.dataset.tone = error ? 'error' : 'neutral';
+}
+function showStatus(message, error = false) {
+  retryNotice = null;
+  paintStatus(message, error);
 }
 function onThisTicket() {
   return new URL(window.location.href).searchParams.get('id') === ticketId;
 }
+function isCurrent(generation) {
+  return generation === readGeneration && onThisTicket() && !suspended;
+}
 function guard(generation) {
-  if (generation !== readGeneration || !onThisTicket())
+  if (!isCurrent(generation))
     throw Object.assign(new Error('stale_view'), { stale: true });
+}
+function cancelRequests() {
+  for (const controller of requests) controller.abort();
+  requests.clear();
+}
+function beginOperation() {
+  suspended = false;
+  const operation = { generation: ++readGeneration };
+  cancelRequests();
+  busy = operation;
+  return operation;
+}
+function finishOperation(operation) {
+  if (busy === operation) {
+    busy = null;
+    updateHumanControl();
+  }
 }
 function clearTicket() {
   currentView = null;
@@ -37,58 +68,165 @@ function clearTicket() {
   humanControls.hidden = true;
   humanStatus.textContent = '';
   personButton.disabled = true;
+  for (const button of replyForm.querySelectorAll('button'))
+    button.disabled = true;
   // Unsent reply text stays in the form when the private view is cleared.
 }
 function invalidate() {
   ++readGeneration;
+  suspended = true;
+  cancelRequests();
+  busy = null;
   viewer = null;
   csrfToken = '';
-  personPacket = null;
+  if (!onThisTicket()) personPacket = null;
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
   clearTicket();
+  showStatus(
+    onThisTicket()
+      ? 'Ticket view cleared. Reload to check current access and state.'
+      : 'The ticket address changed. Reload this page to open it.',
+  );
+}
+function retrySeconds() {
+  return Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+}
+function paintRetryNotice() {
+  if (retryNotice === null) return;
+  const seconds = retrySeconds();
+  paintStatus(
+    seconds > 0
+      ? `${retryNotice} Wait at least ${seconds} seconds before retrying.`
+      : `${retryNotice} The retry delay has elapsed; you can retry the same request.`,
+    true,
+  );
+  if (seconds === 0) retryNotice = null;
+}
+function armRetryTimer() {
+  if (suspended || retryTimer !== null || retrySeconds() === 0) return;
+  retryTimer = setTimeout(
+    () => {
+      retryTimer = null;
+      paintRetryNotice();
+      updateHumanControl();
+    },
+    Math.min(1000, Math.max(1, retryAt - Date.now())),
+  );
 }
 function updateHumanControl() {
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
-  const state = ticket?.handling ?? 'human-pending';
+  const state = ticket?.handling;
+  const seconds = retrySeconds();
   humanControls.hidden = ticket === undefined && personPacket === null;
   humanStatus.textContent =
     personPacket !== null
-      ? 'The previous request has no confirmed acknowledgement. Retry that same request.'
+      ? packetOutcome === 'rate_limited'
+        ? seconds > 0
+          ? `The server rate limited this request. Wait at least ${seconds} seconds before retrying the same request.`
+          : 'Retry the same human-support request when ready.'
+        : 'The previous human-support request has no confirmed acknowledgement. Retry that same request.'
       : terminal
         ? `This ticket is ${ticket.status}. Request human support to reopen it.`
         : state === 'assistant'
           ? 'You can ask for human support at any time.'
           : state === 'human-active'
             ? 'Human support is active on this ticket.'
-            : 'This ticket is waiting for human support.';
+            : state === 'human-pending'
+              ? 'This ticket is waiting for human support.'
+              : 'Human support handles this ticket.';
   personButton.hidden =
     personPacket === null && !terminal && state !== 'assistant';
   personButton.disabled =
-    busy || (ticket === undefined && personPacket === null);
+    busy !== null ||
+    viewer === null ||
+    suspended ||
+    seconds > 0 ||
+    (ticket === undefined && personPacket === null);
   personButton.textContent =
-    personPacket === null
-      ? 'Request human support'
-      : 'Retry human-support request';
+    seconds > 0
+      ? `Retry in ${seconds}s`
+      : personPacket === null
+        ? 'Request human support'
+        : 'Retry human-support request';
+  for (const button of replyForm.querySelectorAll('button'))
+    button.disabled =
+      busy !== null ||
+      currentView === null ||
+      personPacket !== null ||
+      suspended ||
+      seconds > 0;
+  armRetryTimer();
+}
+function retryDeadline(value) {
+  if (value !== null) {
+    const trimmed = value.trim();
+    const now = Date.now();
+    const seconds = /^\d+$/u.test(trimmed) ? Number(trimmed) : null;
+    const deadline =
+      seconds === null ? Date.parse(trimmed) : now + seconds * 1000;
+    if (Number.isSafeInteger(deadline)) return Math.max(now, deadline);
+  }
+  // A missing or malformed server hint never triggers a tight retry loop.
+  return Date.now() + 30_000;
 }
 async function api(path, init = {}) {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) headers.set('Content-Type', 'application/json');
   if (csrfToken !== '') headers.set('X-Pegma-CSRF', csrfToken);
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'same-origin',
-    cache: 'no-store',
-    referrerPolicy: 'no-referrer',
+  const controller = new AbortController();
+  requests.add(controller);
+  let timedOut = false;
+  let rejectAbort;
+  const aborted = new Promise((_resolve, reject) => {
+    rejectAbort = reject;
   });
-  if (!response.ok)
-    throw Object.assign(new Error('request_failed'), {
-      status: response.status,
-    });
-  return response.json();
+  const onAbort = () =>
+    rejectAbort(
+      Object.assign(
+        new Error(timedOut ? 'request_timeout' : 'request_aborted'),
+        { timedOut },
+      ),
+    );
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, requestTimeoutMs);
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(path, {
+          ...init,
+          headers,
+          signal: controller.signal,
+          credentials: 'same-origin',
+          cache: 'no-store',
+          referrerPolicy: 'no-referrer',
+        });
+        if (!response.ok)
+          throw Object.assign(new Error('request_failed'), {
+            status: response.status,
+            ...(response.status === 429
+              ? { retryAt: retryDeadline(response.headers.get('Retry-After')) }
+              : {}),
+          });
+        return await response.json();
+      })(),
+      aborted,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
+    requests.delete(controller);
+  }
 }
-async function readViewer(generation, expected = viewer) {
-  const result = await api('/api/identity/account');
+async function readViewer(
+  generation,
+  expected = viewer ?? personPacket?.viewer ?? null,
+) {
+  const result = await api('/api/identity/session');
   guard(generation);
   if (
     typeof result.account?.subject !== 'string' ||
@@ -154,11 +292,8 @@ function renderTicket(view) {
   detail.hidden = false;
   updateHumanControl();
 }
-function failure(error) {
-  if (error.stale) {
-    if (!onThisTicket()) invalidate();
-    return;
-  }
+function failure(error, action, generation) {
+  if (!isCurrent(generation) || error.stale) return;
   clearTicket();
   if ([400, 401, 403, 404].includes(error.status)) personPacket = null;
   if (error.status === 401 || error.status === 403) {
@@ -166,29 +301,38 @@ function failure(error) {
     csrfToken = '';
   }
   signedOut.hidden = error.status !== 401;
-  showStatus(
-    error.status === 401
-      ? 'Sign in, then reload this ticket.'
-      : error.status === 403
-        ? 'This ticket is unavailable to your account.'
-        : error.status === 404
-          ? 'Ticket not found.'
-          : personPacket !== null
-            ? 'Could not confirm the result. Retry the same human-support request.'
-            : 'Could not confirm the result. Reload the ticket before another action.',
-    error.status !== 401,
-  );
+  if (error.status === 429) {
+    retryAt = Math.max(retryAt, error.retryAt);
+    if (action === 'Human-support request') packetOutcome = 'rate_limited';
+    retryNotice = `${action} was rate limited.`;
+    paintRetryNotice();
+  } else {
+    if (action === 'Human-support request') packetOutcome = 'unconfirmed';
+    showStatus(
+      error.status === 401
+        ? 'Sign in, then reload this ticket. Any request already sent may have completed.'
+        : error.status === 403
+          ? 'Current account access could not be confirmed. Any request already sent may have completed.'
+          : error.status === 404
+            ? 'Ticket not found.'
+            : `Could not confirm the ${action.toLowerCase()} result${error.timedOut ? ' before the request deadline' : ''}. ${action === 'Human-support request' && personPacket !== null ? 'Retry the same human-support request.' : 'Reload the ticket before another action.'}`,
+      error.status !== 401,
+    );
+  }
   updateHumanControl();
 }
 async function loadTicket() {
-  if (busy) return false;
-  const generation = ++readGeneration;
+  const operation = beginOperation();
+  const generation = operation.generation;
   clearTicket();
+  updateHumanControl();
   if (ticketId === '' || !onThisTicket()) {
-    showStatus('Missing or changed ticket id.', true);
-    return false;
+    showStatus('Missing or changed ticket id. Reload this page.', true);
+    finishOperation(operation);
+    return { generation, loaded: false };
   }
   select('#ticket-id-display').textContent = ticketId;
+  showStatus('Loading ticket…');
   try {
     await readViewer(generation);
     const view = await api(
@@ -199,14 +343,23 @@ async function loadTicket() {
     await readViewer(generation);
     renderTicket(view);
     showStatus('Ticket loaded.');
-    return true;
+    return { generation, loaded: true };
   } catch (error) {
-    failure(error);
-    return false;
+    failure(error, 'Ticket read', generation);
+    return { generation, loaded: false };
+  } finally {
+    finishOperation(operation);
   }
 }
 personButton.addEventListener('click', async () => {
-  if (busy || !onThisTicket() || viewer === null) return;
+  if (
+    busy !== null ||
+    retrySeconds() > 0 ||
+    suspended ||
+    !onThisTicket() ||
+    viewer === null
+  )
+    return;
   const ticket = currentView?.ticket;
   if (
     personPacket === null &&
@@ -221,46 +374,57 @@ personButton.addEventListener('click', async () => {
     body: JSON.stringify(Object.freeze({ commandId: crypto.randomUUID() })),
   });
   const packet = personPacket;
-  const generation = ++readGeneration;
-  busy = true;
+  const operation = beginOperation();
+  const generation = operation.generation;
   updateHumanControl();
   try {
     await readViewer(generation, packet.viewer);
-    const view = await api(
+    const ack = await api(
       `/api/support/tickets/${encodeURIComponent(ticketId)}/request-person`,
       { method: 'POST', body: packet.body },
     );
     guard(generation);
-    validateView(view);
+    validateView(ack);
     await readViewer(generation, packet.viewer);
     personPacket = null;
-    renderTicket(view);
-    showStatus('Human support requested. Your unsent reply is kept.');
+    // An exact command replay may acknowledge a historical view; do not render it.
+    const refreshed = await loadTicket();
+    if (isCurrent(refreshed.generation))
+      showStatus(
+        refreshed.loaded
+          ? 'Human support requested. Your unsent reply is kept.'
+          : 'Human-support request accepted. Current ticket refresh failed; reload before another action. Your unsent reply is kept.',
+        !refreshed.loaded,
+      );
   } catch (error) {
-    if (generation !== readGeneration || !onThisTicket()) {
-      failure({ stale: true });
-      return;
-    }
+    if (!isCurrent(generation) || error.stale) return;
     if (error.status === 409) {
       personPacket = null;
-      busy = false;
-      if (await loadTicket())
+      const refreshed = await loadTicket();
+      if (refreshed.loaded && isCurrent(refreshed.generation))
         showStatus(
           'The ticket changed. Review it before making a new request.',
           true,
         );
-    } else failure(error);
+    } else failure(error, 'Human-support request', generation);
   } finally {
-    busy = false;
-    updateHumanControl();
+    finishOperation(operation);
   }
 });
 replyForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (busy || currentView === null || !onThisTicket()) return;
-  const generation = ++readGeneration;
+  if (
+    busy !== null ||
+    retrySeconds() > 0 ||
+    suspended ||
+    personPacket !== null ||
+    currentView === null ||
+    !onThisTicket()
+  )
+    return;
   const body = new FormData(replyForm).get('body');
-  busy = true;
+  const operation = beginOperation();
+  const generation = operation.generation;
   updateHumanControl();
   try {
     await readViewer(generation);
@@ -276,15 +440,18 @@ replyForm.addEventListener('submit', async (event) => {
     renderTicket(view);
     showStatus('Reply sent.');
   } catch (error) {
-    failure(error);
+    failure(error, 'Reply', generation);
   } finally {
-    busy = false;
-    updateHumanControl();
+    finishOperation(operation);
   }
 });
 select('#ticket-reload').addEventListener('click', () => {
-  void loadTicket();
+  if (!onThisTicket()) window.location.reload();
+  else void loadTicket();
 });
 window.addEventListener('pagehide', invalidate);
 window.addEventListener('popstate', invalidate);
+window.addEventListener('pageshow', () => {
+  if (suspended && onThisTicket()) void loadTicket();
+});
 void loadTicket();
