@@ -7,6 +7,10 @@ const queueList = document.querySelector('#queue-list');
 const filterForm = document.querySelector('#queue-filters');
 
 let csrfToken = '';
+let queueGeneration = 0;
+let suspended = false;
+const requests = new Set();
+const requestTimeoutMs = 15_000;
 
 function showStatus(message, isError = false) {
   statusNode.textContent = message;
@@ -14,35 +18,77 @@ function showStatus(message, isError = false) {
 }
 
 function hideAll() {
+  ++queueGeneration;
   signedOut.hidden = true;
   forbidden.hidden = true;
   panel.hidden = true;
+  queueList.replaceChildren();
+  emailNode.textContent = '';
 }
 
+function retryDeadline(value) {
+  if (value !== null) {
+    const trimmed = value.trim();
+    const now = Date.now();
+    const seconds = /^\d+$/u.test(trimmed) ? Number(trimmed) : null;
+    const deadline =
+      seconds === null ? Date.parse(trimmed) : now + seconds * 1000;
+    if (Number.isSafeInteger(deadline)) return Math.max(now, deadline);
+  }
+  // A missing or malformed server hint never triggers a tight retry loop.
+  return Date.now() + 30_000;
+}
 async function api(path, init = {}) {
   const headers = new Headers(init.headers);
-  if (init.body !== undefined) {
-    headers.set('Content-Type', 'application/json');
-  }
-  if (csrfToken !== '') {
-    headers.set('X-Pegma-CSRF', csrfToken);
-  }
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'same-origin',
+  if (init.body !== undefined) headers.set('Content-Type', 'application/json');
+  if (csrfToken !== '') headers.set('X-Pegma-CSRF', csrfToken);
+  const controller = new AbortController();
+  requests.add(controller);
+  let timedOut = false;
+  let rejectAbort;
+  const aborted = new Promise((_resolve, reject) => {
+    rejectAbort = reject;
   });
-  const body = await response.json();
-  if (!response.ok) {
-    const error = new Error(
-      typeof body.error === 'string' ? body.error : 'request_failed',
+  const onAbort = () =>
+    rejectAbort(
+      Object.assign(
+        new Error(timedOut ? 'request_timeout' : 'request_aborted'),
+        { timedOut },
+      ),
     );
-    error.status = response.status;
-    throw error;
+  controller.signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, requestTimeoutMs);
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(path, {
+          ...init,
+          headers,
+          signal: controller.signal,
+          credentials: 'same-origin',
+          cache: 'no-store',
+          referrerPolicy: 'no-referrer',
+        });
+        if (!response.ok)
+          throw Object.assign(new Error('request_failed'), {
+            status: response.status,
+            ...(response.status === 429
+              ? { retryAt: retryDeadline(response.headers.get('Retry-After')) }
+              : {}),
+          });
+        return await response.json();
+      })(),
+      aborted,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
+    requests.delete(controller);
   }
-  return body;
 }
-
 function renderQueue(items) {
   queueList.replaceChildren();
   if (items.length === 0) {
@@ -60,6 +106,13 @@ function renderQueue(items) {
     meta.className = 'form-note';
     const parts = [
       item.status,
+      item.handling === 'human-active'
+        ? 'Human support active'
+        : item.handling === 'assistant'
+          ? 'Assistant handling'
+          : item.handling === 'human-pending'
+            ? 'Waiting for human support'
+            : 'Handling unavailable',
       item.priority,
       item.category ?? 'uncategorized',
       item.requesterAssociation,
@@ -90,20 +143,36 @@ function filterQuery() {
 }
 
 async function refreshQueue() {
-  const result = await api(filterQuery());
+  if (suspended) return false;
+  const generation = ++queueGeneration;
+  for (const controller of requests) controller.abort();
+  requests.clear();
+  let result;
+  try {
+    result = await api(filterQuery());
+  } catch (error) {
+    if (generation !== queueGeneration) error.stale = true;
+    throw error;
+  }
+  if (generation !== queueGeneration) return false;
   if (typeof result.csrfToken === 'string') {
     csrfToken = result.csrfToken;
   }
   renderQueue(result.items);
+  return true;
 }
 
 async function start() {
+  suspended = false;
   hideAll();
+  const generation = queueGeneration;
   try {
     const account = await api('/api/identity/account');
+    if (generation !== queueGeneration || suspended) return;
     csrfToken = account.csrfToken;
     emailNode.textContent = account.account.email;
   } catch (error) {
+    if (generation !== queueGeneration || suspended) return;
     if (error.status === 401) {
       signedOut.hidden = false;
       showStatus('Sign in to use the staff queue.');
@@ -114,16 +183,19 @@ async function start() {
   }
 
   try {
-    await refreshQueue();
+    if (!(await refreshQueue())) return;
     panel.hidden = false;
     showStatus('Queue loaded.');
   } catch (error) {
+    if (error.stale) return;
     if (error.status === 401) {
+      hideAll();
       signedOut.hidden = false;
       showStatus('Sign in to use the staff queue.');
       return;
     }
     if (error.status === 403) {
+      hideAll();
       forbidden.hidden = false;
       showStatus('You do not have staff access.', true);
       return;
@@ -136,17 +208,37 @@ filterForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     showStatus('Refreshing queue…');
-    await refreshQueue();
+    if (!(await refreshQueue())) return;
     showStatus('Queue updated.');
   } catch (error) {
-    if (error.status === 403) {
+    if (error.stale) return;
+    if (error.status === 401 || error.status === 403) {
       hideAll();
-      forbidden.hidden = false;
-      showStatus('You do not have staff access.', true);
+      forbidden.hidden = error.status !== 403;
+      signedOut.hidden = error.status !== 401;
+      showStatus(
+        error.status === 401
+          ? 'Sign in to use the staff queue.'
+          : 'You do not have staff access.',
+        error.status !== 401,
+      );
       return;
     }
     showStatus(`Could not load queue: ${error.message}`, true);
   }
 });
 
-start();
+function invalidate() {
+  suspended = true;
+  for (const controller of requests) controller.abort();
+  requests.clear();
+  csrfToken = '';
+  hideAll();
+  showStatus('Queue view cleared. Reload to check current access.');
+}
+window.addEventListener('pagehide', invalidate);
+window.addEventListener('popstate', invalidate);
+window.addEventListener('pageshow', () => {
+  if (suspended) void start();
+});
+void start();

@@ -515,6 +515,17 @@ export function createIdentityApi(
         });
       }
 
+      if (request.method === 'GET' && path === '/api/identity/session') {
+        if (request.headers.has('Authorization')) {
+          throw new ApiError(401, 'authentication_required');
+        }
+        const authenticated = await requireAuthentication(request, options);
+        return json({
+          account: { subject: authenticated.link.subject },
+          csrfToken: authenticated.csrfToken,
+        });
+      }
+
       if (request.method === 'GET' && path === '/api/identity/account') {
         const authenticated = await requireAuthentication(request, options);
         const passkeys = await expectedIdentity(options).listPasskeys(

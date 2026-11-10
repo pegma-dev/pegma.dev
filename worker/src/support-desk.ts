@@ -321,6 +321,7 @@ export function createSupportRuntime(
     store,
     clock,
     logger: options.logger,
+    assistantHandlingEnabled: false,
     allowedCategories: PEGMA_SUPPORT_CATEGORIES,
     queueTerminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
   });
