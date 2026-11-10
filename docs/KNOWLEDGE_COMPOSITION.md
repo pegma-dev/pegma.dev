@@ -1,6 +1,8 @@
 # Knowledge Base host composition
 
-This is a **source candidate**, with public activation disabled. The host uses
+The KB host integration is merged in
+[PR #59](https://github.com/pegma-dev/pegma.dev/pull/59), with public activation
+disabled. The host uses
 exact published `@pegma/agent-access@0.1.1` and all four
 `@pegma/knowledge-base-*` packages at `0.1.4`, over its existing Identity,
 Sessions, stored roles and D1 Store. The public catalog at `/api/mcp` remains
@@ -14,7 +16,8 @@ at signed source
 [`72358940203e1d398087f2fbe49d33ee95b6fb71`](https://github.com/pegma-dev/rate-limit/commit/72358940203e1d398087f2fbe49d33ee95b6fb71)
 passed independent exact-byte, signature/provenance and registry-consumer
 verification. Existing Identity and Support Desk keep their
-`@pegma/rate-limit@0.2.0` dependency; Support Desk remains at `0.1.1`.
+`@pegma/rate-limit@0.2.0` dependency; human controls now select all four
+Support Desk packages at `0.2.0`.
 
 All four exact KB `0.1.4` packages, including the shared report factory and
 governed authoring-context/report-query APIs, are installed in the manifest and
@@ -49,15 +52,16 @@ verification qualify the producer; they do not qualify this host.
 
 Installed D1 and Core files match the original release archives byte for byte;
 actual public ESM imports resolve the same Core module and error classes.
-On Node `22.18.0`, the ordinary checked-in configurations pass type checks and
+At the PG-01 checkpoint on Node `22.18.0`, the ordinary checked-in configurations passed type checks and
 all 554 tests: 505 Node tests across 45 files, 47 real D1 tests across five files,
 and two Bench Ticket Worker/D1/R2 tests. The static build emits 21 pages, and
 Wrangler's explicit dry run packages the Worker without uploading it. These
 checks use the published registry graph, without source aliases. Earlier
 source-alias runs remain historical diagnostics.
 
-Current-head CI and full reviews remain pending. Actual-client acceptances
-remain at zero and no pilot has run. Keep activation disabled through the
+PG-01's full review, CI and automatic deployment passed. The subsequent
+human-control changes require their own current-head review and CI.
+Actual-client acceptances remain at zero and no pilot has run. Keep activation disabled through the
 remaining deployed-host, staging/privacy and actual-client acceptance gates.
 
 ## Configuration and activation
@@ -99,8 +103,9 @@ acceptances, provider/staging controls, production readiness, or pilot results.
 
 The [host policy](../worker/src/support-access.ts) keeps authority explicit:
 
-- `Support` retains exactly its original six Support Desk permissions: queue
-  read, staff reply, notes, assignment, management and Audit read. Existing
+- `Support` retains its original six Support Desk permissions (queue read,
+  staff reply, notes, assignment, management and Audit read) and adds explicit
+  human takeover through Support Desk `0.2.0`. Existing
   assignments are not migrated or silently granted KB powers.
 - `Knowledge` is a separately assigned role for collection reads, draft and
   evidence work, human report review, publication and withdrawal. Admin-only
@@ -376,7 +381,8 @@ unqualified publication.
 Earlier local candidate measurements of the awaited inline path reached 118
 D1 calls for publication and 104 for evidence revocation, above the 50-call
 limit despite successful logical responses. The real-D1
-profiling fixture now passes on the canonical published graph. It exercises whole HTTP/MCP and scheduled
+profiling fixture passed at the PG-01 checkpoint on the canonical published
+graph. It exercises whole HTTP/MCP and scheduled
 invocations, including genuine 32-proof/96-revocation history, pending work,
 transport failure, newer enqueue races and lost-hint recovery, with a hard
 50-call guard on the bounded Free-plan cases. This local result does not
@@ -384,8 +390,9 @@ establish deployed CPU limits, daily quotas or sustained production throughput.
 Preserve all authority and history checks, keep activation disabled and complete
 the live-platform gates before use.
 
-Disable the feature if acceptance fails. Identity, role administration, human
-Support Desk and the public catalog retain their original composition. No
-model/provider, automatic publication, GitHub export or customer notification
-is enabled by this slice. Production settings, installed-client results,
+Disable Knowledge if its acceptance fails. Identity and role administration
+remain independent. Support Desk's human-control adoption is documented separately in
+[Support composition](SUPPORT_COMPOSITION.md); the public catalog retains its
+own composition. No model/provider, automatic publication, GitHub export or
+customer notification is enabled by these changes. Production settings, installed-client results,
 staging/privacy controls and supervised pilots remain host-owned proof.

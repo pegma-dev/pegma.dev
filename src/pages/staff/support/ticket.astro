@@ -19,6 +19,7 @@ import Base from '../../../layouts/Base.astro';
   <div id="staff-ticket-status" class="notice" role="status" aria-live="polite">
     Loading ticket…
   </div>
+  <p><button type="button" id="staff-ticket-reload" class="secondary-button">Reload ticket</button></p>
 
   <section id="staff-ticket-signed-out" class="account-panel" hidden>
     <h2>Sign in required</h2>
@@ -51,6 +52,11 @@ import Base from '../../../layouts/Base.astro';
 
     <h3>Lifecycle</h3>
     <div class="staff-lifecycle" id="staff-lifecycle">
+      <p id="staff-ticket-handling" class="form-note"></p>
+      <div class="account-inline staff-lifecycle-row">
+        <button type="button" id="action-take-over">Take over</button>
+        <span class="form-note">Begins human handling; assignment is separate.</span>
+      </div>
       <div class="account-inline staff-lifecycle-row">
         <button type="button" id="action-assign" class="secondary-button">
           Assign to me
@@ -119,6 +125,14 @@ import Base from '../../../layouts/Base.astro';
         <code>/notes</code>. Outbound mail is not enabled yet.
       </p>
     </form>
+  </section>
+
+  <section id="staff-handoff" class="account-panel" hidden>
+    <h2>Private handoff</h2>
+    <p class="form-note">Staff-only context, separate from customer messages.</p>
+    <p id="staff-handoff-status" role="status" aria-live="polite"></p>
+    <ul id="staff-handoff-list" class="message-list"></ul>
+    <button type="button" id="staff-handoff-reload" class="secondary-button">Retry handoff read</button>
   </section>
 
   <script is:inline type="module" src="/staff-support-ticket.js"></script>

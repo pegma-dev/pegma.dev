@@ -15,6 +15,7 @@ export const SUPPORT_CUSTOMER_PERMISSIONS = Object.freeze([
   supportPermissions.create,
   supportPermissions.readOwn,
   supportPermissions.replyOwn,
+  supportPermissions.requestPerson,
 ] as const);
 
 /** Staff permission set, granted via the {@link SUPPORT_ROLE} role. */
@@ -25,6 +26,7 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
   supportPermissions.assign,
   supportPermissions.manage,
   supportPermissions.auditRead,
+  supportPermissions.takeOver,
 ] as const);
 
 /** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */

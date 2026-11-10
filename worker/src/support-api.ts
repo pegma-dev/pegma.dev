@@ -4,21 +4,24 @@ import type { DurableRateLimiter } from '@pegma/rate-limit';
 import type {
   CustomerTicketSummary,
   CustomerTicketView,
+  HandoffWorkDto,
   StaffQueueItem,
   StaffQueueQuery,
   StaffTicketView,
   SupportDeskApplication,
 } from '@pegma/support-desk-application';
+import { supportPermissions } from '@pegma/support-desk-application';
+import {
+  effectiveTicketHandling,
+  TicketWorkflowError,
+} from '@pegma/support-desk-core';
 import type {
   Ticket,
   TicketMessage,
   TicketPriority,
   TicketStatus,
 } from '@pegma/support-desk-contracts';
-import {
-  IDENTITY_ISSUER,
-  SESSION_COOKIE,
-} from './identity-api';
+import { IDENTITY_ISSUER, SESSION_COOKIE } from './identity-api';
 import type {
   IdentityLinkKey,
   IdentityLinkProjector,
@@ -57,11 +60,19 @@ import {
   publicTicketUrl,
   type PegmaSupportCategory,
 } from './support-desk';
+import {
+  supportHumanBrowser,
+  type SupportHumanCoordinates,
+} from './support-human-auth';
 
 const TICKET_ID_PATH =
   /^\/api\/support\/tickets\/([A-Za-z0-9._~-]{1,200})(?:\/(replies))?$/u;
 const ADMIN_TICKET_PATH =
   /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})(?:\/(messages|notes))?$/u;
+const PERSON_PATH =
+  /^\/api\/support\/tickets\/([A-Za-z0-9._~-]{1,200})\/request-person$/u;
+const HUMAN_STAFF_PATH =
+  /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/(take-over|handoff)$/u;
 
 const TICKET_STATUSES = new Set<TicketStatus>([
   'open',
@@ -88,12 +99,7 @@ const STAFF_PATCH_ACTIONS = new Set([
 
 type QueueSort = 'updated_newest' | 'updated_oldest';
 type StaffPatchAction =
-  | 'assign'
-  | 'unassign'
-  | 'change_priority'
-  | 'resolve'
-  | 'close'
-  | 'reopen';
+  'assign' | 'unassign' | 'change_priority' | 'resolve' | 'close' | 'reopen';
 
 interface SupportApiOptions {
   readonly application: SupportDeskApplication;
@@ -160,6 +166,7 @@ function publicTicketSummary(ticket: CustomerTicketSummary) {
     channel: ticket.channel,
     createdAt: ticket.createdAt,
     customerUpdatedAt: ticket.customerUpdatedAt,
+    ...(ticket.handling === undefined ? {} : { handling: ticket.handling }),
     marker: pegSubjectMarker(ticket.number),
     url: publicTicketUrl(ticket.id),
   };
@@ -192,6 +199,7 @@ function staffTicketDto(ticket: Ticket) {
     priority: ticket.priority,
     channel: ticket.channel,
     revision: ticket.revision,
+    handling: effectiveTicketHandling(ticket),
     requester: {
       association: ticket.requester.association,
       ...(ticket.requester.principalId === undefined
@@ -246,7 +254,47 @@ function staffQueueItemDto(item: StaffQueueItem) {
     channel: item.channel,
     ...(item.assignedTo === undefined ? {} : { assignedTo: item.assignedTo }),
     updatedAt: item.updatedAt,
+    handling: item.handling,
   };
+}
+
+function handoffDto(value: HandoffWorkDto) {
+  return {
+    ticketId: value.ticketId,
+    workId: value.workId,
+    status: value.status,
+    reason: value.reason,
+    ...(value.summary === undefined ? {} : { summary: value.summary }),
+    attemptedGuideIds: [...value.attemptedGuideIds],
+    transcript: {
+      ticketId: value.transcript.ticketId,
+      throughRevision: value.transcript.throughRevision,
+      lastVisibleMessageId: value.transcript.lastVisibleMessageId,
+    },
+    handlingGeneration: value.handlingGeneration,
+    createdAt: value.createdAt,
+  };
+}
+
+function clientCommand(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      value,
+    )
+  )
+    throw new ApiError(400, 'invalid_request');
+  return value;
+}
+
+function controlInteger(value: unknown, minimum: number): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < minimum
+  )
+    throw new ApiError(400, 'invalid_request');
+  return value;
 }
 
 function publicError(error: unknown): ApiError {
@@ -254,11 +302,7 @@ function publicError(error: unknown): ApiError {
     return error;
   }
   const mapped = mapSupportError(error);
-  return new ApiError(
-    mapped.status,
-    mapped.code,
-    mapped.retryAfterSeconds,
-  );
+  return new ApiError(mapped.status, mapped.code, mapped.retryAfterSeconds);
 }
 
 function parseCategory(value: unknown): PegmaSupportCategory {
@@ -340,7 +384,7 @@ function parseStaffQueueQuery(url: URL): StaffQueueQuery {
 }
 
 async function requireStaffAccess(
-  authenticated: Authenticated,
+  authenticated: Pick<Authenticated, 'link'>,
   options: SupportApiOptions,
 ) {
   // The stored Support ROLE is the only gate (docs/ROLE_ADOPTION_PLAN.md
@@ -368,6 +412,38 @@ async function requireStaffAccess(
   return roleAccess;
 }
 
+/** Keep the active verified Identity observation after awaited stored roles,
+ * matching the existing public browser-principal resolver's ordering. */
+async function humanAccess(
+  authenticated: SupportHumanCoordinates,
+  options: SupportApiOptions,
+  staff: boolean,
+) {
+  const access = staff
+    ? await requireStaffAccess(authenticated, options)
+    : customerAccessContext(authenticated.link.subject);
+  try {
+    const claims = await options.identity.claimsFor(authenticated.link.subject);
+    const link = options.identityLinkFromClaims(claims);
+    if (
+      claims.emailVerified !== true ||
+      link.issuer !== authenticated.link.issuer ||
+      link.subject !== authenticated.link.subject
+    )
+      throw new ApiError(401, 'authentication_required');
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? error.code
+        : undefined;
+    if (code === 'not_found' || code === 'invalid_state')
+      throw new ApiError(401, 'authentication_required');
+    throw new ApiError(503, 'service_unavailable');
+  }
+  return access;
+}
+
 /**
  * Authenticated Support Desk customer and staff API.
  *
@@ -385,6 +461,97 @@ export function createSupportApi(
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      const person = PERSON_PATH.exec(path);
+      const humanStaff = HUMAN_STAFF_PATH.exec(path);
+      if (person !== null || humanStaff !== null) {
+        const handoff = humanStaff?.[2] === 'handoff';
+        const method = handoff ? 'GET' : 'POST';
+        if (request.method !== method)
+          return json(
+            { error: 'method_not_allowed' },
+            { status: 405, headers: { Allow: method } },
+          );
+        if (url.search !== '' || (handoff && request.body !== null))
+          throw new ApiError(400, 'invalid_request');
+        const ticketId = (person ?? humanStaff)![1]!;
+        const browser = supportHumanBrowser(request, {
+          sessions: options.sessions,
+          authenticate: (incoming) => requireAuthentication(incoming, options),
+          access: (authenticated) =>
+            humanAccess(authenticated, options, person === null),
+          permission:
+            person !== null
+              ? supportPermissions.requestPerson
+              : handoff
+                ? supportPermissions.queueRead
+                : supportPermissions.takeOver,
+          mutation: !handoff,
+        });
+        const initial = await browser.current();
+        if (handoff) {
+          const work = await options.application.readHandoffWork(
+            initial.access,
+            ticketId,
+          );
+          const final = await browser.current();
+          return json({
+            handoff: work.map(handoffDto),
+            csrfToken: final.authenticated.csrfToken,
+          });
+        }
+        const packet = exactObject(
+          await readJson(request, { timeoutMs: 10_000 }),
+          person !== null
+            ? ['commandId']
+            : ['commandId', 'expectedRevision', 'expectedHandlingGeneration'],
+        );
+        const commandId = clientCommand(packet.commandId);
+        const fence =
+          person !== null
+            ? undefined
+            : {
+                expectedRevision: controlInteger(packet.expectedRevision, 1),
+                expectedHandlingGeneration: controlInteger(
+                  packet.expectedHandlingGeneration,
+                  0,
+                ),
+              };
+        // Human controls share the existing durable reply budget, including
+        // exact command replays. Recheck live authority after this awaited debit.
+        await enforceRateLimit(
+          options.replyLimiter,
+          initial.authenticated.link.subject,
+        );
+        const current = await browser.current();
+        const command = { commandId, correlationId: mintSupportId(), ticketId };
+        if (person !== null) {
+          const view = await options.application.requestPerson(
+            current.access,
+            command,
+          );
+          const final = await browser.current();
+          return json({
+            ...publicTicketView(view),
+            csrfToken: final.authenticated.csrfToken,
+          });
+        }
+        let view: StaffTicketView;
+        try {
+          view = await options.application.takeOverTicket(current.access, {
+            ...command,
+            ...fence!,
+          });
+        } catch (error) {
+          if (error instanceof TicketWorkflowError)
+            throw new ApiError(409, 'conflict');
+          throw error;
+        }
+        const final = await browser.current();
+        return json({
+          ...staffTicketView(view),
+          csrfToken: final.authenticated.csrfToken,
+        });
+      }
       if (request.method === 'GET' && path === '/api/support/categories') {
         // Categories are public configuration; list requires auth so the
         // feedback form can only load them after sign-in.
@@ -546,7 +713,10 @@ export function createSupportApi(
           action,
         });
 
-        return json(staffTicketView(view));
+        return json({
+          ...staffTicketView(view),
+          csrfToken: authenticated.csrfToken,
+        });
       }
 
       if (
@@ -583,7 +753,10 @@ export function createSupportApi(
           ticketNumber: view.ticket.number,
         });
 
-        return json(staffTicketView(view), { status: 201 });
+        return json(
+          { ...staffTicketView(view), csrfToken: authenticated.csrfToken },
+          { status: 201 },
+        );
       }
 
       if (
@@ -618,7 +791,10 @@ export function createSupportApi(
           ticketNumber: view.ticket.number,
         });
 
-        return json(staffTicketView(view), { status: 201 });
+        return json(
+          { ...staffTicketView(view), csrfToken: authenticated.csrfToken },
+          { status: 201 },
+        );
       }
 
       // --- Customer mutations ---
@@ -723,10 +899,7 @@ export function createSupportApi(
       if (mapped.retryAfterSeconds !== undefined) {
         headers['Retry-After'] = String(mapped.retryAfterSeconds);
       }
-      return json(
-        { error: mapped.code },
-        { status: mapped.status, headers },
-      );
+      return json({ error: mapped.code }, { status: mapped.status, headers });
     }
   };
 }

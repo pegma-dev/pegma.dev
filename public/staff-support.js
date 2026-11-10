@@ -7,6 +7,7 @@ const queueList = document.querySelector('#queue-list');
 const filterForm = document.querySelector('#queue-filters');
 
 let csrfToken = '';
+let queueGeneration = 0;
 
 function showStatus(message, isError = false) {
   statusNode.textContent = message;
@@ -14,9 +15,12 @@ function showStatus(message, isError = false) {
 }
 
 function hideAll() {
+  ++queueGeneration;
   signedOut.hidden = true;
   forbidden.hidden = true;
   panel.hidden = true;
+  queueList.replaceChildren();
+  emailNode.textContent = '';
 }
 
 async function api(path, init = {}) {
@@ -31,6 +35,8 @@ async function api(path, init = {}) {
     ...init,
     headers,
     credentials: 'same-origin',
+    cache: 'no-store',
+    referrerPolicy: 'no-referrer',
   });
   const body = await response.json();
   if (!response.ok) {
@@ -60,6 +66,11 @@ function renderQueue(items) {
     meta.className = 'form-note';
     const parts = [
       item.status,
+      item.handling === 'human-active'
+        ? 'Human support active'
+        : item.handling === 'assistant'
+          ? 'Assistant handling'
+          : 'Waiting for human support',
       item.priority,
       item.category ?? 'uncategorized',
       item.requesterAssociation,
@@ -90,11 +101,20 @@ function filterQuery() {
 }
 
 async function refreshQueue() {
-  const result = await api(filterQuery());
+  const generation = ++queueGeneration;
+  let result;
+  try {
+    result = await api(filterQuery());
+  } catch (error) {
+    if (generation !== queueGeneration) error.stale = true;
+    throw error;
+  }
+  if (generation !== queueGeneration) return false;
   if (typeof result.csrfToken === 'string') {
     csrfToken = result.csrfToken;
   }
   renderQueue(result.items);
+  return true;
 }
 
 async function start() {
@@ -114,16 +134,19 @@ async function start() {
   }
 
   try {
-    await refreshQueue();
+    if (!(await refreshQueue())) return;
     panel.hidden = false;
     showStatus('Queue loaded.');
   } catch (error) {
+    if (error.stale) return;
     if (error.status === 401) {
+      hideAll();
       signedOut.hidden = false;
       showStatus('Sign in to use the staff queue.');
       return;
     }
     if (error.status === 403) {
+      hideAll();
       forbidden.hidden = false;
       showStatus('You do not have staff access.', true);
       return;
@@ -136,13 +159,20 @@ filterForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     showStatus('Refreshing queue…');
-    await refreshQueue();
+    if (!(await refreshQueue())) return;
     showStatus('Queue updated.');
   } catch (error) {
-    if (error.status === 403) {
+    if (error.stale) return;
+    if (error.status === 401 || error.status === 403) {
       hideAll();
-      forbidden.hidden = false;
-      showStatus('You do not have staff access.', true);
+      forbidden.hidden = error.status !== 403;
+      signedOut.hidden = error.status !== 401;
+      showStatus(
+        error.status === 401
+          ? 'Sign in to use the staff queue.'
+          : 'You do not have staff access.',
+        error.status !== 401,
+      );
       return;
     }
     showStatus(`Could not load queue: ${error.message}`, true);
