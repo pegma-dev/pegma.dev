@@ -55,6 +55,7 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/storage-core',
       '@pegma/storage-azure-tables',
       '@pegma/storage-cloudflare-d1',
+      '@pegma/storage-dynamodb',
     ],
     status: 'published',
     summary: 'Persistence without the component knowing what the database is.',
@@ -70,7 +71,7 @@ export const components: readonly PegmaComponent[] = [
       'Cross-partition anything',
       'Compatibility layers for pre-existing data layouts — Pegma targets net-new projects',
     ],
-    now: '0.4.0 on npm with the Azure Tables (0.4.0) and Cloudflare D1 (0.4.1) adapters; both adapters pass the same conformance suite.',
+    now: 'Fallback snapshot (2026-08-15): 0.4.0 on npm with the Azure Tables (0.4.0) and Cloudflare D1 (0.4.1) adapters; both adapters pass the same conformance suite.',
   },
   {
     repo: 'storage-blobs',

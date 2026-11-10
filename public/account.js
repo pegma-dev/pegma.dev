@@ -16,6 +16,41 @@ let emailCodeHandle = '';
 let emailChallengeFlow = 'sign-in';
 let passkeyRemovalAvailable = false;
 
+function agentReturnPath() {
+  const candidates = new URLSearchParams(window.location.search).getAll(
+    'returnTo',
+  );
+  if (candidates.length !== 1) return null;
+  const value = candidates[0];
+  if (
+    value.length > 16_384 ||
+    !value.startsWith('/') ||
+    value.startsWith('//') ||
+    /[\\\u0000-\u001f\u007f]/u.test(value)
+  )
+    return null;
+  try {
+    const destination = new URL(value, window.location.origin);
+    const path = destination.pathname.replace(/\/$/u, '');
+    const allowed = [
+      '/account/agents/authorize',
+      '/account/agents/device',
+      '/api/agent-access/authorize',
+    ];
+    if (
+      destination.origin !== window.location.origin ||
+      destination.hash ||
+      !allowed.includes(path)
+    )
+      return null;
+    return `${path}${destination.search}`;
+  } catch {
+    return null;
+  }
+}
+
+const agentContinuation = agentReturnPath();
+
 function showStatus(message, isError = false) {
   statusNode.textContent = message;
   statusNode.dataset.tone = isError ? 'error' : 'neutral';
@@ -184,6 +219,7 @@ async function refreshAccount() {
     signedOut.hidden = true;
     signedIn.hidden = false;
     showStatus('Your account is ready.');
+    if (agentContinuation !== null) window.location.replace(agentContinuation);
     return true;
   } catch (error) {
     if (error.status !== 401) {

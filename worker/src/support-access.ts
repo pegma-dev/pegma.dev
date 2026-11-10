@@ -7,6 +7,8 @@ import type { PolicyDocumentV1 } from '@pegma/authorization-policy';
 import type { RoleAssignmentReader } from '@pegma/authorization-storage';
 import type { PrincipalId } from '@pegma/spine';
 import { supportPermissions } from '@pegma/support-desk-application';
+import { DEFAULT_APPROVAL_PERMISSION } from '@pegma/agent-access';
+import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 
 /** Customer permission set for authenticated pegma.dev accounts. */
 export const SUPPORT_CUSTOMER_PERMISSIONS = Object.freeze([
@@ -27,12 +29,44 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
 
 /** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */
 export const SUPPORT_ROLE = 'Support' as const;
+/** Explicitly assigned KB staff authority, independent of Support grants. */
+export const KNOWLEDGE_ROLE = 'Knowledge' as const;
 
 /**
  * The role-administration role name — mapped since the Phase 5 surface
  * shipped; the permissions below are exactly what the admin API checks.
  */
 export const ADMIN_ROLE = 'Admin' as const;
+export const AGENT_LINK_PERMISSION = DEFAULT_APPROVAL_PERMISSION;
+/** Initial delegated permissions; linking and human governance are excluded. */
+export const AGENT_KNOWLEDGE_PERMISSIONS = Object.freeze([
+  knowledgePermissions.draftRead,
+  knowledgePermissions.draftWrite,
+  knowledgePermissions.evidenceSubmit,
+] as const);
+/** Human review of a test report is never an OAuth consent scope. */
+export const KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION =
+  'pegma.knowledge.evidence.confirm';
+export const KNOWLEDGE_STAFF_PERMISSIONS = Object.freeze([
+  knowledgePermissions.collectionRead,
+  knowledgePermissions.articleRead,
+  knowledgePermissions.draftRead,
+  knowledgePermissions.draftWrite,
+  knowledgePermissions.evidenceRead,
+  knowledgePermissions.evidenceSubmit,
+  knowledgePermissions.provenanceRead,
+  knowledgePermissions.provenanceWrite,
+  knowledgePermissions.reviewSubmit,
+  knowledgePermissions.review,
+  knowledgePermissions.publish,
+  knowledgePermissions.evidenceRevoke,
+  knowledgePermissions.retire,
+  KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+] as const);
+export const KNOWLEDGE_ADMIN_PERMISSIONS = Object.freeze([
+  ...Object.values(knowledgePermissions),
+  KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+]);
 
 /** Admin permission set, granted via the {@link ADMIN_ROLE} role. */
 export const ADMIN_PERMISSIONS = Object.freeze([
@@ -61,17 +95,24 @@ export const APPLICATION_SCOPE = Object.freeze({
  * Customer permissions are granted to any authenticated account via
  * `defaults` — not a paid entitlement or invented multi-tenant role (there
  * is no billing ledger on pegma.dev; roles are the only stored grant).
- * Staff permissions are granted via the stored, audited `Support` role,
+ * Support permissions are granted via the stored, audited `Support` role,
+ * and KB staff permissions require the separately assigned `Knowledge` role;
  * and role administration via the stored, audited `Admin` role — mapped
- * with the Phase 5 surface (version 2 of the document).
+ * with the Phase 5 surface. Version 3 adds Knowledge Base permissions and
+ * administrator-only agent linking without replacing any stored assignment.
  */
 export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
   schemaVersion: 1,
-  version: 'pegma.dev-policy-2',
-  defaults: [...SUPPORT_CUSTOMER_PERMISSIONS],
+  version: 'pegma.dev-policy-3',
+  defaults: [...SUPPORT_CUSTOMER_PERMISSIONS, knowledgePermissions.articleRead],
   roles: Object.freeze({
     [SUPPORT_ROLE]: [...SUPPORT_STAFF_PERMISSIONS],
-    [ADMIN_ROLE]: [...ADMIN_PERMISSIONS],
+    [KNOWLEDGE_ROLE]: [...KNOWLEDGE_STAFF_PERMISSIONS],
+    [ADMIN_ROLE]: [
+      ...ADMIN_PERMISSIONS,
+      AGENT_LINK_PERMISSION,
+      ...KNOWLEDGE_ADMIN_PERMISSIONS,
+    ],
   }),
 });
 
@@ -91,9 +132,7 @@ export type SupportRoleReader = Pick<
  * server-side session (never a browser-supplied claim). Customer
  * permissions come from the unified policy's `defaults`.
  */
-export function customerAccessContext(
-  principalId: PrincipalId,
-): AccessContext {
+export function customerAccessContext(principalId: PrincipalId): AccessContext {
   return resolveAccess({ principalId }, PEGMA_ACCESS_POLICY);
 }
 
@@ -118,8 +157,5 @@ export async function staffAccessContextFromRoles(
     { principalId, roles: assignments.map((assignment) => assignment.role) },
     PEGMA_ACCESS_POLICY,
   );
-  return hasPermission(context, supportPermissions.queueRead)
-    ? context
-    : null;
+  return hasPermission(context, supportPermissions.queueRead) ? context : null;
 }
-

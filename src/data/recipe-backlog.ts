@@ -21,7 +21,7 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       '@pegma/rate-limit@0.2.0',
       '@pegma/authorization-identity@0.4.0',
       '@pegma/storage-core@0.4.0',
-      '@pegma/storage-cloudflare-d1@0.4.1',
+      '@pegma/storage-cloudflare-d1@0.4.6',
       '@pegma/spine@0.1.1',
     ],
     adapters: [{ componentId: 'storage-core', adapterId: 'cloudflare-d1' }],
@@ -161,13 +161,12 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
     id: 'logger-tee-composition',
     intent:
       'A fictional batch importer (Ledger Drop) wires Spine Logger once at the composition root through @pegma/logger-tee into Cloudflare Workers Logs.',
-    packages: [
-      '@pegma/spine',
-      '@pegma/logger-tee',
-      '@pegma/logger-cloudflare',
-    ],
+    packages: ['@pegma/spine', '@pegma/logger-tee', '@pegma/logger-cloudflare'],
     adapters: [],
-    hostResponsibilities: ['Composition-root Logger wiring', 'Sink configuration'],
+    hostResponsibilities: [
+      'Composition-root Logger wiring',
+      'Sink configuration',
+    ],
     nonGoals: ['Pegma-owned traces, metrics, or APM'],
     antiPatterns: [
       'Putting sink SDKs into Spine',
@@ -221,15 +220,17 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       'Provider signature verification',
       'Storage for the receipt ledger',
     ],
-    nonGoals: ['Exactly-once delivery', 'Payload archival in the receipt ledger'],
+    nonGoals: [
+      'Exactly-once delivery',
+      'Payload archival in the receipt ledger',
+    ],
     antiPatterns: [
       'Claiming exactly-once processing',
       'Storing full webhook bodies in receipts',
     ],
     fixture: {
       kind: 'pending',
-      citation:
-        'docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts',
+      citation: 'docs/catalog/RECIPE_BACKLOG.md#d1--inbound-webhook-receipts',
       status: 'none',
     },
     capabilityTags: ['webhooks_inbound'],

@@ -126,7 +126,7 @@ mail catcher, storage, health). No Stripe, Auth0, Entra, or production email.
 - Local Docker (template): https://pegma.dev/runbooks/local-docker
 - Cloudflare (D1 + R2): https://pegma.dev/runbooks/cloudflare
 - Azure (Tables + Blob): https://pegma.dev/runbooks/azure
-- AWS (DynamoDB via forthcoming `@pegma/storage-dynamodb`): https://pegma.dev/runbooks/aws
+- AWS (DynamoDB via published `@pegma/storage-dynamodb@0.4.5`): https://pegma.dev/runbooks/aws
 - Fixture: https://github.com/pegma-dev/pegma.dev/tree/main/recipes/bench-ticket
 
 ## Scaffold (agents)

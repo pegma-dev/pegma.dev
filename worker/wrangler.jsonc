@@ -11,16 +11,34 @@
       "pattern": "pegma.dev/api/*",
       "zone_name": "pegma.dev",
     },
+    {
+      "pattern": "pegma.dev/.well-known/oauth-authorization-server",
+      "zone_name": "pegma.dev",
+    },
+    {
+      "pattern": "pegma.dev/.well-known/oauth-protected-resource/api/knowledge/mcp",
+      "zone_name": "pegma.dev",
+    },
   ],
   "vars": {
+    "PEGMA_KNOWLEDGE_ENABLED": "false",
+    "PEGMA_AGENT_CLIENTS_JSON": "[]",
+    "PEGMA_KNOWLEDGE_BROWSER_LIMIT": "120",
+    "PEGMA_AGENT_RESOURCE_LIMIT": "300",
     "IDENTITY_EMAIL_FROM": "Pegma <identity@pegma.dev>",
     "IDENTITY_EMAIL_ENABLED": "true",
     "GITHUB_ORGANIZATION_ID": "309286193",
     "GITHUB_ALLOWED_REPOSITORY_IDS": "1312512520,1312519623,1312811498,1312961609,1312942188,1313911960,1313917945,1314116350,1314093835,1313927900,1314239450,1314421283,1313936481",
   },
   "triggers": {
-    // Separate minute mail lanes; rotating cleanup; one release repo per minute.
-    "crons": ["* * * * *", "1-59 * * * *", "0-58 * * * *", "0-59 */6 * * *"],
+    // Separate mail, rotating cleanup, isolated rate page, and release lanes.
+    "crons": [
+      "* * * * *",
+      "1-59 * * * *",
+      "0-58 * * * *",
+      "0-57 * * * *",
+      "0-59 */6 * * *",
+    ],
   },
   "d1_databases": [
     {

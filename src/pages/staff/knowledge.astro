@@ -1,0 +1,119 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+
+<Base title="Knowledge administration - Pegma" description="Manage collections and review exact guide revisions and test reports.">
+  <section class="account-hero">
+    <p class="eyebrow">Staff · Knowledge Base</p>
+    <h1>Knowledge administration</h1>
+    <p class="lede">Configure collections, inspect drafts and test reports, and explicitly review publication. Current staff permissions are checked for every operation.</p>
+    <p>Knowledge access requires an explicitly assigned Knowledge role or Admin access. Support Desk access alone does not grant these permissions.</p>
+  </section>
+  <p id="kb-status" class="notice" role="status" aria-live="polite">Checking staff access...</p>
+  <section id="kb-signed-out" class="account-panel" hidden><h2>Sign in required</h2><p><a href="/account">Sign in</a> with your staff account, then return here.</p></section>
+  <div id="kb-panel" hidden>
+    <section class="account-panel">
+      <h2>Collection</h2>
+      <form id="kb-collection-form" class="account-form">
+        <label for="kb-collection-id">Collection ID</label><input id="kb-collection-id" name="collectionId" maxlength="200" required />
+        <label for="kb-collection-name" data-kb-permission="collectionManage">Name (for a new collection)</label><input id="kb-collection-name" name="name" maxlength="200" data-kb-permission="collectionManage" />
+        <div class="account-inline"><button type="submit" value="read">Load collection</button><button type="submit" value="create" data-kb-permission="collectionManage">Create collection</button></div>
+      </form>
+      <pre id="kb-collection-detail"></pre>
+      <form id="kb-portal-form" class="account-form" hidden>
+        <label><input id="kb-portal-enabled" type="checkbox" /> Enable signed-in guide browsing</label>
+        <label for="kb-portal-permission">Required audience permission</label><input id="kb-portal-permission" maxlength="200" />
+        <button type="submit">Preview audience policy</button>
+      </form>
+      <pre id="kb-policy-preview" hidden></pre><button id="kb-policy-apply" type="button" hidden>Apply reviewed audience policy</button>
+      <section data-kb-permission="validationManage">
+      <h3>Governance</h3>
+      <button id="kb-governance-read" type="button" class="secondary-button">Load governance</button>
+      <form id="kb-governance-form" class="account-form">
+        <label for="kb-governance-policy">Validation policy ID</label><input id="kb-governance-policy" maxlength="200" required />
+        <label for="kb-governance-version">Validation policy version</label><input id="kb-governance-version" type="number" min="1" step="1" required />
+        <label for="kb-staging-build">Expected staging build ID</label><input id="kb-staging-build" maxlength="200" required />
+        <label for="kb-attesters">Trusted attester IDs (one per line)</label><textarea id="kb-attesters" rows="3" required></textarea>
+        <button type="submit">Save governance</button>
+      </form>
+      <p id="kb-attester-note" class="form-note"></p><pre id="kb-governance-detail"></pre>
+      </section>
+    </section>
+    <section class="account-panel" data-kb-permission="validationManage">
+      <h2>Validation policy</h2>
+      <p class="form-note">
+        Before saving, include a check with test kind <code>content</code> for
+        each article kind: <code>explanation</code>, <code>walkthrough</code>,
+        <code>troubleshooting</code>, and <code>developer-reference</code>.
+        Walkthroughs also require a check with test kind <code>workflow</code>.
+        Configure trusted runner IDs and the maximum evidence age for each check.
+      </p>
+      <form id="kb-validation-read" class="account-form">
+        <label for="kb-validation-id">Policy ID</label><input id="kb-validation-id" maxlength="200" required />
+        <button type="submit">Load policy</button>
+      </form>
+      <form id="kb-validation-form" class="account-form">
+        <label for="kb-validation-version">Policy version</label><input id="kb-validation-version" type="number" value="1" min="1" step="1" required />
+        <div id="kb-requirements"></div>
+        <button id="kb-add-requirement" type="button" class="secondary-button">Add a check</button>
+        <button type="submit">Save validation policy</button>
+      </form>
+    </section>
+    <section class="account-panel">
+      <h2>Draft and publication review</h2>
+      <form id="kb-article-form" class="account-form">
+        <label for="kb-article-id">Article ID</label><input id="kb-article-id" maxlength="200" required />
+        <button type="submit">Load current draft</button>
+      </form>
+      <pre id="kb-draft-detail"></pre>
+      <div id="kb-article-actions" class="account-actions" hidden>
+        <button id="kb-evidence-read" type="button" class="secondary-button">Read evidence</button>
+        <button id="kb-provenance-read" type="button" class="secondary-button">Read private provenance</button>
+        <button id="kb-submit-review" type="button">Submit current draft for review</button>
+        <button id="kb-review-read" type="button" class="secondary-button" data-kb-permission="review">Load exact review</button>
+        <button id="kb-retire" type="button" class="secondary-button" data-kb-permission="retire">Retire this article</button>
+      </div>
+      <pre id="kb-article-detail"></pre>
+      <section id="kb-evidence-panel" hidden>
+        <h3>Withdraw an accepted evidence version</h3>
+        <form id="kb-evidence-revoke" class="account-form" data-kb-permission="evidenceRevoke">
+          <label for="kb-evidence-select">Exact evidence version</label><select id="kb-evidence-select" required></select>
+          <pre id="kb-evidence-selected"></pre>
+          <label for="kb-evidence-reason">Revocation reason</label><input id="kb-evidence-reason" maxlength="2000" required />
+          <button type="submit" class="secondary-button">Revoke this evidence version</button>
+        </form>
+      </section>
+      <section id="kb-review-panel" hidden>
+        <h3>Exact publication review</h3><pre id="kb-review-detail"></pre>
+        <p>Publication uses this complete review snapshot. Changed content, evidence, audience, source, or governance requires a fresh review.</p>
+        <button id="kb-publish" type="button" data-kb-permission="publish">Approve and publish this reviewed revision</button>
+        <form id="kb-reject-review" class="account-form" data-kb-permission="review"><label for="kb-review-reason">Reason for rejection</label><input id="kb-review-reason" maxlength="2000" required /><button type="submit" class="secondary-button">Reject review</button></form>
+      </section>
+      <h3>Test reports</h3>
+      <button id="kb-ledger-read" type="button" class="secondary-button" data-kb-permission="evidenceConfirm">Inspect report ledger capacity</button>
+      <section id="kb-ledger-panel" hidden>
+        <pre id="kb-ledger-detail"></pre>
+        <p>Resetting starts a new report epoch and permanently invalidates earlier report receipts and commands. It does not revoke accepted Knowledge Base evidence or retire a publication. Use the separate controls above for those actions.</p>
+        <button id="kb-ledger-reset" type="button" class="secondary-button" hidden>Reset this report ledger</button>
+        <button id="kb-ledger-drain" type="button" class="secondary-button" hidden>Continue bounded report cleanup</button>
+      </section>
+      <button id="kb-reports-read" type="button" class="secondary-button">List reports for this article</button>
+      <ul id="kb-report-list" class="ticket-list"></ul>
+      <form id="kb-report-read" class="account-form"><label for="kb-report-id">Report ID</label><input id="kb-report-id" maxlength="200" required /><button type="submit">Inspect report and current bindings</button></form>
+      <section id="kb-report-panel" hidden>
+        <pre id="kb-report-detail"></pre>
+        <p id="kb-report-age" class="form-note"></p>
+        <p>Inspect the report, artifact hashes, result and execution time against the exact article revision, content hash, check, policy, applicability, staging build, and runner shown above. Confirm only the report you actually reviewed.</p>
+        <p>Human review is separate from Knowledge Base acceptance. If submission fails a trusted-attester prerequisite, a currently trusted reviewer must inspect and reassess the report; confirmation alone is not verified evidence.</p>
+        <div class="account-inline" data-kb-permission="evidenceConfirm"><button id="kb-report-confirm" type="button">Confirm reviewed report</button><button id="kb-report-reject" type="button" class="secondary-button">Reject this report</button><button id="kb-report-reassess" type="button" class="secondary-button">Reassess this exact report</button></div>
+      </section>
+    </section>
+  </div>
+  <p><a href="/knowledge">Customer guides</a> · <a href="/account/agents/authorize">Agent grants</a> · <a href="/staff/roles">Roles</a></p>
+  <noscript><p class="notice">Knowledge administration requires JavaScript and your current staff session.</p></noscript>
+  <script is:inline type="module" src="/staff-knowledge.js"></script>
+</Base>
+
+<style>
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>

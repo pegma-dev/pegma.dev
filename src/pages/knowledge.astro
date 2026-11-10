@@ -1,0 +1,48 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Guides - Pegma" description="Search the approved guides available to your signed-in Pegma account.">
+  <section class="account-hero">
+    <p class="eyebrow">Knowledge Base</p>
+    <h1>Guides</h1>
+    <p class="lede">Search approved guides for your product and version.</p>
+  </section>
+  <p id="knowledge-status" class="notice" role="status" aria-live="polite">Checking your account...</p>
+  <section id="knowledge-signed-out" class="account-panel" hidden>
+    <h2>Sign in required</h2>
+    <p><a href="/account">Sign in to your Pegma account</a>, then return to Guides.</p>
+  </section>
+  <section id="knowledge-panel" class="account-panel" hidden>
+    <form id="knowledge-search" class="account-form">
+      <label for="knowledge-collection">Collection</label>
+      <select id="knowledge-collection" name="collectionId" required></select>
+      <label for="knowledge-query">Search</label>
+      <input id="knowledge-query" name="query" type="search" maxlength="256" required />
+      <label for="knowledge-product">Product</label>
+      <input id="knowledge-product" name="productId" type="text" maxlength="200" required />
+      <label for="knowledge-version">Product version</label>
+      <input id="knowledge-version" name="productVersion" type="text" maxlength="200" required />
+      <label for="knowledge-build">Build (when specified by your product)</label>
+      <input id="knowledge-build" name="buildId" type="text" maxlength="200" />
+      <label for="knowledge-locale">Guide locale (when specified)</label>
+      <input id="knowledge-locale" name="locale" type="text" maxlength="200" />
+      <button type="submit">Search guides</button>
+      <p class="form-note">Use the product and version from your guide or support request. Results match that exact version and any supplied build or locale.</p>
+    </form>
+    <ul id="knowledge-results" class="ticket-list"></ul>
+    <article id="knowledge-article" hidden>
+      <h2 id="knowledge-title"></h2>
+      <p id="knowledge-summary"></p>
+      <p id="knowledge-applicability" class="form-note"></p>
+      <pre id="knowledge-content"></pre>
+    </article>
+  </section>
+  <p><a href="/account">Account</a> · <a href="/feedback">Ask for help</a></p>
+  <noscript><p class="notice">Guides require JavaScript and your signed-in account.</p></noscript>
+  <script is:inline type="module" src="/knowledge.js"></script>
+</Base>
+
+<style>
+  #knowledge-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>

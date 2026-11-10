@@ -11,6 +11,9 @@ importers:
       '@modelcontextprotocol/server':
         specifier: ^2.0.0
         version: 2.0.0
+      '@pegma/agent-access':
+        specifier: 0.1.1
+        version: 0.1.1
       '@pegma/audit':
         specifier: 0.2.0
         version: 0.2.0
@@ -35,6 +38,18 @@ importers:
       '@pegma/identity':
         specifier: 0.1.2
         version: 0.1.2
+      '@pegma/knowledge-base-application':
+        specifier: 0.1.4
+        version: 0.1.4
+      '@pegma/knowledge-base-contracts':
+        specifier: 0.1.4
+        version: 0.1.4
+      '@pegma/knowledge-base-core':
+        specifier: 0.1.4
+        version: 0.1.4
+      '@pegma/knowledge-base-mcp':
+        specifier: 0.1.4
+        version: 0.1.4
       '@pegma/logger-cloudflare':
         specifier: ^0.1.1
         version: 0.1.1
@@ -50,6 +65,9 @@ importers:
       '@pegma/rate-limit':
         specifier: 0.2.0
         version: 0.2.0
+      '@pegma/rate-limit-paged':
+        specifier: npm:@pegma/rate-limit@0.3.3
+        version: '@pegma/rate-limit@0.3.3'
       '@pegma/sessions':
         specifier: 0.2.0
         version: 0.2.0
@@ -57,8 +75,8 @@ importers:
         specifier: ^0.1.1
         version: 0.1.1
       '@pegma/storage-cloudflare-d1':
-        specifier: 0.4.1
-        version: 0.4.1
+        specifier: 0.4.6
+        version: 0.4.6
       '@pegma/storage-core':
         specifier: 0.4.0
         version: 0.4.0
@@ -79,7 +97,7 @@ importers:
         version: 0.1.1
       agents:
         specifier: ^0.20.1
-        version: 0.20.1(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260729.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(react@19.2.8)(rolldown@1.1.5)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.13)(yaml@2.9.0))(zod@4.4.3)
+        version: 0.20.1(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260729.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.6)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(react@19.2.8)(rolldown@1.1.5)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.13)(yaml@2.9.0))(zod@4.4.3)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -397,6 +415,9 @@ packages:
 
   '@cfworker/json-schema@4.1.1':
     resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
+
+  '@cfworker/json-schema@4.1.6':
+    resolution: {integrity: sha512-YzVGTHXf4bzlyAL5KAvHYCdNbbt6zM5cYkAgxqxQPDQM6aZ4ShIIN5yJ+6q7YeonnevxT8k/LmD2tJi/jOiKkg==}
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -1018,6 +1039,16 @@ packages:
       '@cfworker/json-schema':
         optional: true
 
+  '@modelcontextprotocol/sdk@1.32.2':
+    resolution: {integrity: sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@cfworker/json-schema': ^4.1.1
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@cfworker/json-schema':
+        optional: true
+
   '@modelcontextprotocol/server@2.0.0':
     resolution: {integrity: sha512-YhHWdHfpFMQfd0prsEnxKeS3Qz3ytIGmsS0sth4KDjnacIT7hxk6hXHkJ9KysxlkvTM+WZAtQbbcUhdoP4Hvtw==}
     engines: {node: '>=20'}
@@ -1075,6 +1106,10 @@ packages:
     resolution: {integrity: sha512-C2Xj8FZ0uHWeCXXqX5B4/gVFQmtSkiuOolzAgutjTfseNOHT3pUjljDZsTSxXFGgio54bCzVFqmEOUrIVk8RDA==}
     engines: {node: '>=20.0.0'}
 
+  '@pegma/agent-access@0.1.1':
+    resolution: {integrity: sha512-C8t2kkv2piE9Jxt48hrRj+dYDoBd4BMgyO9JpgBQT5ycr8xZx4hq43DSG9I/KjjPQhEvRhp7obYnZ/IiBme/Jw==}
+    engines: {node: '>=22'}
+
   '@pegma/audit@0.2.0':
     resolution: {integrity: sha512-gUcfdp1QrLJtaMImA9NzZWfDEIuqBkALepceDIl1NPyCt0ZcdMs2ud8GuppQY5wXCB1/rgCYWYzep2OkDCrMBA==}
     engines: {node: '>=22'}
@@ -1119,6 +1154,22 @@ packages:
     resolution: {integrity: sha512-r8AsVTnwCSBU2LZZjieW5FgIJ2TUWi5DlU9kp+4tuaWDFfl85EezkD6F5omAFjTnaFqCRN1T2d/KsHoESarB2A==}
     engines: {node: '>=22'}
 
+  '@pegma/knowledge-base-application@0.1.4':
+    resolution: {integrity: sha512-j27QtdalETp3VW/bn92dmrGhzcorCuXeh79O1+2C0eY9QgRYP1eThN07op8DsQqjZJeyrwezU+I+mCvwkzV+Hg==}
+    engines: {node: '>=22'}
+
+  '@pegma/knowledge-base-contracts@0.1.4':
+    resolution: {integrity: sha512-en4R5pLgKhMnnJqtA4A2A/5hUdQZWsUV+XbzlLdQCYqIABnJnLehL+MhwTvwZJfYdaddrhfBwPPJk/EL/DYajg==}
+    engines: {node: '>=22'}
+
+  '@pegma/knowledge-base-core@0.1.4':
+    resolution: {integrity: sha512-eztpYFfXyTgvJTgx9PxitXkwLrFP+h03yJYxhQnM8mbNZNjulXF1j//eH8FjmQZzLRDGU1vW9Ec35T9xL43G1A==}
+    engines: {node: '>=22'}
+
+  '@pegma/knowledge-base-mcp@0.1.4':
+    resolution: {integrity: sha512-Lk9Ig88bIWsxVEzutPJLLwv6yfK+e7QjdmnWPArDCe+NahmNtAWrLK7fomslmJ+PCEHMh3EeXzi85xxPuJHGow==}
+    engines: {node: '>=22'}
+
   '@pegma/logger-cloudflare@0.1.1':
     resolution: {integrity: sha512-ZAcj5ekxWvpBtx3yzNeNBiydYlYsUMPyKcQEbsbuyGktdlTObKrnUYnyZn/8KL5cvKSoLO5GnsFW2pxIeXaMZA==}
     engines: {node: '>=22'}
@@ -1139,6 +1190,10 @@ packages:
     resolution: {integrity: sha512-gzaXefDW4Rg9Yla5qQOEeDChIm8hoYS6Eed1a4UNZb4BIJAcIkePwz5aZL6Ld5xCk3g8oTWdii78PLplwrzN9A==}
     engines: {node: '>=22'}
 
+  '@pegma/rate-limit@0.3.3':
+    resolution: {integrity: sha512-Bu2t3WjD4VsQj5lWnz+XZ0KQ/F2rbs1CkDmH6aSl9kCg1cYNZHviL9o5XJhbsA7siFo9G+FOJXK2REnnzWtk9Q==}
+    engines: {node: '>=22'}
+
   '@pegma/sessions@0.2.0':
     resolution: {integrity: sha512-dHGmFzQjHe9O+arGEQUcwutLuZ9+cA409hetiqxzQUXIOHOulOsA4/ywlDDRGiskMijyXLVlxvmGryjxV8NxZQ==}
     engines: {node: '>=22'}
@@ -1147,8 +1202,12 @@ packages:
     resolution: {integrity: sha512-EV0Zq8KJX7r7ybI+eIHUCAhnd261bveZykMQVmmZibSDRJVcd2bOuYCPvPg4wax7GmrUrdtVFJYEJqHl4PkhwQ==}
     engines: {node: '>=22'}
 
-  '@pegma/storage-cloudflare-d1@0.4.1':
-    resolution: {integrity: sha512-nVH+ppAWi3QwyEX8QVkPOLXNjtblO0jDnnGqCHpbZZzPvFQAVyd/1Bhxg8JdsuOD/UWGktJ26asAKzpNjRol0w==}
+  '@pegma/spine@0.1.2':
+    resolution: {integrity: sha512-jueFYJ3oJUacKdiERkEZ7R34xDMiEWXqn4MSA5bpTXzsXhWSap4EJUzKXtXnXuLPPjwJWLn5uoQe98kWQ6NS8A==}
+    engines: {node: '>=22'}
+
+  '@pegma/storage-cloudflare-d1@0.4.6':
+    resolution: {integrity: sha512-DjBRoRq5C6sWgL2KWdWOcW0F3N7HHuRu1i7Gr8SM4Aeh4FpEh1hQwIdMvkXpPHCd48CMqLJz8M5HYYR+/sRUgw==}
     engines: {node: '>=22'}
 
   '@pegma/storage-core@0.4.0':
@@ -3079,6 +3138,9 @@ packages:
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -3398,6 +3460,8 @@ snapshots:
       fontkitten: 1.0.3
 
   '@cfworker/json-schema@4.1.1': {}
+
+  '@cfworker/json-schema@4.1.6': {}
 
   '@clack/core@1.4.3':
     dependencies:
@@ -3822,13 +3886,13 @@ snapshots:
       eventsource-parser: 3.1.0
       jose: 6.2.4
       pkce-challenge: 5.0.1
-      zod: 4.4.3
+      zod: 4.6.7
 
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.7
 
-  '@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.6)(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 2.0.12(hono@4.12.32)
       ajv: 8.20.0
@@ -3848,7 +3912,31 @@ snapshots:
       zod: 4.4.3
       zod-to-json-schema: 3.25.2(zod@4.4.3)
     optionalDependencies:
-      '@cfworker/json-schema': 4.1.1
+      '@cfworker/json-schema': 4.1.6
+    transitivePeerDependencies:
+      - supports-color
+
+  '@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)':
+    dependencies:
+      '@hono/node-server': 2.0.12(hono@4.12.32)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.0
+      express: 5.2.1
+      express-rate-limit: 8.6.1(express@5.2.1)
+      hono: 4.12.32
+      jose: 6.2.4
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.6.7
+      zod-to-json-schema: 3.25.2(zod@4.6.7)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.6
     transitivePeerDependencies:
       - supports-color
 
@@ -3975,6 +4063,13 @@ snapshots:
       tslib: 2.8.1
       tsyringe: 4.10.0
 
+  '@pegma/agent-access@0.1.1':
+    dependencies:
+      '@pegma/audit': 0.2.0
+      '@pegma/authorization-core': 0.4.0
+      '@pegma/spine': 0.1.2
+      '@pegma/storage-core': 0.4.0
+
   '@pegma/audit@0.2.0':
     dependencies:
       '@pegma/spine': 0.1.1
@@ -4027,6 +4122,35 @@ snapshots:
       unicode-case-folding: 1.1.1
       unorm: 1.6.0
 
+  '@pegma/knowledge-base-application@0.1.4':
+    dependencies:
+      '@pegma/audit': 0.2.0
+      '@pegma/authorization-core': 0.4.0
+      '@pegma/knowledge-base-contracts': 0.1.4
+      '@pegma/knowledge-base-core': 0.1.4
+      '@pegma/spine': 0.1.2
+      '@pegma/storage-core': 0.4.0
+
+  '@pegma/knowledge-base-contracts@0.1.4':
+    dependencies:
+      '@pegma/spine': 0.1.2
+
+  '@pegma/knowledge-base-core@0.1.4':
+    dependencies:
+      '@pegma/knowledge-base-contracts': 0.1.4
+
+  '@pegma/knowledge-base-mcp@0.1.4':
+    dependencies:
+      '@cfworker/json-schema': 4.1.6
+      '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
+      '@pegma/authorization-core': 0.4.0
+      '@pegma/knowledge-base-application': 0.1.4
+      '@pegma/knowledge-base-contracts': 0.1.4
+      '@pegma/knowledge-base-core': 0.1.4
+      zod: 4.6.7
+    transitivePeerDependencies:
+      - supports-color
+
   '@pegma/logger-cloudflare@0.1.1':
     dependencies:
       '@pegma/spine': 0.1.1
@@ -4049,6 +4173,11 @@ snapshots:
       '@pegma/spine': 0.1.1
       '@pegma/storage-core': 0.4.0
 
+  '@pegma/rate-limit@0.3.3':
+    dependencies:
+      '@pegma/spine': 0.1.1
+      '@pegma/storage-core': 0.4.0
+
   '@pegma/sessions@0.2.0':
     dependencies:
       '@pegma/spine': 0.1.1
@@ -4056,7 +4185,9 @@ snapshots:
 
   '@pegma/spine@0.1.1': {}
 
-  '@pegma/storage-cloudflare-d1@0.4.1':
+  '@pegma/spine@0.1.2': {}
+
+  '@pegma/storage-cloudflare-d1@0.4.6':
     dependencies:
       '@pegma/storage-core': 0.4.0
 
@@ -4360,12 +4491,12 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.0.0
 
-  agents@0.20.1(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260729.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(react@19.2.8)(rolldown@1.1.5)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.13)(yaml@2.9.0))(zod@4.4.3):
+  agents@0.20.1(@babel/core@8.0.1)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260729.1)(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.6)(zod@4.4.3))(@modelcontextprotocol/server@2.0.0)(react@19.2.8)(rolldown@1.1.5)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.13)(yaml@2.9.0))(zod@4.4.3):
     dependencies:
       '@babel/plugin-proposal-decorators': 8.0.2(@babel/core@8.0.1)
       '@cfworker/json-schema': 4.1.1
       '@modelcontextprotocol/client': 2.0.0
-      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.6)(zod@4.4.3)
       '@modelcontextprotocol/server': 2.0.0
       '@rolldown/plugin-babel': 0.2.3(@babel/core@8.0.1)(@babel/runtime@7.29.7)(rolldown@1.1.5)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.13)(yaml@2.9.0))
       cron-schedule: 6.0.0
@@ -6005,8 +6136,14 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
+  zod-to-json-schema@3.25.2(zod@4.6.7):
+    dependencies:
+      zod: 4.6.7
+
   zod@3.25.76: {}
 
   zod@4.4.3: {}
+
+  zod@4.6.7: {}
 
   zwitch@2.0.4: {}

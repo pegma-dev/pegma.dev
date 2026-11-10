@@ -168,7 +168,10 @@ export function boundedString(
   return value;
 }
 
-export async function readJson(request: Request): Promise<unknown> {
+export async function readJson(
+  request: Request,
+  options?: { timeoutMs: number },
+): Promise<unknown> {
   const contentType = request.headers.get('Content-Type')?.split(';', 1)[0];
   if (contentType?.trim().toLowerCase() !== 'application/json') {
     throw new ApiError(415, 'json_required');
@@ -183,24 +186,77 @@ export async function readJson(request: Request): Promise<unknown> {
   if (request.body === null) {
     throw new ApiError(400, 'invalid_json');
   }
+  const timeoutMs = options?.timeoutMs;
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isSafeInteger(timeoutMs) ||
+      timeoutMs <= 0 ||
+      timeoutMs > 2_147_483_647)
+  ) {
+    throw new RangeError('Invalid JSON body timeout');
+  }
 
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancellationRequested = false;
+  let timedOut = false;
+  const timeoutError = new ApiError(408, 'request_timeout');
+  function cancelWithoutWaiting(reason: unknown): void {
+    if (cancellationRequested) return;
+    cancellationRequested = true;
+    // A source's cancellation promise can hang or reject. Neither may hold
+    // the timed request open or replace the original failure.
+    try {
+      void reader.cancel(reason).catch(() => {});
+    } catch {
+      // Cancellation is best effort; the reader lock is released below.
+    }
+  }
+  const expiresAt =
+    timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
+  const deadline =
+    timeoutMs === undefined
+      ? undefined
+      : new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            // Reject before cancellation settles any pending read.
+            reject(timeoutError);
+            cancelWithoutWaiting(timeoutError);
+          }, timeoutMs);
+        });
   try {
     while (true) {
-      const chunk = await reader.read();
+      if (expiresAt !== undefined && performance.now() >= expiresAt) {
+        throw timeoutError;
+      }
+      const chunk =
+        deadline === undefined
+          ? await reader.read()
+          : await Promise.race([reader.read(), deadline]);
+      if (
+        timedOut ||
+        (expiresAt !== undefined && performance.now() >= expiresAt)
+      ) {
+        throw timeoutError;
+      }
       if (chunk.done) {
         break;
       }
       length += chunk.value.byteLength;
       if (length > JSON_LIMIT) {
-        await reader.cancel();
+        if (deadline === undefined) await reader.cancel();
         throw new ApiError(413, 'request_too_large');
       }
       chunks.push(chunk.value);
     }
+  } catch (error) {
+    if (deadline !== undefined) cancelWithoutWaiting(error);
+    throw error;
   } finally {
+    if (timer !== undefined) clearTimeout(timer);
     reader.releaseLock();
   }
 

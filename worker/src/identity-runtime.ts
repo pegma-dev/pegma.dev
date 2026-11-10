@@ -115,10 +115,12 @@ function deferredEmailCodeProtector(secret: Uint8Array): EmailCodeProtector {
 export function createProductionIdentityRuntime(
   env: IdentityRuntimeEnv,
   logger: Logger,
+  readBatchSize?: number,
 ): IdentityRuntime {
   const store = createCloudflareD1Store({
     database: env.IDENTITY_DB,
     createSchemaIfMissing: false,
+    ...(readBatchSize === undefined ? {} : { readBatchSize }),
   });
   return createIdentityRuntime(
     {
