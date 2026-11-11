@@ -173,6 +173,9 @@ function meter(backing: D1Database) {
           // Override the generated deployment literal for disabled-path coverage.
           Object.defineProperty(configuration, 'PEGMA_KNOWLEDGE_ENABLED', {
             value: 'false',
+            writable: true,
+            enumerable: true,
+            configurable: true,
           });
           const response = await worker.fetch(
             request,

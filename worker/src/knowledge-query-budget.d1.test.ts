@@ -928,6 +928,9 @@ describe('real production KB request budgets over actual D1', () => {
           // Override the generated deployment literal for disabled-path coverage.
           Object.defineProperty(configuration, 'PEGMA_KNOWLEDGE_ENABLED', {
             value: 'false',
+            writable: true,
+            enumerable: true,
+            configurable: true,
           });
           Object.defineProperty(configuration, 'PEGMA_AGENT_CLIENTS_JSON', {
             value: 'not-json',

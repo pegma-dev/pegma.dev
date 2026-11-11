@@ -3,9 +3,10 @@
 The KB host integration is merged in
 [PR #59](https://github.com/pegma-dev/pegma.dev/pull/59). The checked-in profile
 enables controlled staff authoring qualification with three explicit public client
-registrations and closed test collections once the reviewed Worker configuration
-is deployed. Deployment of this profile, native-client acceptance and broader
-rollout remain pending. The host uses
+registrations for testing against closed collections. Merging to `main` starts
+the existing deployment workflow, which deploys the Worker before the Pages
+site. Confirm that run and the metadata readback below before client tests.
+Native-client acceptance and broader rollout remain pending. The host uses
 exact published `@pegma/agent-access@0.1.1` and all four
 `@pegma/knowledge-base-*` packages at `0.1.5`, over its existing Identity,
 Sessions, stored roles and D1 Store. The public catalog at `/api/mcp` remains
@@ -107,9 +108,18 @@ collections. Broader rollout, customer AI and pilot qualification remain pending
 
 [`worker/wrangler.jsonc`](../worker/wrangler.jsonc) sets
 `PEGMA_KNOWLEDGE_ENABLED=true` and three explicit public client registrations
-for controlled staff qualification. The previously applied profile was disabled
-with an empty list. Deployment of this profile and completed client flows remain
-pending.
+for controlled staff qualification. The prior profile was disabled with an empty
+list. A push to `main` runs the [deployment workflow](../.github/workflows/deploy.yml)
+and applies these variables after its checks pass.
+
+Before starting client tests, confirm the deployment run succeeded for the
+intended commit. Read `/.well-known/oauth-authorization-server` and
+`/.well-known/oauth-protected-resource/api/knowledge/mcp` over HTTPS and confirm
+both return `200` with the expected Pegma issuer, resource and three authoring scopes.
+Check the authorization, device and token endpoint URLs against the configuration.
+A `503` such as `agent_access_not_configured` requires investigation before
+continuing. Record the deployed commit and these readbacks in each actual-client
+result.
 
 Use existing site login and Admin consent, closed staff-test collections and
 fictional product documentation. Collections, navigation, roles and grants remain
@@ -128,8 +138,9 @@ them against the installed client.
 | `pg-kb-device-accept-v1` | Separate RFC 8628 host control | No redirect URI; device-code grant only |
 
 Port `48772` was available on both IPv4 and IPv6 loopback during the local
-2026-11-11 availability check. The port remains unreserved. Record the actual
-callback, installed version and provider mode during each test. Require the
+2026-11-11 availability check, which closed both listeners immediately. Recheck
+availability when starting the client. Record the actual callback, installed
+version and provider mode during each test. Require the
 registered hostname and path, with only the declared IP-loopback port
 substitution. The RFC 8628 host control has its own result, separate from native
 CLI proof. Codex CLI and Claude Code acceptance remain pending. Hosted Grok Bot
@@ -340,8 +351,10 @@ provenanceRead before and after the SDK proof, with an additional original-brows
 fence in HTTP. Exact accepted-receipt recovery and cancellation retain current
 review/queue authority without requiring obsolete KB rights; neither operation
 publishes an article or supplies new source approval. The root
-request composition supplies no private-source verifier and keeps Knowledge
-disabled; source-enabled production wiring is not implied by the factory seam.
+request composition supplies no private-source verifier. Ordinary authoring is
+enabled by the configured profile; workflows requiring private source references
+remain unavailable without that verifier. Source-enabled production wiring
+requires that verifier.
 
 Once the actual KB accepts evidence and publishes revision 1, a later draft
 or elapsed report/check TTL alone does not withdraw that approved publication.
@@ -391,8 +404,8 @@ discovery lane, for 16 exclusive lanes. That lane emits queue hints only; a
 review phase runs in a later Queue invocation. The default root supplies no
 trusted learning bundle and keeps the review flag off. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
 merging, inventory every Worker's current cron triggers in the deployment
-account: pushes to `main` deploy these schedules even while Knowledge is
-disabled. Deployment replaces this Worker's existing expressions with these
+account: pushes to `main` deploy these schedules regardless of the Knowledge
+flag. Deployment replaces this Worker's existing expressions with these
 five. The [Workers Free allowance is five triggers per account](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits),
 so this configuration leaves no capacity for another Worker's triggers.
 Require the account total after replacement to fit its effective allowance;

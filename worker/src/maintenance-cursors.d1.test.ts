@@ -213,6 +213,9 @@ describe('maintenance cursor writes over D1', () => {
       // Override the generated deployment literal for disabled-path coverage.
       Object.defineProperty(scheduledEnvironment, 'PEGMA_KNOWLEDGE_ENABLED', {
         value: 'false',
+        writable: true,
+        enumerable: true,
+        configurable: true,
       });
       // Wrangler's generated type records the deployed default literal, while
       // this test intentionally supplies malformed runtime configuration.
