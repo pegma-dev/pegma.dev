@@ -1,10 +1,10 @@
-import { createMemoryStore } from '@pegma/storage-core';
+import { createMemoryStore, type Store, type CollectionDefinition, type CollectionStore } from '@pegma/storage-core';
 import {
   KnowledgeBaseNotFoundError,
   KnowledgeBaseAuthorizationError,
   RepositoryConflictError,
 } from '@pegma/knowledge-base-application';
-import { SupportDeskAuthorizationError, supportPermissions } from '@pegma/support-desk-application';
+import { createSupportDeskApplication, SupportDeskAuthorizationError, supportPermissions, supportRecords } from '@pegma/support-desk-application';
 import { learningTargetBinding } from '@pegma/support-desk-ai';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import { describe, expect, it, vi } from 'vitest';
@@ -34,6 +34,70 @@ function barrier() {
 }
 
 describe('published learning assembly', () => {
+  it('recovers an accepted intake ACK before requiring the optional public ticket reader', async () => {
+    const f = await fixture(); const ticket = await f.terminal();
+    const packet = { ticketId: learningTicketId, clientCommandId: 'LEGACY-STRUCTURAL-ACK-EXACT', expectedRevision: ticket.revision };
+    const accepted = await f.runtime.enroll(f.actors.staff, packet);
+    const { readStaffTicket, ...application } = f.application; void readStaffTicket;
+    const runtime = createSupportLearningRuntime({ application, knowledge: f.knowledge, sources: f.sources, clock: f.clock,
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.rows();
+    expect(await runtime.recoverEnrollment(f.actors.staff, packet)).toEqual({ ticketId: learningTicketId,
+      commandId: packet.clientCommandId, operation: 'enroll', outcome: 'accepted', result: accepted });
+    expect(await f.rows()).toEqual(before);
+  });
+
+  it('fails closed on a conflict when a legacy structural port omits the public revision observation', async () => {
+    const f = await fixture(); const ticket = await f.terminal();
+    const legacy = createSupportDeskApplication({ store: f.store, clock: f.clock });
+    await legacy.addNote(f.actors.staff, { ...f.command('legacy-reader-revision'), ticketId: learningTicketId,
+      messageId: 'legacy-reader-note', body: 'A real competing fictional revision.' });
+    const { readStaffTicket, ...application } = f.application; void readStaffTicket;
+    const runtime = createSupportLearningRuntime({ application, knowledge: f.knowledge, sources: f.sources, clock: f.clock,
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.rows();
+    await expect(runtime.recoverEnrollment(f.actors.staff, { ticketId: learningTicketId,
+      clientCommandId: 'LEGACY-STRUCTURAL-UNKNOWN', expectedRevision: ticket.revision })).rejects.toBeInstanceOf(SupportLearningUnavailableError);
+    expect(await f.rows()).toEqual(before);
+  });
+
+  it('recovers an actual concurrent evidence commit after an initial missing receipt and newer-revision conflict', async () => {
+    const backing = createMemoryStore(); const entered = barrier(); const release = barrier();
+    let armed = false; const receipts: boolean[] = [];
+    const store: Store = { collection<Value>(definition: CollectionDefinition<Value>): CollectionStore<Value> {
+      const actual = backing.collection(definition);
+      if (definition.name !== supportRecords.name) return actual;
+      return { ...actual, async get(key) {
+        const value = await actual.get(key);
+        if (key.id === 'learning-command:REAL-EVIDENCE-RACE-EXACT') {
+          receipts.push(value !== null);
+          if (armed && value === null) { armed = false; entered.release(); await release.reached; }
+        }
+        return value;
+      } };
+    } };
+    const f = await createSupportLearningFixture(store); const ticket = await f.terminal();
+    await f.runtime.enroll(f.actors.staff, { ticketId: learningTicketId, clientCommandId: 'RACE-SETUP', expectedRevision: ticket.revision });
+    const packet = { ticketId: learningTicketId, clientCommandId: 'REAL-EVIDENCE-RACE-EXACT', expectedRevision: ticket.revision,
+      resolutionCycle: 1, evidence: { kind: 'staff_verified_fix' as const, solutionMessageId: 'learning-solution', verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' } };
+    armed = true; const recovery = f.runtime.recoverVerifiedFix(f.actors.staff, packet);
+    let accepted: Awaited<ReturnType<typeof f.runtime.submitVerifiedFix>> | undefined;
+    let rows: Awaited<ReturnType<typeof f.rows>> | undefined;
+    try {
+      await Promise.race([entered.reached, recovery.then(() => { throw new Error('Expected the real receipt-read barrier'); })]);
+      accepted = await f.runtime.submitVerifiedFix(f.actors.staff, packet);
+      const legacy = createSupportDeskApplication({ store, clock: f.clock });
+      await legacy.addNote(f.actors.staff, { ...f.command('race-after-real-evidence'), ticketId: learningTicketId,
+        messageId: 'race-after-evidence-note', body: 'An independent fictional edit after the accepted evidence.' });
+      rows = await f.rows();
+    } finally { release.release(); }
+    const result = await recovery;
+    expect(result.outcome).toBe('accepted');
+    if (result.outcome !== 'accepted') throw new Error('The second exact SDK retry must recover the genuine accepted ACK');
+    expect(result.result).toEqual(accepted); expect(await f.rows()).toEqual(rows);
+    expect(receipts).toEqual([false, false, true]);
+  });
+
   it('preserves exact client bytes and derives a stable actor/operation/ticket correlation', async () => {
     const input = { principalId: 'staff-one', ticketId: 'ticket-one', operation: 'enroll' as const,
       clientCommandId: 'A1B2C3D4-1234-4ABC-8DEF-ABCDEF123456' };

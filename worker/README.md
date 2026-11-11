@@ -41,11 +41,21 @@ no Worker authority). Do not substitute a broad personal OAuth token into
 GitHub. `pnpm run worker:deploy` from an authenticated operator session remains
 the break-glass path.
 
+Wrangler 4.114 applies configured queue producers and consumers during deployment.
+The learning flag controls runtime handling. Queue lookup and consumer
+creation/update accept the existing Workers Scripts write grant. Cloudflare's
+permission reference describes the Scripts Edit permission as write access.
+The queue and dead-letter queue are provisioned in the deployment account.
+[List queues](https://developers.cloudflare.com/api/resources/queues/methods/list/),
+[create consumer](https://developers.cloudflare.com/api/resources/queues/subresources/consumers/methods/create/),
+[update consumer](https://developers.cloudflare.com/api/resources/queues/subresources/consumers/methods/update/),
+[permission reference](https://developers.cloudflare.com/fundamentals/api/reference/permissions/).
+
 ## Identity composition
 
 The account boundary is fixed to issuer `https://pegma.dev` and WebAuthn RP ID
 `pegma.dev`. Cloudflare D1 is consumed only through
-`@pegma/storage-cloudflare-d1`; `@pegma/sessions@0.1.0` stores SHA-256-hashed
+`@pegma/storage-cloudflare-d1`; `@pegma/sessions@0.2.0` stores SHA-256-hashed
 opaque session identifiers. The browser receives a cryptographically random
 `__Host-pegma_session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, and
 `Path=/`.
@@ -62,9 +72,9 @@ stored principal against Identity and the Authorization claims adapter, and
 returns only the issuer and subject. Missing, expired, revoked, malformed, or
 account-invalid sessions receive `401`; every response is `no-store`.
 
-The production composition pins `@pegma/identity@0.1.0` and
-`@pegma/authorization-identity@0.1.2`. Account creation and fallback sign-in
-commit the email-code operation and its `@pegma/mail@0.1.0` job atomically in
+The production composition pins `@pegma/identity@0.1.2` and
+`@pegma/authorization-identity@0.4.0`. Account creation and fallback sign-in
+commit the email-code operation and its `@pegma/mail@0.1.1` job atomically in
 Identity's D1 collection. Start routes never receive or return the generated
 code; verify routes accept the user-supplied eight digits, and only the
 scheduled renderer recovers the stored protected material for delivery.
@@ -164,9 +174,10 @@ Idle runs do not import an unused HMAC key; secret validation remains eager. A s
 `0-58 * * * *` trigger runs one cleanup lane per invocation: challenge cleanup,
 email-operation repair, Mail retention, expired Sessions, each of the four
 Identity rate-limit policies, Support queue repair/inactive sweep, and each of
-the four Support/Admin rate-limit policies. The 14 lanes rotate using the
-scheduled UTC time, including across hour boundaries, so each runs every
-14–15 minutes. This gives cleanup its own invocation CPU budget instead of
+the four Support/Admin rate-limit policies, Knowledge maintenance and the
+separately gated learning-review discovery lane. The 16 lanes rotate through
+eligible scheduled UTC ticks, including across hour boundaries, so each runs
+every 16 ticks (a nominal 16-17 minutes because minute 59 is omitted). This gives cleanup its own invocation CPU budget instead of
 combining every task under the Workers Free 10 ms limit. Authentication and
 rate-limit checks still enforce expiry on access; cleanup only reclaims or
 repairs stored data. Paged Identity and Support cleanup also consumes at most
@@ -194,7 +205,7 @@ public acknowledgement endpoint.
 
 ## Support Desk composition
 
-Authenticated product feedback composes exact `0.2.3` versions of
+Authenticated product feedback composes exact `0.2.5` versions of
 `@pegma/support-desk-contracts`, `@pegma/support-desk-core`,
 `@pegma/support-desk-application`, and `@pegma/support-desk-templates` over
 the same `IDENTITY_DB` D1 binding. Support Desk collections
@@ -205,8 +216,11 @@ via AccessContext defaults (not a paid entitlement). Categories:
 `feedback`, `bug`, `feature_request`, `documentation`, `question`. Subject
 marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/ticket/?id=…`.
 
-The optional `@pegma/support-desk-ai@0.2.3` package is installed for the
-[isolated scripted answering stage](../docs/SUPPORT_ASSISTANT_STAGE.md).
+The optional `@pegma/support-desk-ai@0.2.5` package is installed for the
+[isolated scripted answering stage](../docs/SUPPORT_ASSISTANT_STAGE.md). The
+normal public `0.2.5` graph passed the 1,125-test local/CI
+[adoption checkpoint](../docs/KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint);
+review and deployment acceptance remain pending for the changed source.
 
 Create and reply use durable rate limits `pegma.support.ticket.create` and
 `pegma.support.ticket.reply`. Rotating cleanup runs queue repair and
@@ -302,7 +316,7 @@ Existing records decode missing per-repository progress as empty. No D1 schema
 migration is required, and reconciliation never fabricates webhook receipts.
 
 After deploying maintenance changes, check CPU distributions and resource-limit
-outcomes for all four triggers, including populated mail pages and release
+outcomes for all five configured cron triggers, including populated mail pages and release
 200/304 responses. Local D1 tests prove bounded page progress and delivery
 idempotency, not Cloudflare's production CPU accounting. These changes target
 the Workers Free 10 ms allowance; they cannot guarantee an absolute CPU ceiling.
@@ -310,8 +324,8 @@ the Workers Free 10 ms allowance; they cannot guarantee an absolute CPU ceiling.
 One-record pages trade throughput for headroom: mail scans at most 60 send and 59 reconciliation operation
 records per hour, including retained terminal records. A full scan
 must remain comfortably shorter than the email-code lifetime; inspect scan
-backlogs as usage grows. Cleanup pages advance once per lane every 14-15
-minutes. The published Sessions and rate-limit packages still expose
+backlogs as usage grows. Cleanup pages advance once per lane every 16 eligible
+ticks (a nominal 16-17 minutes). The published Sessions and rate-limit packages still expose
 whole-partition sweeps, so their work grows with partition size. Sustained
 backlogs need indexed discovery and paginated component APIs, or a larger CPU
 allowance. Reducing frequency alone does not raise the per-invocation limit.

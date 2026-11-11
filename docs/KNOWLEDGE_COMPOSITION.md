@@ -56,10 +56,13 @@ handlers. Actual stage broker and CPU proof remain pending, together with the
 existing production, customer and provider acceptance gates.
 
 The current manifest and lockfile pin released KB `0.1.5`,
-`@pegma/storage-cloudflare-d1@0.4.6` and genuine `@pegma/storage-core@0.4.0`.
+`@pegma/storage-cloudflare-d1@0.4.7` and genuine `@pegma/storage-core@0.4.0`.
 The D1 adapter itself retains that exact Core `0.4.0` dependency; no source alias,
 local archive, override or forced Core deduplication supplies the canonical
-graph. The frozen registry installation is complete.
+graph. The frozen registry installation is complete. The current adapter is
+identified by the [D1 `0.4.7` release](https://github.com/pegma-dev/storage-core/releases/tag/v0.4.7).
+
+The following D1 `0.4.6` receipt and PG-01 figures describe the earlier checkpoint.
 
 The [qualified D1 `0.4.6` release](https://github.com/pegma-dev/storage-core/releases/tag/v0.4.6)
 uses signed source
@@ -79,9 +82,20 @@ Wrangler's explicit dry run packages the Worker without uploading it. These
 checks use the published registry graph, without source aliases. Earlier
 source-alias runs remain historical diagnostics.
 
-PG-01's full review, CI and automatic deployment passed. The current package
-adoption and learning-review changes require their own current-head validation,
-review and CI.
+PG-01's full review, CI and automatic deployment passed at that earlier checkpoint.
+
+### Public 0.2.5 adoption checkpoint
+
+On 2026-11-11, the normal public Support `0.2.5` / D1 `0.4.7` graph passed local
+Node `22.18.0` checks, all 1,125 tests, the static build and the main-Worker
+packaging dry run. The normal suites comprised 1,002 Node tests across 62 files,
+121 Native D1 tests across 12 files and two Bench Ticket Worker/D1/R2 tests,
+with zero skips.
+[CI run 43034119881](https://github.com/pegma-dev/pegma.dev/actions/runs/43034119881)
+for [commit `3a4e5c6a`](https://github.com/pegma-dev/pegma.dev/commit/3a4e5c6a3924acad5764db7173046380f360166f)
+also passed the configured frozen install, check, full 1,125 tests and build.
+These results describe that source checkpoint. Review and deployment acceptance
+remain pending for the changed host.
 Actual-client acceptances remain at zero and no pilot has run. Keep activation disabled through the
 remaining deployed-host, staging/privacy and actual-client acceptance gates.
 
@@ -381,7 +395,7 @@ completions cannot overwrite a newer generation. Already committed projection
 writes are not rolled back after acknowledgement uncertainty.
 
 The existing Knowledge turn in the
-[15-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
+[16-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
 calls `repairRetrievalPage` with `limit:1` and `maxBatches:1`. Complete physical
 cycles and the SDK's existing atomic article-change jobs remain the recovery
 path for a lost hint, collection/policy changes and unfinished work. The ready

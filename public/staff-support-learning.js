@@ -172,6 +172,7 @@
       }
       if (pending?.review === true && pendingAction === 'cancel') retryButton.textContent = 'Retry the exact cancellation';
       else if (pending?.queued === true) retryButton.textContent = 'Retry the exact queued review intent';
+      else if (pending?.intake) retryButton.textContent = 'Retry and reconcile the previous intake action';
       else retryButton.textContent = 'Retry the previous exact action';
       for (const node of [solution.input, verification.input, reviewReason.input,
         withdrawReason.input, invalidateReason.input]) node.disabled = blocked || pending !== null;
@@ -376,6 +377,8 @@
       return Object.freeze({ subject: context.actorSubject, ticketId: context.ticketId,
         path: `${base()}/${path}`, body, commandId: id,
         review: path === 'review' || path === 'review-queue', queued: path === 'review-queue',
+        intake: action === 'enroll' || action === 'evidence' ? action : null,
+        expectedRevision: action === 'enroll' || action === 'evidence' ? value.expectedRevision : undefined,
         reviewGeneration: path === 'review' || path === 'review-queue' ? shownBinding.intent.sourceGeneration : undefined });
     }
     function pendingChanged() {
@@ -401,10 +404,31 @@
       if (candidate.review && action === 'cancel') pendingAction = 'cancel';
       if (candidate.review && action === 'submit' && pendingAction === 'cancel') action = 'cancel';
       const path = candidate.review && action !== 'submit'
-        ? candidate.path + (action === 'receipt' ? (candidate.queued ? '-status' : '-receipt') : '-cancel') : candidate.path;
-      const result = await call(path, { method: 'POST',
+        ? candidate.path + (action === 'receipt' ? (candidate.queued ? '-status' : '-receipt') : '-cancel')
+        : candidate.intake && action === 'recover' ? candidate.path + '-recovery' : candidate.path;
+      let result = await call(path, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: candidate.body }, generation, actor);
       let cancelled = false;
+      let superseded = false;
+      if (candidate.intake && action === 'recover') {
+        if (!object(result) || result.ticketId !== candidate.ticketId || result.commandId !== candidate.commandId ||
+          result.operation !== candidate.intake) throw invalid();
+        const scoped = ['outcome', 'ticketId', 'commandId', 'operation'];
+        const keys = result.outcome === 'accepted' ? [...scoped, 'result']
+          : result.outcome === 'superseded' ? [...scoped, 'expectedRevision', 'observedRevision'] : scoped;
+        if (Object.keys(result).sort().join(',') !== keys.sort().join(',')) throw invalid();
+        if (result.outcome === 'pending') {
+          await viewer(generation, actor); current(generation);
+          notice('The original intake action remains unresolved. Read current state, then explicitly retry the same packet.', true);
+          return;
+        }
+        if (result.outcome === 'superseded') {
+          if (result.expectedRevision !== candidate.expectedRevision || !Number.isSafeInteger(result.observedRevision) ||
+            result.observedRevision <= candidate.expectedRevision) throw invalid();
+          superseded = true;
+        } else if (result.outcome === 'accepted') result = result.result;
+        else throw invalid();
+      }
       if (candidate.review) {
         if (candidate.queued && object(result) && result.outcome === 'pending') {
           if (result.ticketId !== candidate.ticketId || result.commandId !== candidate.commandId ||
@@ -436,7 +460,7 @@
             !['unverified', 'eligible', 'held', 'withdrawn'].includes(accepted.state)) throw invalid();
           positive(accepted.sourceGeneration); positive(accepted.resolutionCycle);
         } else throw invalid();
-      } else {
+      } else if (!superseded) {
         if (!object(result) || result.ticketId !== candidate.ticketId ||
           !['unverified', 'eligible', 'held', 'withdrawn'].includes(result.state)) throw invalid();
         sourceCounter(result.sourceGeneration); positive(result.resolutionCycle);
@@ -448,7 +472,8 @@
       polls = 0;
       stopPolling();
       pendingChanged();
-      notice(cancelled ? 'Review cancellation acknowledged. Read current state before another action.'
+      notice(superseded ? 'The original action is fenced from future application. Its earlier outcome remains unknown. Read current state before another action.'
+        : cancelled ? 'Review cancellation acknowledged. Read current state before another action.'
         : 'Action acknowledged. Read the source again before another action.');
     }
     async function mutate(action) {
@@ -460,7 +485,7 @@
     }
     async function retry() {
       if (pending === null || (pending.review !== true && !ready) || busy) return;
-      return operation((generation) => send(pending, generation));
+      return operation((generation) => send(pending, generation, pending.intake ? 'recover' : 'submit'));
     }
     async function recoverReview(action) {
       if (pending?.review !== true || context === null || busy) return;

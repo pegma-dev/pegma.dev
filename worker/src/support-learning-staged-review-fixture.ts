@@ -30,7 +30,7 @@ export interface StagedReviewWorkerHarness {
   context(): { readonly value: ExecutionContext; finish(): Promise<void> };
 }
 export interface StagedReviewFixtureOptions {
-  /** Test-only real Identity/Sessions clock, sharing the learning clock domain. */
+  /** Real Identity/Sessions clock: current calendar plus learning elapsed time. */
   readonly clockedAuthentication?: boolean;
   /** Delay only; every source observation still comes from the actual SDK. */
   readonly beforeSourceRead?: (ticketId: string) => void | Promise<void>;
@@ -57,14 +57,17 @@ export async function createStagedReviewFixture(store: Store, workerHarness?: St
     afterDraft: undefined as (() => Promise<void>) | undefined };
   const logger = { log() { if (state.throwingLogger) throw new Error('Synthetic logger failure'); } };
   const identityLinkFromClaims = identityLinkKeyFromVerifiedIdentityClaims;
-  const authenticationClockStartedAt = learning.clock.now();
+  const authenticationLearningStartedAt = Date.parse(learning.clock.now());
+  const authenticationWallStartedAt = Date.now();
+  const authenticationClockStartedAt = fixtureOptions.clockedAuthentication === true
+    ? new Date(authenticationWallStartedAt).toISOString() : learning.clock.now();
   const authClock: Clock | undefined = fixtureOptions.clockedAuthentication === true ? {
     now() {
-      // Published Sessions touches when now>lastSeenAt. Moving one millisecond
-      // per real read exercises every browser fence, rather than freezing all
-      // reads at the first request's timestamp. It also moves the SDK clock.
+      // Preserve every real touch and logical SDK advance, but anchor absolute
+      // session expiry to the same current calendar as the browser fence.
       learning.advance(1);
-      return learning.clock.now();
+      return new Date(authenticationWallStartedAt + Date.parse(learning.clock.now()) -
+        authenticationLearningStartedAt).toISOString();
     },
   } : undefined;
   const sessionObservations: { readonly at: string; readonly previousLastSeenAt: string | null }[] = [];

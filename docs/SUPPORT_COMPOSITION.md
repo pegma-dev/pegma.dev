@@ -35,7 +35,7 @@ acceptance. [Verified Support Desk `0.2.5` release](https://github.com/pegma-dev
 [verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
-`@pegma/storage-cloudflare-d1@0.4.6`, `@pegma/sessions@0.2.0`,
+`@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.2.0`,
 `@pegma/rate-limit@0.2.0`, `@pegma/identity@0.1.2`, `@pegma/spine@0.1.1`.
 These are direct host selections; the lockfile retains each released package's
 own dependencies, including Support Desk's Spine `0.1.2`. No override or forced
@@ -45,9 +45,9 @@ The earlier [qualified Support 0.2.2 release](https://github.com/pegma-dev/suppo
 uses signed source
 [`99cf4e67da1d2357d99fd80389a96318a6e2cc93`](https://github.com/pegma-dev/support-desk/commit/99cf4e67da1d2357d99fd80389a96318a6e2cc93).
 [Strict release verification](https://github.com/pegma-dev/support-desk/actions/runs/42907283767/job/130161276758)
-qualifies those historical producer packages. The changed host and staged-learning
-integration still require their own complete validation, review and deployment
-gates.
+qualifies those historical producer packages. The current public `0.2.5` graph
+has passed the [normal local and CI validation checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
+Review and deployment acceptance remain pending for the changed host.
 
 ## Storage namespace
 
@@ -284,10 +284,10 @@ compatibility assembly and its failed isolated production-layout diagnostic are
 historical, not current graph or host-acceptance evidence.
 
 The staged learning review admission and Queue worker retained in this branch
-use the published, strictly verified Support Desk `0.2.5` APIs. Validation of the
-combined host on this selected public graph remains pending. Runtime availability
-and feature activation retain their existing trusted composition and readiness
-controls.
+use the published, strictly verified Support Desk `0.2.5` APIs. The combined
+public graph passed normal local and CI validation; review and deployment
+acceptance remain pending. Runtime availability and feature activation retain
+their existing trusted composition and readiness controls.
 
 [Learning intake and processing](../worker/src/support-learning.ts) are separate,
 default-disabled SDK boundaries. A real source verifier, current service/staff

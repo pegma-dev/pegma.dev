@@ -61,6 +61,8 @@ function fixture() {
       const packet = JSON.parse(call.body ?? '{}');
       if (call.path.endsWith('/review-cancel')) return envelope({ outcome: 'cancelled', ticketId: id, commandId: packet.commandId });
       const accepted = { ticketId: id, sourceGeneration: packet.intent?.sourceGeneration ?? state.sourceGeneration, resolutionCycle: 2, state: state.sourceState };
+      const intake = /\/(enroll|evidence)-recovery$/u.exec(call.path)?.[1];
+      if (intake) return envelope({ ticketId: id, commandId: packet.commandId, operation: intake, outcome: 'accepted', result: accepted });
       return envelope(packet.intent ? { outcome: 'accepted', result: accepted } : accepted);
     }
     if (call.path.includes('/proposal?')) return envelope({
@@ -106,6 +108,49 @@ function fixture() {
 }
 
 describe('optional public staff learning panel', () => {
+  it.each(['ticket', 'command', 'operation', 'expected', 'observed', 'extra'] as const)('retains an intake owner after a malformed %s terminal recovery', async (kind) => {
+    const f = fixture(); await f.panel.showTicket(ticket);
+    f.state.handler = async (call) => call.method === 'POST' ? Promise.reject(failure(409)) : f.response(call);
+    await f.action('enroll'); const original = f.writes()[0]!; await f.panel.refresh();
+    const packet = JSON.parse(original.body ?? '{}');
+    const recovered = { outcome: 'superseded', ticketId: ticket.ticketId, commandId: packet.commandId,
+      operation: 'enroll', expectedRevision: packet.expectedRevision, observedRevision: packet.expectedRevision + 1 };
+    if (kind === 'ticket') recovered.ticketId = 'another-ticket';
+    else if (kind === 'command') recovered.commandId = packet.commandId.toLowerCase();
+    else if (kind === 'operation') recovered.operation = 'evidence';
+    else if (kind === 'expected') recovered.expectedRevision += 1;
+    else if (kind === 'observed') recovered.observedRevision = packet.expectedRevision;
+    else Object.assign(recovered, { proof: 'client-forged' });
+    f.state.handler = async (call) => call.method === 'POST' ? f.envelope(recovered) : f.response(call);
+    await f.action('retry');
+    expect(f.panel.hasPending()).toBe(true); expect(f.ownership).toEqual([true]);
+    expect(f.writes()[1]?.body).toBe(original.body); expect(f.commandId).toHaveBeenCalledOnce();
+  });
+
+  it('retains a terminal recovery when the closing original session changes', async () => {
+    const f = fixture(); await f.panel.showTicket(ticket);
+    f.state.handler = async (call) => call.method === 'POST' ? Promise.reject(failure(409)) : f.response(call);
+    await f.action('enroll'); const original = f.writes()[0]!; await f.panel.refresh(); const packet = JSON.parse(original.body ?? '{}');
+    f.state.handler = async (call) => {
+      if (call.method !== 'POST') return f.response(call);
+      const value = f.envelope({ outcome: 'superseded', ticketId: ticket.ticketId, commandId: packet.commandId,
+        operation: 'enroll', expectedRevision: packet.expectedRevision, observedRevision: packet.expectedRevision + 1 });
+      f.state.identity = { ...f.state.identity, csrfToken: 'a-replaced-current-session' }; return value;
+    };
+    await f.action('retry'); expect(f.panel.hasPending()).toBe(true); expect(f.ownership).toEqual([true]);
+    expect(f.lost.at(-1)).toEqual({ status: 401, hasPending: true }); expect(f.writes()[1]?.body).toBe(original.body);
+  });
+
+  it('keeps pending recovery owned and performs no automatic mutating retry', async () => {
+    const f = fixture(); await f.panel.showTicket(ticket);
+    f.state.handler = async (call) => call.method === 'POST' ? Promise.reject(failure(409)) : f.response(call);
+    await f.action('enroll'); const original = f.writes()[0]!; await f.panel.refresh(); const packet = JSON.parse(original.body ?? '{}');
+    f.state.handler = async (call) => call.method === 'POST' ? f.envelope({ outcome: 'pending', ticketId: ticket.ticketId,
+      commandId: packet.commandId, operation: 'enroll' }) : f.response(call);
+    await f.action('retry'); await drain(); expect(f.panel.hasPending()).toBe(true);
+    expect(f.writes()).toHaveLength(2); expect(f.writes()[1]?.body).toBe(original.body); expect(f.commandId).toHaveBeenCalledOnce();
+  });
+
   it('retains a null receipt and makes cancellation retry sticky after its ACK is lost', async () => {
     const f = fixture(); await f.proposal();
     f.state.handler = async (call) => { if (call.method === 'POST') throw failure(503); return f.response(call); };
@@ -249,7 +294,7 @@ describe('optional public staff learning panel', () => {
       f.state.handler = undefined;
       await f.action('retry');
       expect(f.writes()[1]?.body).toBe(first.body);
-      expect(f.writes()[1]?.path).toBe(first.path);
+      expect(f.writes()[1]?.path).toBe(first.path + '-recovery');
       expect(f.commandId).toHaveBeenCalledOnce();
       expect(f.panel.hasPending()).toBe(false);
     },
@@ -290,7 +335,7 @@ describe('optional public staff learning panel', () => {
     f.state.handler = undefined;
     await f.action('retry');
     expect(f.writes()[1]?.body).toBe(original.body);
-    expect(f.writes()[1]?.path).toBe(original.path);
+    expect(f.writes()[1]?.path).toBe(original.path + '-recovery');
   });
 
   it('immediately clears private DOM and fields on sign-out while retaining an unknown command', async () => {

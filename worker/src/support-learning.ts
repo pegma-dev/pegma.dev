@@ -18,6 +18,9 @@ import {
 } from '@pegma/support-desk-ai';
 import {
   SupportDeskAuthorizationError,
+  SupportDeskConflictError,
+  type SupportDeskApplication,
+  type ResolutionLearningSourceResult,
   supportPermissions,
   type EnrollResolutionLearningCommand,
   type InvalidateResolutionEvidenceCommand,
@@ -58,6 +61,16 @@ export type LearningReviewHumanGuard = () => void | Promise<void>;
 export type LearningInvalidationPacket = Packet<InvalidateResolutionEvidenceCommand>;
 export type LearningWithdrawalPacket = Packet<WithdrawResolutionLearningSourceCommand>;
 
+export type LearningIntakeRecoveryResult = {
+  readonly ticketId: string;
+  readonly commandId: string;
+  readonly operation: 'enroll' | 'evidence';
+} & (
+  | { readonly outcome: 'accepted'; readonly result: ResolutionLearningSourceResult }
+  | { readonly outcome: 'pending' }
+  | { readonly outcome: 'superseded'; readonly expectedRevision: number; readonly observedRevision: number }
+);
+
 /** Intake is a separate SDK switch from model processing. Neither defaults ON. */
 export function supportLearningApplicationOptions(
   options: ResolutionLearningOptions = {},
@@ -79,7 +92,7 @@ export function createSupportLearningSourceBridge(
 }
 
 export interface SupportLearningRuntimeOptions {
-  readonly application: ResolutionLearningApplication;
+  readonly application: ResolutionLearningApplication & Partial<Pick<SupportDeskApplication, 'readStaffTicket'>>;
   readonly knowledge: DirectLearningKnowledge;
   readonly sources: SupportDeskLearningOptions['sources'];
   readonly clock: Clock;
@@ -319,6 +332,35 @@ function createLearningRuntime(
     });
   }
 
+  function recoverIntake<Command extends { readonly ticketId: string; readonly clientCommandId: string; readonly expectedRevision: number }>(
+    access: AccessContext, operation: 'enroll' | 'evidence', input: Command,
+    invoke: (current: AccessContext, packet: Omit<Command, 'clientCommandId'> & { commandId: string; correlationId: string }) => Promise<ResolutionLearningSourceResult>,
+  ): Promise<LearningIntakeRecoveryResult> {
+    return command(access, supportPermissions.learningEvidenceSubmit, operation === 'enroll' ? 'enroll' : 'verified_fix', input,
+      async (current, packet, _signal, boundary): Promise<LearningIntakeRecoveryResult> => {
+        const scope = { ticketId: packet.ticketId, commandId: packet.commandId, operation };
+        // An exact accepted ACK wins before any mutable ticket observation.
+        try { return { ...scope, outcome: 'accepted', result: await invoke(current, packet) }; }
+        catch (error) { boundary.ensure(); if (!(error instanceof SupportDeskConflictError)) throw error; }
+        const read = options.application.readStaffTicket;
+        if (read === undefined) throw new SupportLearningUnavailableError();
+        const view = await read.call(options.application, await boundary.current(), packet.ticketId);
+        boundary.ensure();
+        const revision = view.ticket.revision;
+        if (view.ticket.id !== packet.ticketId || !Number.isSafeInteger(revision) || revision < 1)
+          throw new SupportLearningUnavailableError();
+        if (revision <= packet.expectedRevision) return { ...scope, outcome: 'pending' };
+        // Every new intake effect CAS-fences this monotonically increasing
+        // ticket revision. Recheck the exact SDK command AFTER that fence so
+        // an accepted earlier receipt still wins a concurrent stale conflict.
+        try { return { ...scope, outcome: 'accepted', result: await invoke(await boundary.current(), packet) }; }
+        catch (error) { boundary.ensure(); if (!(error instanceof SupportDeskConflictError)) throw error; }
+        // This proves that the old revision cannot act in the future. Earlier
+        // acceptance may remain historically unknown for retained legacy data.
+        return { ...scope, outcome: 'superseded', expectedRevision: packet.expectedRevision, observedRevision: revision };
+      });
+  }
+
   function processingReady(): 'disabled' | 'readiness_unavailable' | 'unavailable' | 'ready' {
     try { if (!processingEnabled()) return 'disabled'; }
     catch { return 'readiness_unavailable'; }
@@ -377,6 +419,10 @@ function createLearningRuntime(
     submitVerifiedFix: (access: AccessContext, input: LearningVerifiedFixPacket) =>
       command(access, supportPermissions.learningEvidenceSubmit, 'verified_fix', input,
         (current, packet) => options.application.submitResolutionEvidence(current, packet)),
+    recoverEnrollment: (access: AccessContext, input: LearningEnrollmentPacket) =>
+      recoverIntake(access, 'enroll', input, (current, packet) => options.application.enrollResolutionLearning(current, packet)),
+    recoverVerifiedFix: (access: AccessContext, input: LearningVerifiedFixPacket) =>
+      recoverIntake(access, 'evidence', input, (current, packet) => options.application.submitResolutionEvidence(current, packet)),
     reviewProposal(access: AccessContext, input: LearningReviewPacket,
       verifyHumanBeforeCommit?: LearningReviewHumanGuard) {
       if (verifyHumanBeforeCommit !== undefined && typeof verifyHumanBeforeCommit !== 'function')

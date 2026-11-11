@@ -1,6 +1,7 @@
 import { createMemoryStore, type Store } from '@pegma/storage-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createSupportLearningReviewQueue, type SupportLearningReviewQueueMessage } from './support-learning-review-queue';
+import { createStagedReviewFixture } from './support-learning-staged-review-fixture';
 
 // These isolate transport/cursor mechanics with actual public Store persistence.
 // Real SDK review/authority and Native binding budgets are tested separately.
@@ -176,5 +177,31 @@ describe('durable learning review queue transport', () => {
     expect(item.ack).not.toHaveBeenCalled(); expect(item.retry).toHaveBeenCalledOnce();
     f.state.enabled = true; f.state.afterProcess = undefined;
     await f.create().consume(delivery(f.deliveries[0]).batch); expect(f.process).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+describe('staged review authentication calendar', () => {
+  it('anchors actual clocked Identity/Sessions to the current epoch while preserving learning elapsed time', async () => {
+    const startedAt = Date.now();
+    const f = await createStagedReviewFixture(createMemoryStore(), undefined, { clockedAuthentication: true });
+    expect(Date.parse(f.authenticationClockStartedAt)).toBeGreaterThanOrEqual(startedAt);
+    expect(Date.parse(f.authenticationClockStartedAt)).toBeLessThanOrEqual(Date.now());
+    expect(Date.parse(f.identityCreatedAt)).toBeGreaterThan(Date.parse(f.authenticationClockStartedAt));
+    const logicalStartedAt = Date.parse(f.learning.clock.now());
+    const delivered = await f.checked();
+    const packet = await f.prepare(delivered.source.sourceGeneration);
+    const first = f.sessionObservations.at(-1);
+    if (first === undefined) throw new Error('Expected real browser session fences.');
+    f.learning.advance(2_000);
+    expect((await f.invoke('/review-queue', packet.body)).status).toBe(202);
+    const last = f.sessionObservations.at(-1);
+    if (last === undefined) throw new Error('Expected the real closing session fence.');
+    expect(Date.parse(last.at) - Date.parse(first.at)).toBeGreaterThanOrEqual(2_000);
+    expect(Date.parse(f.learning.clock.now()) - logicalStartedAt).toBeGreaterThanOrEqual(2_000);
+    const session = await f.readSessionAt(last.at);
+    expect(session?.lastSeenAt).toBe(last.at);
+    if (session === null) throw new Error('Expected the actual live session.');
+    expect(Date.parse(session.expiresAt)).toBeGreaterThan(Date.now());
   });
 });

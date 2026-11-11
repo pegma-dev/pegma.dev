@@ -1,5 +1,6 @@
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createMemoryStore } from '@pegma/storage-core';
+import { createSupportDeskApplication } from '@pegma/support-desk-application';
 import { describe, expect, it } from 'vitest';
 import { createAgentPrincipalResolver } from '../worker/src/agent-authority';
 import { IDENTITY_ISSUER, SESSION_COOKIE } from '../worker/src/identity-api';
@@ -308,6 +309,42 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
 
 describe('registered public staff ticket and learning panel with real auth/SDK routes', () => {
 
+  it.each(['enroll', 'evidence'] as const)('reconciles a genuinely stale %s packet and restores fresh actions without rebinding its original bytes', async (operation) => {
+    const f = await backend(); const ticket = await f.learning.terminal();
+    const page = await browser(f); await page.ready();
+    if (operation === 'evidence') {
+      page.action('enroll'); await page.wait(() => !page.pending() && page.writes().length === 1);
+      await page.reload(); await page.ready();
+      page.field('solution').value = 'learning-solution'; page.field('verification').value = 'SYNTHETIC_STAFF_VERIFICATION';
+    }
+    const legacy = createSupportDeskApplication({ store: f.learning.store, clock: f.learning.clock });
+    await legacy.addNote(f.learning.actors.staff, { ...f.learning.command('competing-intake-revision'), ticketId: learningTicketId,
+      messageId: 'competing-intake-note', body: 'An independent fictional staff edit advances the ticket revision.' });
+    page.action(operation);
+    await page.wait(() => page.writes().some((call) => call.path.endsWith('/learning/' + operation) && call.status === 409));
+    await page.idle(); expect(page.pending()).toBe(true); expect(page.node('action-reopen').disabled).toBe(true);
+    const original = page.writes().find((call) => call.path.endsWith('/learning/' + operation))!;
+    const before = await f.learning.rows();
+    await page.reload(); await page.ready('unresolved'); page.action('retry');
+    await page.wait(() => !page.pending()); await page.idle();
+    const recovery = page.writes().find((call) => call.path.endsWith('/learning/' + operation + '-recovery'))!;
+    expect(recovery.body).toBe(original.body); expect(recovery.serverStatus).toBe(200);
+    expect(page.node('staff-learning-panel').textContent).toContain('fenced from future application');
+    expect(page.node('staff-learning-panel').textContent).toContain('earlier outcome remains unknown');
+    expect(page.node('action-reopen').disabled).toBe(false); expect(await f.learning.rows()).toEqual(before);
+    await page.reload(); await page.ready();
+    if (operation === 'evidence') {
+      page.field('solution').value = 'learning-solution'; page.field('verification').value = 'SYNTHETIC_STAFF_VERIFICATION';
+    }
+    page.action(operation);
+    await page.wait(() => !page.pending() && page.writes().some((call) => call.path.endsWith('/learning/' + operation) && call.status === 200));
+    const fresh = page.writes().filter((call) => call.path.endsWith('/learning/' + operation)).at(-1)!;
+    expect(JSON.parse(fresh.body ?? '{}').expectedRevision).toBe(ticket.revision + 1);
+    expect(JSON.parse(fresh.body ?? '{}').commandId).not.toBe(JSON.parse(original.body ?? '{}').commandId);
+    expect(f.learning.state.modelCalls).toBe(0);
+  });
+
+
   it('retains a genuinely accepted review when its original session is destroyed before the client closing fence', async () => {
     const f = await backend(); await f.learning.enrollAndVerify(); await f.learning.delivered();
     const page = await browser(f); await page.ready();
@@ -454,7 +491,7 @@ describe('registered public staff ticket and learning panel with real auth/SDK r
     expect(page.node('compose-submit').disabled).toBe(true);
     expect(page.node('action-take-over').disabled).toBe(true);
     page.action('retry'); await page.wait(() => !page.pending());
-    const retries = page.writes().filter((call) => call.path.endsWith('/learning/enroll'));
+    const retries = page.writes().filter((call) => /\/learning\/enroll(?:-recovery)?$/u.test(call.path));
     expect(retries).toHaveLength(2); expect(retries[1]?.body).toBe(first.body);
     expect(JSON.stringify(await f.learning.rows())).toBe(rows);
     expect(page.reloads).toBe(0);

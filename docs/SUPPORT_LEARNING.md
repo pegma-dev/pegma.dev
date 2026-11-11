@@ -89,7 +89,7 @@ Processing uses only the permitted customer-visible solution/transcript rows;
 internal notes never enter model input or customer KB output. A generated
 candidate is bounded untrusted data, not publication proof. Trusted checks,
 current target selection and human KB governance remain separate gates.
-The actual transitions, including `unverified0 â†’ eligible1` and a missing-product
+The actual transitions, including `unverified0 -> eligible1` and a missing-product
 `held0`, run through real auth, routes and SDKs in
 [the browser integration tests](../src/support-learning-integration.test.ts).
 The [panel tests](../src/support-learning.test.ts) also cover invalid counters,
@@ -128,7 +128,9 @@ body deadline.
 | `GET /work` | Exactly `sourceGeneration=N`, positive | Work generation, status, stage, proposal-presence flag and optional hold reason |
 | `GET /proposal` | Exactly `sourceGeneration=N`, positive | Actual checked private KB draft and complete immutable review intent, including source/work/target and full trusted policy binding |
 | `POST /enroll` | `commandId`, `expectedRevision` | Actual SDK source result; initial generation may be zero |
+| `POST /enroll-recovery` | The byte-identical retained enrollment body | `200` accepted/pending/superseded retry-and-reconcile result |
 | `POST /evidence` | `commandId`, `expectedRevision`, `resolutionCycle`, `solutionMessageId`, `verificationReference` | Server fixes the evidence kind to `staff_verified_fix` |
+| `POST /evidence-recovery` | The byte-identical retained evidence body | `200` accepted/pending/superseded retry-and-reconcile result |
 | `POST /review` | `commandId`, `intent`, `decision`; optional `reason` | `approve` or `reject`; accepted result is `{outcome:'accepted',result}` |
 | `POST /review-receipt` | The identical retained review packet | Actual accepted/cancelled receipt union, or `null`; no stale source/KB reconstruction |
 | `POST /review-cancel` | The identical retained review packet | Atomically fence that exact unaccepted review, or recover its existing accepted receipt |
@@ -155,7 +157,67 @@ the packet instead of inferring a new command is safe.
 Success is `{result, csrfToken}`. Errors use closed safe codes and the existing
 no-store JSON response convention; durable rate limiting supplies `Retry-After`
 when applicable. Raw dependency errors, model output and private proof are not
-returned as error messages. See the actual
+returned as error messages.
+
+### Retained intake retry and reconciliation
+
+The existing manual Retry control sends retained enrollment/evidence packets to
+`enroll-recovery` or `evidence-recovery` with byte-identical original bodies.
+These operations can apply the original valid command; they are retry and
+reconciliation endpoints rather than read-only receipt/status queries. They
+retain the original EvidenceSubmit/queue permissions, authenticated browser,
+CSRF, limiter and closing authority fences. There is no automatic mutation
+polling or new command ID.
+
+Each `200` response uses `{result, csrfToken}`. Its result always binds
+`ticketId`, the exact `commandId` and `operation:'enroll'|'evidence'`, plus one
+closed variant:
+
+| Outcome | Additional fields and meaning |
+| --- | --- |
+| `accepted` | `result` contains the actual SDK source result for that exact command |
+| `pending` | The original command remains unresolved |
+| `superseded` | `expectedRevision` and strictly newer `observedRevision` prove that the old-revision command cannot apply in the future |
+
+A superseded result leaves the earlier historical outcome unknown. The panel
+requires its closing same-actor/session/epoch checks before releasing that
+retained owner and directs the operator to read current state before another
+action. Generic `409`/`503` responses, mutable-read failures and other errors
+retain ownership. The server attempts exact SDK recovery before observing a
+newer ticket revision and retries that exact command again before reporting
+superseded.
+
+### Opt-in staged review HTTP
+
+The staged protocol uses the same authenticated prefix and complete retained
+`{commandId, intent, decision, reason?}` packet as inline review. It requires the
+configured staged capability. The staff-ticket response's optional
+`learningStagedReviewEnabled` hint selects this protocol in the panel; current
+server authority and SDK guards still decide every operation.
+
+| Method and suffix | Accepted body | Status and result |
+| --- | --- | --- |
+| `POST /review-queue` | The complete original review packet | `202` when the durable intent is pending; `200` for an existing accepted/cancelled result |
+| `POST /review-queue-status` | The identical retained review packet | `200` with pending status, an accepted/cancelled result, or `null` |
+| `POST /review-queue-cancel` | The identical retained review packet | `200` with the exact cancellation or an already accepted result |
+
+Each success retains the `{result, csrfToken}` envelope. A pending result has
+`outcome:'pending'`, `ticketId`, `commandId`, `phase:'proof'|'commit'`, boolean
+`claimed` and `held`, and canonical ISO `expiresAt`. It records an admitted human
+intent, not a completed review or KB publication. Claims and proof phases remain
+SDK-owned. Expiry, a hold, a `null` observation or an error does not settle the
+original command. Accepted receipt recovery and cancellation use current
+browser/review/queue authority without reconstructing obsolete KB proofs; new
+admission and proof still require their current KB authority.
+
+After a valid non-held pending acknowledgement, the panel schedules only
+review-status requests: at most ten automatic polls, thirty seconds apart.
+A hold, terminal result, changed owner/ticket context or suspension stops polling.
+The limit leaves the exact packet available for explicit status/retry/cancel
+recovery. Polling never submits another approval or changes its command bytes,
+and an unknown cancellation keeps cancellation as the retained operation.
+
+See the actual
 [HTTP tests](../worker/src/support-learning-handlers.test.ts) and
 [router tests](../worker/src/support-learning-routing.test.ts).
 
@@ -224,9 +286,13 @@ restore publication authority. These paths are exercised in
 [the learning assembly tests](../worker/src/support-learning.test.ts).
 
 No provider route, account/project configuration, service grant, scheduler or
-worker is constructed from an HTTP packet. The current production entry point
-omits this learning composition entirely. There is no deployment flag or model
-configuration example to copy from this document.
+worker is constructed from an HTTP packet. Staged review requires
+`PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED` exactly `"true"`, a
+`SUPPORT_LEARNING_REVIEWS` binding and a trusted `learningReviews` composition
+whose readiness callback returns true. The checked-in flag is `"false"`, and the
+production default `createWorker()` supplies no such learning bundle. The flag
+alone supplies neither that runtime nor its trusted processing ports. See the
+[composition controls](SUPPORT_COMPOSITION.md#optional-resolution-learning).
 
 For executed lower-layer composition, see
 [Bench Ticket](../recipes/bench-ticket/README.md), its
@@ -245,9 +311,11 @@ At the earlier Support **0.2.1** / direct KB **0.1.5** learning checkpoint,
 surface passed **39 cases**. That earlier focused browser/backend run passed
 **93 cases**: 24 assembly, 45 panel, nine actual browser integration and 15 router
 cases, with zero errors in its Astro, Worker and recipe check. These historical
-counts overlap the assembly baseline. They precede this 0.2.2 adoption and
+counts overlap the assembly baseline. They predate the earlier 0.2.2 adoption and
 full-intent/commit-guard changes and do not qualify the current host source.
-Current-head host validation, CI and review remain required.
+The normal public `0.2.5` [adoption checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint)
+passed 1,125 tests locally and in CI. Current review and deployment acceptance
+remain pending.
 
 Relevant executable sources are the
 [Memory assembly](../worker/src/support-learning.test.ts),
@@ -257,12 +325,13 @@ Relevant executable sources are the
 [browser integration](../src/support-learning-integration.test.ts) and
 [router](../worker/src/support-learning-routing.test.ts) tests.
 
-Whole current Native-suite and whole HTTP-invocation query/parameter evidence,
-CPU/day limits, deployment, actual client/provider privacy evidence, complete
-customer/staff/admin workflow acceptance and pilot gates remain open. A separate
+The normal Native suite and its bounded HTTP/Queue profiles passed at that
+checkpoint. Those fixture-profile results leave CPU/day limits, deployment,
+actual client/provider privacy evidence, complete customer/staff/admin workflow
+acceptance and pilot gates open. A separate
 native answering run with released Support 0.2.1, KB 0.1.5 and the D1 adapter
 failed the Workers Free 50-call whole-invocation limit. Published Support
-**0.2.2** now supplies opt-in staged assistant retrieval, separately from learning:
+**0.2.2** introduced opt-in staged assistant retrieval, separately from learning:
 preparation consumes attempt one without paid usage or a model call, and paid
 generation consumes attempt two in a genuinely later physical invocation. Both
 attempt limits must allow at least two. Only a durable acknowledged no-call finish

@@ -1,7 +1,7 @@
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createMemoryStore, type CollectionDefinition, type CollectionStore, type Store } from '@pegma/storage-core';
 import { learningTargetBinding, type LearningReviewIntent } from '@pegma/support-desk-ai';
-import { supportPermissions, supportRecords } from '@pegma/support-desk-application';
+import { createSupportDeskApplication, supportPermissions, supportRecords } from '@pegma/support-desk-application';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgentPrincipalResolver } from './agent-authority';
@@ -184,6 +184,67 @@ async function hashOnlyReviewPacket(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('unregistered staff learning HTTP with current public host authority', () => {
+  it.each(['enroll', 'evidence'] as const)('returns an authenticated future-effect fence for the exact stale %s command', async (operation) => {
+    const f = await fixture(); const ticket = await f.learning.terminal();
+    if (operation === 'evidence') expect((await f.send(f.request('enroll', { commandId: 'SETUP-ENROLL', expectedRevision: ticket.revision }))).status).toBe(200);
+    const packet = { commandId: 'EXACT-STALE-' + operation.toUpperCase(), expectedRevision: ticket.revision,
+      ...(operation === 'evidence' ? { resolutionCycle: 1, solutionMessageId: 'learning-solution', verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' } : {}) };
+    const legacy = createSupportDeskApplication({ store: f.learning.store, clock: f.learning.clock });
+    await legacy.addNote(f.learning.actors.staff, { ...f.learning.command('http-intake-revision'), ticketId: learningTicketId,
+      messageId: 'http-intake-revision-note', body: 'An independent fictional staff edit.' });
+    expect((await f.send(f.request(operation, packet))).status).toBe(409); const before = await f.learning.rows();
+    const recovered = await f.send(f.request(operation + '-recovery', packet)); expect(recovered.status).toBe(200);
+    expect(result(await object(recovered))).toEqual({ outcome: 'superseded', ticketId: learningTicketId, commandId: packet.commandId,
+      operation, expectedRevision: ticket.revision, observedRevision: ticket.revision + 1 });
+    expect(await f.learning.rows()).toEqual(before);
+    const forged = { ...packet, actorId: f.principals.staff };
+    expect((await f.send(f.request(operation + '-recovery', forged))).status).toBe(400);
+    expect((await f.send(f.request(operation + '-recovery', packet, 'admin'))).status).toBe(403);
+    const csrf = f.request(operation + '-recovery', packet); csrf.headers.delete('X-Pegma-CSRF');
+    expect((await f.send(csrf)).status).toBe(403); expect(await f.learning.rows()).toEqual(before);
+  });
+
+  it('manual enrollment recovery can apply the still-valid exact original command once', async () => {
+    const f = await fixture(); const ticket = await f.learning.terminal();
+    const packet = { commandId: 'EXACT-VALID-RECOVERY', expectedRevision: ticket.revision };
+    const accepted = await f.send(f.request('enroll-recovery', packet)); expect(accepted.status).toBe(200);
+    const body = result(await object(accepted)); expect(body).toMatchObject({ operation: 'enroll', commandId: packet.commandId, outcome: 'accepted' });
+    const rows = await f.learning.rows();
+    const repeated = await f.send(f.request('enroll-recovery', packet)); expect(await object(repeated)).toMatchObject({ result: body });
+    expect(await f.learning.rows()).toEqual(rows); expect(rows.filter((row) => row.kind === 'resolution_learning_source')).toHaveLength(1);
+  });
+
+  it('keeps an unchanged-revision conflict pending and preserves its original packet', async () => {
+    const f = await fixture(); const ticket = await f.learning.terminal();
+    expect((await f.send(f.request('enroll', { commandId: 'SETUP-PENDING', expectedRevision: ticket.revision }))).status).toBe(200);
+    const packet = { commandId: 'EXACT-PENDING-EVIDENCE', expectedRevision: ticket.revision, resolutionCycle: 1,
+      solutionMessageId: 'missing-visible-message', verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' };
+    const before = await f.learning.rows(); const response = await f.send(f.request('evidence-recovery', packet));
+    expect(response.status).toBe(200); expect(result(await object(response))).toEqual({ outcome: 'pending', operation: 'evidence',
+      ticketId: learningTicketId, commandId: packet.commandId }); expect(await f.learning.rows()).toEqual(before);
+  });
+
+  it.each(['logout', 'role', 'outage'] as const)('keeps terminal recovery unavailable after %s at its real ticket observation', async (change) => {
+    const f = await fixture(); const ticket = await f.learning.terminal();
+    const legacy = createSupportDeskApplication({ store: f.learning.store, clock: f.learning.clock });
+    await legacy.addNote(f.learning.actors.staff, { ...f.learning.command('http-recovery-role-revision'), ticketId: learningTicketId,
+      messageId: 'http-recovery-role-note', body: 'A competing fictional note.' });
+    f.state.runtime = createSupportLearningRuntime({ application: { ...f.learning.application,
+      async readStaffTicket(...args) {
+        const view = await f.learning.application.readStaffTicket(...args);
+        if (change === 'logout') await f.destroy('staff');
+        else if (change === 'role') await f.revoke('staff', SUPPORT_ROLE);
+        else throw new Error('Fictional private ticket outage');
+        return view;
+      },
+    }, knowledge: f.learning.knowledge, sources: f.learning.sources, clock: f.learning.clock, ports: f.learning.ports,
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.learning.rows(); const response = await f.send(f.request('enroll-recovery', {
+      commandId: 'EXACT-RECOVERY-GUARD', expectedRevision: ticket.revision }));
+    expect(response.status).toBe(change === 'logout' ? 401 : change === 'role' ? 403 : 503);
+    expect(await object(response)).not.toHaveProperty('result'); expect(await f.learning.rows()).toEqual(before);
+  });
+
   it.each(['session', 'knowledge', 'support'] as const)(
     'prevents a full-intent review commit when %s is revoked inside the actual SDK proof',
     async (change) => {

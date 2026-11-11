@@ -30,8 +30,8 @@ export interface SupportLearningHandlerOptions extends AgentBrowserOptions {
   readonly limiter: DurableRateLimiter;
 }
 
-type Operation = 'source' | 'work' | 'proposal' | 'enroll' | 'evidence' | 'review' | 'review-receipt' | 'review-cancel' | 'review-queue' | 'review-queue-status' | 'review-queue-cancel' | 'withdraw' | 'invalidate';
-const path = /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/learning(?:\/(work|proposal|enroll|evidence|review|review-receipt|review-cancel|review-queue|review-queue-status|review-queue-cancel|withdraw|invalidate))?$/u;
+type Operation = 'source' | 'work' | 'proposal' | 'enroll' | 'enroll-recovery' | 'evidence' | 'evidence-recovery' | 'review' | 'review-receipt' | 'review-cancel' | 'review-queue' | 'review-queue-status' | 'review-queue-cancel' | 'withdraw' | 'invalidate';
+const path = /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/learning(?:\/(work|proposal|enroll|enroll-recovery|evidence|evidence-recovery|review|review-receipt|review-cancel|review-queue|review-queue-status|review-queue-cancel|withdraw|invalidate))?$/u;
 
 function integer(value: unknown, minimum = 1): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum)
@@ -51,7 +51,7 @@ function sourceGeneration(url: URL): number {
 function operationPermission(operation: Operation): string {
   if (operation.startsWith('review')) return supportPermissions.learningReview;
   if (operation === 'withdraw') return supportPermissions.learningWithdraw;
-  if (operation === 'enroll' || operation === 'evidence' || operation === 'invalidate')
+  if (operation === 'enroll' || operation === 'enroll-recovery' || operation === 'evidence' || operation === 'evidence-recovery' || operation === 'invalidate')
     return supportPermissions.learningEvidenceSubmit;
   return supportPermissions.learningRead;
 }
@@ -126,8 +126,8 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
     const ticketId = match[1];
     if (ticketId === undefined) return json({ error: 'invalid_request' }, { status: 400 });
     const name = match[2] ?? 'source';
-    const operation: Operation = name === 'work' || name === 'proposal' || name === 'enroll' ||
-      name === 'evidence' || name === 'review' || name === 'review-receipt' || name === 'review-cancel' || name === 'review-queue' || name === 'review-queue-status' || name === 'review-queue-cancel' || name === 'withdraw' || name === 'invalidate'
+    const operation: Operation = name === 'work' || name === 'proposal' || name === 'enroll' || name === 'enroll-recovery' ||
+      name === 'evidence' || name === 'evidence-recovery' || name === 'review' || name === 'review-receipt' || name === 'review-cancel' || name === 'review-queue' || name === 'review-queue-status' || name === 'review-queue-cancel' || name === 'withdraw' || name === 'invalidate'
       ? name : 'source';
     const mutation = operation !== 'source' && operation !== 'work' && operation !== 'proposal';
     const permission = operationPermission(operation);
@@ -203,21 +203,21 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
         // Recheck after the limiter and before reading the bounded body.
         // The SDK operation resolves current authority again after the read.
         const body = await withCurrentAccess(() => readJson(request, { timeoutMs: 10_000 }));
-        if (operation === 'enroll') {
+        if (operation === 'enroll' || operation === 'enroll-recovery') {
           const packet = exactObject(body, ['commandId', 'expectedRevision']);
           const clientCommandId = boundedString(packet.commandId, 1, 200);
           const expectedRevision = integer(packet.expectedRevision);
-          result = await withCurrentAccess((access) => options.runtime().enroll(access, {
+          result = await withCurrentAccess(async (access) => options.runtime()[operation === 'enroll' ? 'enroll' : 'recoverEnrollment'](access, {
             ticketId, clientCommandId, expectedRevision,
           }));
-        } else if (operation === 'evidence') {
+        } else if (operation === 'evidence' || operation === 'evidence-recovery') {
           const packet = exactObject(body, ['commandId', 'expectedRevision', 'resolutionCycle', 'solutionMessageId', 'verificationReference']);
           const clientCommandId = boundedString(packet.commandId, 1, 200);
           const expectedRevision = integer(packet.expectedRevision);
           const resolutionCycle = integer(packet.resolutionCycle);
           const solutionMessageId = boundedString(packet.solutionMessageId, 1, 200);
           const verificationReference = boundedString(packet.verificationReference, 1, 200);
-          result = await withCurrentAccess((access) => options.runtime().submitVerifiedFix(access, {
+          result = await withCurrentAccess(async (access) => options.runtime()[operation === 'evidence' ? 'submitVerifiedFix' : 'recoverVerifiedFix'](access, {
             ticketId, clientCommandId, expectedRevision, resolutionCycle,
             evidence: { kind: 'staff_verified_fix', solutionMessageId, verificationReference },
           }));
@@ -272,8 +272,8 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
           }));
         }
       }
-      // Each branch performs one protected SDK operation and synchronous
-      // projection. This closing check fences the entire response.
+      // This closing check fences the complete protected runtime operation
+      // and its synchronous response projection.
       let final: Awaited<ReturnType<typeof current>>;
       try {
         final = await current();
