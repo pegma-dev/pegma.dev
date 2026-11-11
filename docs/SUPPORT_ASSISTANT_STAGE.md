@@ -51,7 +51,7 @@ checked during cloud qualification. See
 ## Run the local checks
 
 Use the repository's supported Node version and frozen dependency install.
-The current package selection is Support Desk `0.2.3` with direct Knowledge Base
+The current package selection is Support Desk `0.2.5` with direct Knowledge Base
 `0.1.5`; [package.json](../package.json) is authoritative.
 
 From the repository root:
@@ -81,13 +81,17 @@ which blocks physical call 51 and parameter 101 before execution or binding.
 Batches retain their actual statement count; the physical-call metric counts a
 native batch invocation once.
 
-The 35 entry and recovery cases passed against the selected `0.2.3` packages
+At the earlier checkpoint, 35 entry and recovery cases passed against the
+then-selected `0.2.3` packages
 on Node 22.18.0. Recovery profiles recorded 31 physical D1 calls for preparation
 and 50 for answering, with zero blocked calls. Preparation made zero model or
 reservation calls. Answering used one model call, one reservation and one
 reconciliation, with the persisted ledger stable across later duplicates.
-These results apply to the fictional fixture. Deployed broker timing, retry
-delivery, CPU use and wider workloads retain their qualification gates.
+These historical results apply to that fictional fixture. The current public
+`0.2.5` graph passed the normal 1,125-test local/CI
+[adoption checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
+Deployed broker timing, retry delivery, CPU use and wider workloads retain
+their qualification gates.
 
 ## Generate a fictional seed locally
 

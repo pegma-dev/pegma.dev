@@ -17,10 +17,15 @@ at signed source
 passed independent exact-byte, signature/provenance and registry-consumer
 verification. Existing Identity and Support Desk keep their
 `@pegma/rate-limit@0.2.0` dependency. The current host selects all five Support
-Desk packages at `0.2.3`, including the optional AI coordinator used only by the
-separate default-disabled synthetic stage. The
-[verified Support Desk `0.2.3` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.3)
+Desk packages at `0.2.5`, including the optional AI coordinator. The separate
+synthetic stage remains default-disabled. The
+[verified Support Desk `0.2.5` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5)
 pins its optional AI dependency on KB application/contracts `0.1.5`.
+
+The learning port forwards actual KB errors without the obsolete `0.1.2`
+constructor alias or class-translation shim. The earlier `0.2.1` / nested `0.1.2`
+assembly and its failed isolated production-layout diagnostic remain historical;
+they neither establish nor replace current-graph qualification.
 
 All four exact KB `0.1.5` packages are installed in the manifest and lockfile.
 The answering read-batching release retains the shared report factory and
@@ -51,10 +56,13 @@ handlers. Actual stage broker and CPU proof remain pending, together with the
 existing production, customer and provider acceptance gates.
 
 The current manifest and lockfile pin released KB `0.1.5`,
-`@pegma/storage-cloudflare-d1@0.4.6` and genuine `@pegma/storage-core@0.4.0`.
+`@pegma/storage-cloudflare-d1@0.4.7` and genuine `@pegma/storage-core@0.4.0`.
 The D1 adapter itself retains that exact Core `0.4.0` dependency; no source alias,
 local archive, override or forced Core deduplication supplies the canonical
-graph. The frozen registry installation is complete.
+graph. The frozen registry installation is complete. The current adapter is
+identified by the [D1 `0.4.7` release](https://github.com/pegma-dev/storage-core/releases/tag/v0.4.7).
+
+The following D1 `0.4.6` receipt and PG-01 figures describe the earlier checkpoint.
 
 The [qualified D1 `0.4.6` release](https://github.com/pegma-dev/storage-core/releases/tag/v0.4.6)
 uses signed source
@@ -74,8 +82,20 @@ Wrangler's explicit dry run packages the Worker without uploading it. These
 checks use the published registry graph, without source aliases. Earlier
 source-alias runs remain historical diagnostics.
 
-PG-01's full review, CI and automatic deployment passed. The subsequent
-human-control changes require their own current-head review and CI.
+PG-01's full review, CI and automatic deployment passed at that earlier checkpoint.
+
+### Public 0.2.5 adoption checkpoint
+
+On 2026-11-11, the normal public Support `0.2.5` / D1 `0.4.7` graph passed local
+Node `22.18.0` checks, all 1,125 tests, the static build and the main-Worker
+packaging dry run. The normal suites comprised 1,002 Node tests across 62 files,
+121 Native D1 tests across 12 files and two Bench Ticket Worker/D1/R2 tests,
+with zero skips.
+[CI run 43034119881](https://github.com/pegma-dev/pegma.dev/actions/runs/43034119881)
+for [commit `3a4e5c6a`](https://github.com/pegma-dev/pegma.dev/commit/3a4e5c6a3924acad5764db7173046380f360166f)
+also passed the configured frozen install, check, full 1,125 tests and build.
+These results describe that source checkpoint. Review and deployment acceptance
+remain pending for the changed host.
 Actual-client acceptances remain at zero and no pilot has run. Keep activation disabled through the
 remaining deployed-host, staging/privacy and actual-client acceptance gates.
 
@@ -119,9 +139,11 @@ acceptances, provider/staging controls, production readiness, or pilot results.
 The [host policy](../worker/src/support-access.ts) keeps authority explicit:
 
 - `Support` retains its original six Support Desk permissions (queue read,
-  staff reply, notes, assignment, management and Audit read) and the explicit
-  human takeover introduced in Support Desk `0.2.0`. Existing
-  assignments are not migrated or silently granted KB powers.
+  staff reply, notes, assignment, management and Audit read) and adds explicit
+  human takeover plus explicit learning read, evidence submission, review and
+  withdrawal under policy `pegma.dev-policy-5`.
+  Learning processing is not granted. Existing assignments are not migrated
+  or silently granted KB powers.
 - `Knowledge` is a separately assigned role for collection reads, draft and
   evidence work, human report review, publication and withdrawal. Admin-only
   collection/governance mutation controls remain separate.
@@ -241,10 +263,21 @@ that epoch's replay horizon; only the head's latest exact reset operation has
 its bounded retry acknowledgement. Preserve required operational evidence
 before choosing a reset rather than treating receipts as permanent history.
 
-There is no report-backed private-source bridge in this integration. Browser
-and agent draft inputs cannot attach arbitrary `sourceReferences`; PG01
-provenance remains empty/read-only. A later Support-source integration must
-compose the real authorization/withdrawal verifier separately.
+Browser and agent draft inputs cannot attach arbitrary `sourceReferences`;
+PG-01 authoring provenance remains read-only through those routes. The optional
+[Support learning composition](SUPPORT_COMPOSITION.md#optional-resolution-learning)
+now supplies a real SDK source bridge for trusted host assembly. That bridge
+checks current source authority, eligibility and the exact staff-reviewed
+article/provenance target; it is separate from test-report receipt verification.
+A report receipt alone never establishes private-source approval. Support review
+uses a complete immutable intent for submit, receipt and explicit cancellation.
+Its new-mutation guard checks fresh learning review/queue plus KB draftRead and
+provenanceRead before and after the SDK proof, with an additional original-browser
+fence in HTTP. Exact accepted-receipt recovery and cancellation retain current
+review/queue authority without requiring obsolete KB rights; neither operation
+publishes an article or supplies new source approval. The root
+request composition supplies no private-source verifier and keeps Knowledge
+disabled; source-enabled production wiring is not implied by the factory seam.
 
 Once the actual KB accepts evidence and publishes revision 1, a later draft
 or elapsed report/check TTL alone does not withdraw that approved publication.
@@ -288,8 +321,11 @@ two isolated rate invocations followed by one ready-hint invocation:
   task. This reduces the previous 29 ready opportunities to 19; ready hints
   remain a latency aid, with atomic SDK jobs and physical recovery preserved.
 
-The original four other expressions and all 15 rotating cleanup lanes remain
-in place. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
+The original four other expressions remain in place. The cleanup rotation
+retains its original 15 lanes and adds one separately gated learning-review
+discovery lane, for 16 exclusive lanes. That lane emits queue hints only; a
+review phase runs in a later Queue invocation. The default root supplies no
+trusted learning bundle and keeps the review flag off. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
 merging, inventory every Worker's current cron triggers in the deployment
 account: pushes to `main` deploy these schedules even while Knowledge is
 disabled. Deployment replaces this Worker's existing expressions with these
@@ -359,7 +395,7 @@ completions cannot overwrite a newer generation. Already committed projection
 writes are not rolled back after acknowledgement uncertainty.
 
 The existing Knowledge turn in the
-[15-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
+[16-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
 calls `repairRetrievalPage` with `limit:1` and `maxBatches:1`. Complete physical
 cycles and the SDK's existing atomic article-change jobs remain the recovery
 path for a lost hint, collection/policy changes and unfinished work. The ready
@@ -378,13 +414,22 @@ checks the current `PEGMA_KNOWLEDGE_ENABLED=true` flag before Store access and
 after awaits; disabled ticks do no projection work. Limiter cleanup remains
 independent of that flag and projection failures.
 
-This phase has no private-source eligibility verifier. Retained nonempty
-`privateSources` references remain blocked/unavailable. A future source-enabled
-composition must provide its real authorization/withdrawal ports in both
-request and repair paths; there is no allow-all fallback. HTTP handlers do not
-scan the corpus or expose maintenance DTOs. Coarse diagnostics contain counts
-and fixed stages, not article IDs, cursors, queries, private bodies or exception
-text.
+The three host factories accept an optional real `privateSources` verifier.
+Source-enabled assembly must pass the same current authorization/withdrawal
+bridge to `createKnowledgeRuntime`, `createKnowledgeRetrievalReady` and
+`createKnowledgeRetrievalMaintenance`; request-only wiring cannot qualify
+projection work. Omission blocks retained nonempty source references; there is
+no allow-all fallback. The root request and scheduled compositions do not yet
+supply that bridge and keep Knowledge disabled. The real-Memory
+[composition test](../worker/src/support-learning-composition.test.ts) exercises
+accepted Support sources and current reopen/withdraw/missing-ticket refusals
+through the actual factories, without bypassing KB evidence/publication gates.
+Those tests do not qualify an activated source-enabled D1 path: source checks add
+reads and require new whole-invocation query/parameter, CPU, quota and privacy
+measurements. `readBatchSize:512` coalesces prepared reads; it does not cap SDK
+work or prove the Free budget. HTTP handlers do not scan the corpus or expose
+maintenance DTOs. Coarse diagnostics contain counts and fixed stages, not
+article IDs, cursors, queries, private bodies or exception text.
 
 Projection-dependent portal discovery/search stays empty or unavailable until
 current repair qualifies it. Known-ID publication reads retain their existing

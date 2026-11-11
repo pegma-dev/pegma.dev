@@ -75,26 +75,26 @@ importers:
         specifier: ^0.1.1
         version: 0.1.1
       '@pegma/storage-cloudflare-d1':
-        specifier: 0.4.6
-        version: 0.4.6
+        specifier: 0.4.7
+        version: 0.4.7
       '@pegma/storage-core':
         specifier: 0.4.0
         version: 0.4.0
       '@pegma/support-desk-ai':
-        specifier: 0.2.3
-        version: 0.2.3
+        specifier: 0.2.5
+        version: 0.2.5
       '@pegma/support-desk-application':
-        specifier: 0.2.3
-        version: 0.2.3
+        specifier: 0.2.5
+        version: 0.2.5
       '@pegma/support-desk-contracts':
-        specifier: 0.2.3
-        version: 0.2.3
+        specifier: 0.2.5
+        version: 0.2.5
       '@pegma/support-desk-core':
-        specifier: 0.2.3
-        version: 0.2.3
+        specifier: 0.2.5
+        version: 0.2.5
       '@pegma/support-desk-templates':
-        specifier: 0.2.3
-        version: 0.2.3
+        specifier: 0.2.5
+        version: 0.2.5
       '@pegma/webhooks':
         specifier: 0.1.1
         version: 0.1.1
@@ -1201,32 +1201,32 @@ packages:
     resolution: {integrity: sha512-jueFYJ3oJUacKdiERkEZ7R34xDMiEWXqn4MSA5bpTXzsXhWSap4EJUzKXtXnXuLPPjwJWLn5uoQe98kWQ6NS8A==}
     engines: {node: '>=22'}
 
-  '@pegma/storage-cloudflare-d1@0.4.6':
-    resolution: {integrity: sha512-DjBRoRq5C6sWgL2KWdWOcW0F3N7HHuRu1i7Gr8SM4Aeh4FpEh1hQwIdMvkXpPHCd48CMqLJz8M5HYYR+/sRUgw==}
+  '@pegma/storage-cloudflare-d1@0.4.7':
+    resolution: {integrity: sha512-Y31+USsM+MHIBN93xgGxjgr5cxBFc1qUEx2bXTeDoYK36nl5YvKfWQlidKeBvtMtMClx47g0QTbklE5A0WUB8g==}
     engines: {node: '>=22'}
 
   '@pegma/storage-core@0.4.0':
     resolution: {integrity: sha512-aWbRhhis4Qs4TvH1Sb+OCI0a0ddOyV+6pm6HhPs+XPlaP86mTaV7OlwkIIPqk5Hw45t//tNaqfaggUeOc7rIGA==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-ai@0.2.3':
-    resolution: {integrity: sha512-6xkWXPuOAyPboqvnpybP4bMLMmxpOMw5WQAr9NypL18iEKr5E3J/AJbDPaVWSNr03ossPHLSD+JrIJCbkuQRFg==}
+  '@pegma/support-desk-ai@0.2.5':
+    resolution: {integrity: sha512-N2IFpoiD1g8tAgZjmBb3OcNxZiAZNDwNMVxxUy/1SkVZOT0r+THDw/R21MWw1raF6LsZdurnAZ8AyZFLX+RaCw==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-application@0.2.3':
-    resolution: {integrity: sha512-Ul64+A+5ccIcdFiAnzVdjnm7L3hXSPbz7U/g5ZREkEPMDs3uX/c9/pMpBy7yZIAJvrYLIizbctEv5NpoAuARsg==}
+  '@pegma/support-desk-application@0.2.5':
+    resolution: {integrity: sha512-RwDvWkelRKYTyKxx/8xp8FFTtV2nKjLlsHFD3y6a2hU0ZOeeigbWpmyflY0eB/qwlIEFaCn1MPSfCykNgP4ZOg==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-contracts@0.2.3':
-    resolution: {integrity: sha512-Xa4jHOpe30s+tAlJB1ZGfY/kIEZ0eCKg5bbo3oVqsPqRVtTtUU/dXP25KldrNOG3RFUDQo3ASjbjXzLsgDsvhA==}
+  '@pegma/support-desk-contracts@0.2.5':
+    resolution: {integrity: sha512-XKzPVnhOpd0PUmzcNjeYE1bh5+RFWM9O+rHwqCDaVR9a+jUvh7u2ENoGSSxg6GG1FYRwqhoWCpTMCY3wEAZwZw==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-core@0.2.3':
-    resolution: {integrity: sha512-BgF2/WnDXW5dbqShOHRhwQ0i/cWHuNlUkWVxfW8abZ5/qN2wW9MqAO3dci3hjK6DT5i4SpzKgnT7Zzx0a9f5IA==}
+  '@pegma/support-desk-core@0.2.5':
+    resolution: {integrity: sha512-9hXyfL15CqJfSPSmgeJZ8xbGD8ZuBCQsceci5RlesP3wEjhdqVZHYC9fEDj6PuL1locvoanmTBXsIVkU52LWQw==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-templates@0.2.3':
-    resolution: {integrity: sha512-VMXt8BsVI8p74b9EfJzW9Y1EaUXMhKnY/RWW/k46EEH0qKIYz6f6WIq6iRaVL8z+fh2AbTaA6WsGjMWF56nDLw==}
+  '@pegma/support-desk-templates@0.2.5':
+    resolution: {integrity: sha512-W9DXJJ465b3BCnn9AgViRXqSd0fIHTRD/w6TU+1cmHj7C61zcg7vg5Qk7CEZ4raPwrWsp1JvNQxtAHRMNSeOjw==}
     engines: {node: '>=22'}
 
   '@pegma/webhooks@0.1.1':
@@ -4180,39 +4180,39 @@ snapshots:
 
   '@pegma/spine@0.1.2': {}
 
-  '@pegma/storage-cloudflare-d1@0.4.6':
+  '@pegma/storage-cloudflare-d1@0.4.7':
     dependencies:
       '@pegma/storage-core': 0.4.0
 
   '@pegma/storage-core@0.4.0': {}
 
-  '@pegma/support-desk-ai@0.2.3':
+  '@pegma/support-desk-ai@0.2.5':
     dependencies:
       '@pegma/authorization-core': 0.4.0
       '@pegma/knowledge-base-application': 0.1.5
       '@pegma/knowledge-base-contracts': 0.1.5
       '@pegma/spine': 0.1.2
-      '@pegma/support-desk-application': 0.2.3
+      '@pegma/support-desk-application': 0.2.5
 
-  '@pegma/support-desk-application@0.2.3':
+  '@pegma/support-desk-application@0.2.5':
     dependencies:
       '@pegma/audit': 0.2.0
       '@pegma/authorization-core': 0.4.0
       '@pegma/mail': 0.1.1
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
-      '@pegma/support-desk-contracts': 0.2.3
-      '@pegma/support-desk-core': 0.2.3
+      '@pegma/support-desk-contracts': 0.2.5
+      '@pegma/support-desk-core': 0.2.5
 
-  '@pegma/support-desk-contracts@0.2.3':
+  '@pegma/support-desk-contracts@0.2.5':
     dependencies:
       '@pegma/spine': 0.1.2
 
-  '@pegma/support-desk-core@0.2.3':
+  '@pegma/support-desk-core@0.2.5':
     dependencies:
-      '@pegma/support-desk-contracts': 0.2.3
+      '@pegma/support-desk-contracts': 0.2.5
 
-  '@pegma/support-desk-templates@0.2.3': {}
+  '@pegma/support-desk-templates@0.2.5': {}
 
   '@pegma/webhooks@0.1.1':
     dependencies:

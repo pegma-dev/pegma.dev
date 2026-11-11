@@ -17,11 +17,11 @@ provider and customer activation retain their acceptance gates. See the
 
 Exact published versions:
 
-- `@pegma/support-desk-application@0.2.3`
-- `@pegma/support-desk-contracts@0.2.3`
-- `@pegma/support-desk-core@0.2.3`
-- `@pegma/support-desk-templates@0.2.3`
-- `@pegma/support-desk-ai@0.2.3` (isolated scripted stage only)
+- `@pegma/support-desk-application@0.2.5`
+- `@pegma/support-desk-contracts@0.2.5`
+- `@pegma/support-desk-core@0.2.5`
+- `@pegma/support-desk-templates@0.2.5`
+- `@pegma/support-desk-ai@0.2.5` (optional coordinator)
 - `@pegma/authorization-admin@0.4.0` (role administration service)
 - `@pegma/authorization-core@0.4.0` (AccessContext resolution)
 - `@pegma/authorization-policy@0.4.0` (PolicyDocumentV1 schema validation)
@@ -31,15 +31,23 @@ All five Support Desk packages have completed producer publication and
 registry qualification. The optional AI package selects exact KB application
 and contracts `0.1.5`; the host selects all four KB packages at that version.
 Producer qualification and installation do not complete host or provider
-acceptance. [Verified Support Desk `0.2.3` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.3),
+acceptance. [Verified Support Desk `0.2.5` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5),
 [verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
-`@pegma/storage-cloudflare-d1@0.4.6`, `@pegma/sessions@0.2.0`,
+`@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.2.0`,
 `@pegma/rate-limit@0.2.0`, `@pegma/identity@0.1.2`, `@pegma/spine@0.1.1`.
 These are direct host selections; the lockfile retains each released package's
 own dependencies, including Support Desk's Spine `0.1.2`. No override or forced
 deduplication replaces that graph.
+
+The earlier [qualified Support 0.2.2 release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.2)
+uses signed source
+[`99cf4e67da1d2357d99fd80389a96318a6e2cc93`](https://github.com/pegma-dev/support-desk/commit/99cf4e67da1d2357d99fd80389a96318a6e2cc93).
+[Strict release verification](https://github.com/pegma-dev/support-desk/actions/runs/42907283767/job/130161276758)
+qualifies those historical producer packages. The current public `0.2.5` graph
+has passed the [normal local and CI validation checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
+Review and deployment acceptance remain pending for the changed host.
 
 ## Storage namespace
 
@@ -70,7 +78,7 @@ unified host policy's `defaults` (no paid entitlement):
 - `support.ticket.reply.own`
 - `support.ticket.request_person.own`
 
-Policy version: `pegma.dev-policy-4` — one `PolicyDocumentV1` for the whole
+Policy version: `pegma.dev-policy-5` — one `PolicyDocumentV1` for the whole
 host, schema-validated in tests (see `docs/ROLE_ADOPTION_PLAN.md`).
 
 ### Staff (stored `Support` role)
@@ -91,6 +99,10 @@ The `Support` role maps to:
 - `support.ticket.manage`
 - `support.audit.read`
 - `support.ticket.take_over`
+- `support.learning.read`
+- `support.learning.evidence.submit`
+- `support.learning.review`
+- `support.learning.withdraw`
 
 `Admin` and `Knowledge` alone do not grant Support permissions. Taking over
 changes handling authority; the existing assignment action remains separate.
@@ -261,12 +273,109 @@ invocation.
 | `/staff/support/ticket/?id=…` | Staff ticket detail, compose, lifecycle  |
 | `/staff/roles`                | Role administration (Admin role holders) |
 
+## Optional resolution learning
+
+The current source selects all five published Support Desk `0.2.5` packages
+with the four direct KB `0.1.5` packages. AI `0.2.5` also declares exact KB
+`0.1.5` dependencies. The public forwarding port preserves KB error instances;
+no KB `0.1.2` alias, translation shim, second Store, override or private SDK
+import supplies this assembly. The earlier Support `0.2.1` / nested KB `0.1.2`
+compatibility assembly and its failed isolated production-layout diagnostic are
+historical, not current graph or host-acceptance evidence.
+
+The staged learning review admission and Queue worker retained in this branch
+use the published, strictly verified Support Desk `0.2.5` APIs. The combined
+public graph passed normal local and CI validation; review and deployment
+acceptance remain pending. Runtime availability and feature activation retain
+their existing trusted composition and readiness controls.
+
+[Learning intake and processing](../worker/src/support-learning.ts) are separate,
+default-disabled SDK boundaries. A real source verifier, current service/staff
+authority, product context, independently verified checks, target mapping,
+configuration/data controls, local counter, usage accounting and model port are
+required where the corresponding SDK operation needs them. Missing, expired
+or throwing readiness holds work; no model, route, source approval or check
+receipt is synthesized. Enrollment alone produces an unverified generation-zero
+source. Staff-verified resolution evidence establishes eligibility; generation
+and staff approval of the exact checked KB target remain separate. Neither
+approval nor delivery publishes a guide: ordinary KB evidence, review and
+publication gates still apply.
+
+Policy `pegma.dev-policy-5` adds four explicit learning permissions to `Support`;
+it grants neither learning processing nor KB staff access. Private proposal
+reads and new review commits also require separately current KB `draftRead` and
+`provenanceRead`, normally through `Knowledge` or `Admin`. Browser submissions
+and trusted direct SDK reviews enforce fresh KB and learning review/queue
+permissions before and after the actual SDK proof. HTTP requires the complete
+intent and adds its original-browser fence.
+Accepted receipt recovery and explicit cancellation retain current review/queue
+and browser authority without requiring obsolete KB proof. Customer ticket
+responses, agent scopes and the public KB DTOs gain no source, private evidence or learning-work fields.
+
+The [optional HTTP adapter](../worker/src/support-learning-handlers.ts) uses the
+existing cookie/session, Origin, CSRF and durable admission ports. It preserves
+the original credential and permission ceiling around awaited work, rechecks
+current stored roles, bounds staff operations and withholds stale replies,
+including after a committed mutation. Client command bytes are retained;
+ambiguous acknowledgements require the exact original actor/operation/ticket
+packet. The proposal route now returns a complete immutable SDK review intent;
+submit, receipt lookup and cancellation use the same full packet and identity.
+A lost cancellation ACK keeps retries on cancellation, rather than resending
+approval. Arbitrary GET success or a null receipt cannot settle an unknown
+mutation. Private source and proposal content is rendered as text and cleared on
+denial or owner change; retained recovery controls remain available only under
+their current server capability and real review/queue authority. See
+[the exact HTTP and recovery contract](SUPPORT_LEARNING.md).
+
+The default [root Support composition](../worker/src/index.ts) supplies no
+trusted learning bundle. The optional server composition requires that bundle,
+its explicit readiness callback, the review queue binding and
+`PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED` set exactly to `"true"`; the checked-in
+flag remains `"false"`. Without that composition, learning routes remain 404 and
+no review phase runs. The exclusive learning cleanup lane discovers durable SDK
+work and emits opaque queue hints; a separate Queue delivery advances at most
+one SDK phase. Hints and delivery retries grant no review authority. Actual
+product/check/target/configuration/usage ports and trusted admission remain
+activation work; no model, provider or client is activated by this source.
+
+Source eligibility must also reach every KB application that reads or repairs a
+learned publication: pass the same live bridge as `privateSources` to
+`createKnowledgeRuntime`, `createKnowledgeRetrievalReady` and
+`createKnowledgeRetrievalMaintenance`. Their default omission refuses nonempty
+private-source provenance. Reopening, withdrawal or a missing source invalidates
+read eligibility immediately; indexing cannot restore it. The real-Memory
+[composition regression](../worker/src/support-learning-composition.test.ts)
+uses SDK-created sources, actual staff decisions, report-backed evidence and
+publication through these host factories. It is not deployed-provider, privacy,
+Native D1 query-budget, Free CPU, daily-quota or pilot qualification. Knowledge
+request/maintenance batching and activation limits remain documented in
+[Knowledge composition](KNOWLEDGE_COMPOSITION.md).
+
+## Staged assistant retrieval is separate
+
+AI `0.2.2` introduced explicit `stagedRetrieval:true`, retained by the current
+`0.2.5` selection; omission remains monolithic. The preparation attempt retrieves authorized sources and records a
+bounded no-call request without reserving paid usage. Only its durably
+acknowledged finish returns `prepared`. The host must return and schedule a
+genuinely later physical invocation at or after `nextAttemptAt`, never loop or
+use `waitUntil` to perform generation in the same invocation. Paid generation
+uses attempt two, so application and assistant budget limits must both permit
+at least two attempts. Unknown preparation/finish remains `pending` and does not
+authorize a provider call. `AssistantProcessResult` includes `prepared` even for
+an opted-out runtime, so exhaustive consumers must handle it. Fresh source,
+customer, full configuration and usage-scope checks remain required across
+phases. Configuration timestamps and opaque `usageScopeRef` must remain exact;
+reattestation or scope reissuance invalidates preparation rather than being
+normalized away. This learning composition does not register an answering worker, and producer publication proves no host Free/CPU,
+provider or activation result.
+
 ## Maintenance and health
 
 The separate cleanup cron (`0-58 * * * *`) runs one rotating task per
 invocation, including Support Desk queue repair, inactive projection sweep,
-and each Support/Admin rate-limit policy. Each task runs once per fifteen
-eligible ticks (minute 59 is omitted), with independent queue cursors and no
+each Support/Admin rate-limit policy and the separately gated learning-review
+discovery lane. Each task runs once per sixteen eligible ticks (minute 59 is
+omitted), with independent queue cursors and no
 writes for unchanged bookmarks.
 Identity Mail send and reconciliation have separate invocations
 (`* * * * *` and `1-59 * * * *`); KB ready hints and their isolated rate cleanup

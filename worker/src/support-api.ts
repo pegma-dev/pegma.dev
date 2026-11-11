@@ -66,6 +66,10 @@ import {
   type SupportHumanCoordinates,
 } from './support-human-auth';
 import {
+  createSupportLearningBrowserHandlers,
+  type SupportLearningRuntimeOptions,
+} from './support-learning';
+import {
   SUPPORT_BROWSER_COMMAND_HEADER,
   supportBrowserCommand,
   supportBrowserCommandMode,
@@ -79,6 +83,11 @@ const PERSON_PATH =
   /^\/api\/support\/tickets\/([A-Za-z0-9._~-]{1,200})\/request-person$/u;
 const HUMAN_STAFF_PATH =
   /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/(take-over|handoff)$/u;
+
+// Own this namespace before legacy browser-command routing, including unknown
+// learning subpaths. Disabled composition is indistinguishable from absence.
+const LEARNING_NAMESPACE =
+  /^\/api\/support\/admin\/tickets\/[A-Za-z0-9._~-]{1,200}\/learning(?:\/|$)/u;
 
 const TICKET_STATUSES = new Set<TicketStatus>([
   'open',
@@ -122,6 +131,14 @@ interface SupportApiOptions {
   readonly roleStore?: SupportRoleReader & BootstrapRoleStore;
   /** One-time Support bootstrap principals (Phase 3). */
   readonly bootstrapPrincipals?: ReadonlySet<string>;
+  /** Trusted optional composition: construct createSupportLearningHandlers in the host. */
+  readonly learningHandler?: (request: Request) => Promise<Response | null>;
+  /** Trusted runtime ports; the API owns actual browser/staff resolution. */
+  readonly learningRuntime?: Omit<SupportLearningRuntimeOptions, 'staffAccess'>;
+  /** Current server flag. Only strict true plus a handler enables this surface. */
+  readonly learningEnabled?: () => boolean;
+  /** Additive trusted staged-review capability; it never enables learning itself. */
+  readonly learningStagedReviewsEnabled?: () => boolean;
 }
 
 async function requireAuthentication(
@@ -736,10 +753,42 @@ async function stableBrowserMutation(
 export function createSupportApi(
   options: SupportApiOptions,
 ): (request: Request) => Promise<Response> {
+  if (options.learningHandler !== undefined && options.learningRuntime !== undefined)
+    throw new TypeError('Choose one trusted Support learning composition');
+  const learningHandler = options.learningHandler ?? (
+    options.learningRuntime !== undefined && options.roleStore !== undefined
+      ? createSupportLearningBrowserHandlers({
+          identity: options.identity, sessions: options.sessions,
+          identityLinkFromClaims: options.identityLinkFromClaims,
+          logger: options.logger, roleStore: options.roleStore,
+          ...(options.learningEnabled === undefined ? {} : { enabled: options.learningEnabled }),
+          limiter: options.replyLimiter,
+          learning: options.learningRuntime,
+        })
+      : undefined
+  );
+  const learningReady = (): boolean => {
+    if (typeof learningHandler !== 'function' || typeof options.learningEnabled !== 'function') return false;
+    try { return options.learningEnabled() === true; } catch { return false; }
+  };
+  const stagedReviewsReady = (): boolean => {
+    if (!learningReady() || options.learningRuntime?.stagedReviews === undefined) return false;
+    try { return options.learningStagedReviewsEnabled?.() === true &&
+      options.learningRuntime.stagedReviews.enabled() === true; } catch { return false; }
+  };
   return async (request) => {
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      if (LEARNING_NAMESPACE.test(path)) {
+        if (!learningReady()) throw new ApiError(404, 'not_found');
+        let response: Response | null;
+        try { response = await learningHandler!(request); }
+        catch { throw new ApiError(503, 'support_learning_unavailable'); }
+        // A flag change may withhold an ACK; the browser retains its exact packet.
+        if (!learningReady() || response === null) throw new ApiError(404, 'not_found');
+        return response;
+      }
       if (supportBrowserCommandMode(request))
         return await stableBrowserMutation(request, options);
       const person = PERSON_PATH.exec(path);
@@ -901,6 +950,40 @@ export function createSupportApi(
         request.method === 'GET'
       ) {
         const ticketId = adminMatch[1]!;
+        if (typeof options.learningEnabled === 'function') {
+          // This optional hint comes from current real stored Support authority,
+          // active Identity and the same live session, never browser role fields.
+          const browser = supportHumanBrowser(request, {
+            sessions: options.sessions,
+            authenticate: (incoming) => requireAuthentication(incoming, options),
+            access: (authenticated) => humanAccess(authenticated, options, true),
+            permission: supportPermissions.queueRead,
+            mutation: false,
+          });
+          try {
+            const initial = await browser.current();
+            const view = await options.application.readStaffTicket(initial.access, ticketId);
+            const final = await browser.current();
+            return json({
+              ...staffTicketView(view),
+              csrfToken: final.authenticated.csrfToken,
+              learningEnabled: learningReady() && hasPermission(final.access, supportPermissions.learningRead),
+              learningReviewRecoveryEnabled: learningReady() &&
+                hasPermission(final.access, supportPermissions.learningReview) &&
+                hasPermission(final.access, supportPermissions.queueRead),
+              ...(options.learningStagedReviewsEnabled === undefined ? {} : {
+                learningStagedReviewEnabled: stagedReviewsReady() &&
+                  hasPermission(final.access, supportPermissions.learningReview) &&
+                  hasPermission(final.access, supportPermissions.queueRead),
+              }),
+            });
+          } catch (error) {
+            // A raced loss of current access wins over an earlier failed read.
+            await browser.current();
+            throw error;
+          }
+        }
+        // Preserve the legacy detail contract when no capability callback exists.
         const authenticated = await requireAuthentication(request, options);
         const access = await requireStaffAccess(authenticated, options);
         const view = await options.application.readStaffTicket(

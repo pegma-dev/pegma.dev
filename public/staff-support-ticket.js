@@ -19,7 +19,10 @@ const handlingNode = select('#staff-ticket-handling');
 const handoffPanel = select('#staff-handoff');
 const handoffStatus = select('#staff-handoff-status');
 const handoffList = select('#staff-handoff-list');
+const learningRoot = select('#staff-learning-panel');
 const ticketId = new URL(window.location.href).searchParams.get('id') ?? '';
+let learning = null;
+let learningRequests = 0;
 let csrfToken = '';
 let viewer = null;
 let authorityReloadRequired = false;
@@ -60,6 +63,10 @@ function cancelRequests() {
   requests.clear();
 }
 function beginOperation() {
+  // Retain unknown intent, but retire every old panel context before an
+  // ordinary mutation or current-ticket reload can await anything.
+  learning?.suspend();
+  if (learningRoot !== null) learningRoot.hidden = true;
   suspended = false;
   const operation = { generation: ++readGeneration };
   cancelRequests();
@@ -79,6 +86,8 @@ function clearHandoff() {
   handoffPanel.hidden = true;
 }
 function hideAll() {
+  learning?.suspend();
+  if (learningRoot !== null) learningRoot.hidden = true;
   currentView = null;
   signedOut.hidden = true;
   forbidden.hidden = true;
@@ -127,14 +136,15 @@ function selectedComposeMode() {
 function updateControls() {
   composeForm.noValidate = ordinaryPacket !== null && ordinaryPacket.kind !== 'patch';
   for (const link of signInLinks) {
-    link.node.target = ordinaryPacket === null ? link.target : '_blank';
-    link.node.rel = ordinaryPacket === null ? link.rel : 'noopener noreferrer';
+    link.node.target = ordinaryPacket === null && !learningPending() ? link.target : '_blank';
+    link.node.rel = ordinaryPacket === null && !learningPending() ? link.rel : 'noopener noreferrer';
   }
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
   const state = ticket === undefined ? '' : effectiveHandling(ticket).state;
   const seconds = retrySeconds();
   const blocked =
+    learningOccupied() ||
     busy !== null ||
     viewer === null ||
     authorityReloadRequired ||
@@ -306,6 +316,10 @@ function validateView(view) {
     view.csrfToken !== viewer?.csrfToken
   )
     throw Object.assign(new Error('invalid_response'), { status: 502 });
+  if ((view.learningReviewRecoveryEnabled !== undefined && typeof view.learningReviewRecoveryEnabled !== 'boolean') ||
+    (view.learningEnabled !== undefined && typeof view.learningEnabled !== 'boolean') ||
+    (view.learningStagedReviewEnabled !== undefined && typeof view.learningStagedReviewEnabled !== 'boolean'))
+    throw Object.assign(new Error('invalid_response'), { status: 502 });
   effectiveHandling(view.ticket);
   return view;
 }
@@ -401,7 +415,7 @@ function failure(error, action, generation) {
   } else
     showStatus(
       error.status === 401
-        ? ordinaryPacket !== null
+        ? ordinaryPacket !== null || learningPending()
           ? 'Sign in to the original account in another tab, then return here and reload this ticket. The action already sent may have completed.'
           : 'Sign in, then reload this ticket. Any request already sent may have completed.'
         : error.status === 403
@@ -520,6 +534,8 @@ async function loadTicket() {
     showStatus('Ticket loaded.');
     // Private handoff availability does not lock a fully refreshed ticket view.
     finishOperation(operation);
+    // Admission opens only after the ACK (if any) and this complete current GET.
+    syncLearning(view);
     await loadHandoff();
     return {
       generation,
@@ -593,6 +609,7 @@ async function sendOrdinaryPacket(packet, label) {
 }
 async function patchTicket(action, extra = {}) {
   if (
+    learningOccupied() ||
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
@@ -624,6 +641,7 @@ async function patchTicket(action, extra = {}) {
 }
 takeoverButton.addEventListener('click', async () => {
   if (
+    learningOccupied() ||
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
@@ -706,6 +724,7 @@ composeForm.addEventListener('submit', async (event) => {
   const mode = selectedComposeMode();
   const body = composeBody.value.trim();
   if (
+    learningOccupied() ||
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
@@ -747,11 +766,90 @@ composeForm.addEventListener('submit', async (event) => {
   );
 });
 select('#staff-ticket-reload').addEventListener('click', () => {
-  if (!onThisTicket()) window.location.reload();
+  if (!onThisTicket() && learningPending()) {
+    invalidate();
+    showStatus('Return to the original ticket address before reloading. An earlier learning action may have completed.', true);
+  } else if (!onThisTicket()) window.location.reload();
   else void loadTicket();
 });
 select('#staff-handoff-reload').addEventListener('click', () => {
   void loadHandoff();
+});
+function learningPending() {
+  return learning?.hasPending() === true;
+}
+function learningOccupied() {
+  return learningRequests > 0 || learningPending();
+}
+function requireLearningAdmission(reviewRecovery = false) {
+  if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null ||
+    ordinaryAcknowledged || suspended || authorityReloadRequired ||
+    viewer === null || currentView === null ||
+    (currentView.learningEnabled !== true && !(reviewRecovery && learning?.hasPendingReview?.() === true &&
+      currentView.learningReviewRecoveryEnabled === true)) || !onThisTicket())
+    throw Object.assign(new Error('learning_suspended'), { stale: true });
+}
+async function learningRequest(run, reviewRecovery = false) {
+  requireLearningAdmission(reviewRecovery);
+  const generation = readGeneration;
+  ++learningRequests;
+  updateControls();
+  try {
+    const result = await run();
+    guard(generation);
+    requireLearningAdmission(reviewRecovery);
+    return result;
+  } finally { --learningRequests; updateControls(); }
+}
+function syncLearning(view) {
+  if (learning === null || learningRoot === null) return;
+  if (busy !== null || (view.learningEnabled !== true && !(learning.hasPendingReview?.() === true &&
+    view.learningReviewRecoveryEnabled === true)) || ordinaryPacket !== null || takeoverPacket !== null) {
+    learning.suspend();
+    learningRoot.hidden = true;
+    return;
+  }
+  learningRoot.hidden = false;
+  void learning.showTicket({ ticketId: view.ticket.id, revision: view.ticket.revision,
+    actorSubject: viewer.subject, status: view.ticket.status, resolvedAt: view.ticket.resolvedAt },
+    { recoveryOnly: view.learningEnabled !== true });
+}
+if (learningRoot !== null && typeof globalThis.PegmaSupportLearning?.createPanel === 'function') {
+  // One closure owns all unresolved packets for the lifetime of this staff page.
+  learning = globalThis.PegmaSupportLearning.createPanel({
+    root: learningRoot,
+    stagedReviewsEnabled: () => currentView?.learningStagedReviewEnabled === true,
+    request: (path, init) => learningRequest(() => api(path, init),
+      learning.hasPendingReview?.() === true && /\/review(?:-receipt|-cancel|-queue(?:-status|-cancel)?)?$/u.test(path)),
+    readSession: () => learningRequest(async () => {
+      const generation = readGeneration;
+      const current = await readViewer(generation);
+      guard(generation);
+      return current;
+    }, learning.hasPendingReview?.() === true),
+    onPendingChange: () => updateControls(),
+    onAccessLost: ({ status }) => {
+      // Fence concurrent handoff/detail reads as well as the learning closure.
+      ++readGeneration;
+      cancelRequests();
+      busy = null;
+      viewer = null;
+      csrfToken = '';
+      authorityReloadRequired = true;
+      hideAll();
+      signedOut.hidden = status !== 401;
+      forbidden.hidden = status !== 403;
+      showStatus(status === 401 && learningPending()
+        ? 'Sign in to the original account in another tab, then reload this ticket. The learning action may have completed.'
+        : 'Current access could not be confirmed. Reload this ticket to check access again.', true);
+      updateControls();
+    },
+  });
+}
+window.addEventListener('beforeunload', (event) => {
+  if (!learningPending()) return;
+  event.preventDefault();
+  event.returnValue = '';
 });
 window.addEventListener('pagehide', invalidate);
 window.addEventListener('popstate', invalidate);
