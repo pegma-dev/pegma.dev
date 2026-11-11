@@ -7,6 +7,9 @@ const signedIn = document.querySelector('#feedback-signed-in');
 const emailNode = document.querySelector('#feedback-email');
 const ticketList = document.querySelector('#ticket-list');
 const createForm = document.querySelector('#create-ticket');
+const assistantChoice = document.querySelector('#assistant-choice');
+const assistantPreference = document.querySelector('#assistant-preference');
+let assistantCapability = null;
 const recoveryButton = document.createElement('button');
 recoveryButton.type = 'button';
 recoveryButton.textContent = 'Reload current access';
@@ -41,6 +44,8 @@ function showStatus(message, isError = false) {
   if (createPacket !== null || !viewReady) statusNode.append(' ', recoveryButton);
 }
 function clearPrivate() {
+  assistantCapability = null;
+  if (assistantChoice) assistantChoice.hidden = true;
   viewReady = false;
   signedIn.hidden = true;
   signedOut.hidden = true;
@@ -66,6 +71,7 @@ function finishOperation(operation) {
   }
 }
 function updateControls() {
+  if (assistantPreference) assistantPreference.disabled = busy !== null || createPacket !== null || !viewReady || suspended;
   createForm.noValidate = createPacket !== null;
   for (const link of signInLinks) {
     link.node.target = createPacket === null ? link.target : '_blank';
@@ -232,6 +238,16 @@ async function loadTickets() {
         typeof ticket.id !== 'string' || typeof ticket.subject !== 'string' ||
         typeof ticket.marker !== 'string' || typeof ticket.status !== 'string'))
       throw Object.assign(new Error('invalid_response'), { status: 502 });
+    if (assistantChoice && assistantPreference) {
+      let capability;
+      try { capability = await api('/api/support/assistant/capability'); }
+      catch (error) { if (error.status === 401 || error.status === 403) throw error; }
+      guard(generation);
+      if (capability?.enabled === true && capability.csrfToken === viewer?.csrfToken &&
+        capability.disclosureVersion === 'pegma-support-answering-1')
+        assistantCapability = Object.freeze({ disclosureVersion: capability.disclosureVersion });
+      assistantChoice.hidden = assistantCapability === null;
+    }
     await readViewer(generation);
     if (createPacket !== null && createAcknowledged) {
       const current = formDraft();
@@ -239,6 +255,7 @@ async function loadTickets() {
         createForm.reset();
       createPacket = null;
       createAcknowledged = false;
+      if (assistantPreference) assistantPreference.checked = false;
     }
     authorityReloadRequired = false;
     viewReady = true;
@@ -281,11 +298,14 @@ createForm.addEventListener('submit', async (event) => {
       return;
     }
     const ticketId = crypto.randomUUID();
+    const answering = assistantCapability !== null && assistantPreference?.checked === true;
     createPacket = Object.freeze({
       subject: expectedAccountId, ticketId,
-      path: '/api/support/tickets', method: 'POST',
+      path: answering ? '/api/support/assistant/tickets' : '/api/support/tickets', method: 'POST',
       headers: Object.freeze({ 'X-Pegma-Support-Command': '1' }),
-      body: JSON.stringify({ ...draft, command: { version: 1, expectedAccountId, expectedRequesterEmail, commandId, messageId, ticketId } }),
+      body: JSON.stringify({ ...draft, command: { version: 1, expectedAccountId, expectedRequesterEmail, commandId, messageId, ticketId },
+        ...(answering ? { preference: 'assistant_if_available', disclosureVersion: assistantCapability.disclosureVersion } : {}) }),
+      answering,
       draft: Object.freeze(draft),
     });
   }
@@ -303,7 +323,8 @@ createForm.addEventListener('submit', async (event) => {
     if (ack?.ticket?.id !== packet.ticketId || !Number.isSafeInteger(ack.ticket.number) ||
       ack.ticket.number < 1 || !Array.isArray(ack.messages) ||
       ack.messages.some((message) => message.ticketId !== packet.ticketId || message.visibility !== 'customer') ||
-      (ack.csrfToken !== undefined && ack.csrfToken !== expectedViewer.csrfToken))
+      (ack.csrfToken !== undefined && ack.csrfToken !== expectedViewer.csrfToken) ||
+      (packet.answering && !['human', 'assistant'].includes(ack.initialMode)))
       throw Object.assign(new Error('invalid_response'), { status: 502 });
     await readViewer(generation, expectedViewer);
     createAcknowledged = true;

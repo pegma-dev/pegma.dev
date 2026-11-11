@@ -1,3 +1,5 @@
+import { composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
+import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
 import { composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
   type SupportEngineeringHumanComposition } from './support-engineering-composition';
 import { isSupportEngineeringRequest } from './support-engineering-router';
@@ -53,6 +55,7 @@ import {
   MAIL_CRON,
   MAIL_RECONCILE_CRON,
   CLEANUP_CRON,
+  CLEANUP_LANE_COUNT,
   RATE_LIMIT_CRON,
   cleanupLaneAt,
   rateKnowledgeLaneAt,
@@ -69,6 +72,7 @@ type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED'> &
   SupportRuntimeEnv &
   CatalogFetchEnv & {
     readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
+    readonly PEGMA_SUPPORT_ASSISTANT_ENABLED?: string;
     readonly SUPPORT_LEARNING_REVIEWS?: Queue<SupportLearningReviewQueueMessage>;
   };
 
@@ -76,7 +80,7 @@ type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED'> &
 export interface SupportLearningReviewWorkerComposition {
   readonly enabled: () => boolean;
   create(environment: AppEnv, logger: ReturnType<typeof createAppLogger>,
-    engineering?: SupportEngineeringHumanComposition): {
+    engineering?: SupportEngineeringHumanComposition, answering?: SupportAnsweringComposition): {
     /** The actual configured Support API, including its fresh staff-detail hints. */
     readonly api: (request: Request) => Promise<Response>;
     readonly queue: ReturnType<typeof createSupportLearningReviewQueue>;
@@ -111,9 +115,10 @@ function createSupportHandler(
   env: AppEnv,
   logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {},
+  answering: SupportAnsweringComposition = {},
 ) {
   const configured = supportEngineeringHumanEnabled(engineering);
-  const identityRuntime = createProductionIdentityRuntime(env, logger, configured ? 512 : undefined);
+  const identityRuntime = createProductionIdentityRuntime(env, logger, configured || answering.configuration !== undefined ? 512 : undefined);
   const intake = supportEngineeringIntakeOptions(engineering);
   const dependencies = {
     sessions: identityRuntime.sessions,
@@ -121,8 +126,9 @@ function createSupportHandler(
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
     logger,
     ...(intake === undefined ? {} : { engineering: intake }),
+    ...(answering.configuration === undefined ? {} : { assistantTurns: supportAnsweringTurns(answering) }),
   };
-  const supportRuntime = configured
+  const supportRuntime = configured || answering.configuration !== undefined
     ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
     : createProductionSupportRuntime(env, dependencies);
   const api = createSupportApi({
@@ -151,16 +157,31 @@ function createSupportHandler(
     lookupLimiter: createAdminLookupLimiter(supportRuntime.store),
     bootstrapPrincipals: parseAdminBootstrapPrincipals(env),
   });
-  return { supportRuntime, api, adminApi };
+  return { supportRuntime, api, adminApi,
+    answering: answering.configuration === undefined ? undefined : composeSupportAnswering(supportRuntime, logger, answering,
+      () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true'),
+  };
 }
 
 /** Request-local optional human composition used by the registered Worker route. */
 export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>,
-  engineering: SupportEngineeringHumanComposition = {}) {
+  engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {}) {
   return async (request: Request): Promise<Response> => {
     if (isSupportEngineeringRequest(new URL(request.url).pathname) && !supportEngineeringHumanEnabled(engineering))
       return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
-    return createSupportHandler(env, logger, engineering).api(request);
+    if (new URL(request.url).pathname.startsWith(SUPPORT_ANSWERING_NAMESPACE)) {
+      const url = new URL(request.url); const path = url.pathname;
+      if (answering.configuration === undefined || url.search !== '' || !['/api/support/assistant/capability', '/api/support/assistant/tickets'].includes(path))
+        return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+      const method = path.endsWith('/capability') ? 'GET' : 'POST';
+      if (request.method !== method)
+        return Response.json({ error: 'method_not_allowed' }, { status: 405, headers: { 'Cache-Control': 'no-store', Allow: method } });
+      if (path.endsWith('/capability') && (env.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true' || !supportAnsweringEnabled(answering)))
+        return Response.json({ enabled: false }, { headers: { 'Cache-Control': 'no-store' } });
+      const composed = createSupportHandler(env, logger, engineering, answering);
+      return createSupportAnsweringIngress(composed.supportRuntime, logger, composed.answering!)(request);
+    }
+    return createSupportHandler(env, logger, engineering, answering).api(request);
   };
 }
 
@@ -172,6 +193,7 @@ export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<type
 export function createWorker(options: {
   readonly learningReviews?: SupportLearningReviewWorkerComposition;
   readonly engineering?: SupportEngineeringHumanComposition;
+  readonly answering?: SupportAnsweringComposition;
 } = {}) {
 return {
   async fetch(
@@ -427,12 +449,14 @@ return {
 
     if (path.startsWith('/api/support/')) {
       try {
+        if (path.startsWith(SUPPORT_ANSWERING_NAMESPACE))
+          return await createSupportRequestHandler(env, logger, options.engineering, options.answering)(request);
         if (isSupportEngineeringRequest(path))
-          return await createSupportRequestHandler(env, logger, options.engineering)(request);
+          return await createSupportRequestHandler(env, logger, options.engineering, options.answering)(request);
         const reviews = options.learningReviews;
         if (reviews !== undefined && learningReviewsEnabled(env, reviews))
-          return await reviews.create(env, logger, options.engineering).api(request);
-        return await createSupportRequestHandler(env, logger, options.engineering)(request);
+          return await reviews.create(env, logger, options.engineering, options.answering).api(request);
+        return await createSupportRequestHandler(env, logger, options.engineering, options.answering)(request);
       } catch (error) {
         logger.log('error', 'support.runtime_unavailable', {
           error: error instanceof Error ? error.name : 'unknown',
@@ -454,11 +478,11 @@ return {
     logger.log('warn', 'request.not_found', { method: request.method, path });
     return new Response('Not Found', { status: 404 });
   },
-  scheduled(
+  async scheduled(
     controller: ScheduledController,
     env: AppEnv,
     ctx: ExecutionContext,
-  ): void {
+  ): Promise<void> {
     const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
     // Each cron has its own invocation CPU budget. Never combine all cleanup
     // with the time-sensitive mail path on Workers Free.
@@ -580,6 +604,19 @@ return {
           }
         })(),
       );
+
+    // Use one exclusive physical cleanup invocation. A later tick performs the
+    // next phase; no cleanup job or second phase shares this D1 query allowance.
+    if (cleanup?.kind === 'learning_reviews' &&
+      Math.floor((Math.floor(controller.scheduledTime / 60_000) -
+        Math.floor((Math.floor(controller.scheduledTime / 60_000) + 1) / 60)) / CLEANUP_LANE_COUNT) % 2 === 0 &&
+      env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true' && supportAnsweringEnabled(options.answering)) {
+      try {
+        const composed = createSupportHandler(env, logger, options.engineering, options.answering);
+        await composed.answering?.runTick();
+      } catch { logger.log('error', 'support.answering_unavailable', { stage: 'composition' }); }
+      return;
+    }
 
     if (cleanup?.kind === 'learning_reviews') {
       const reviews = options.learningReviews;

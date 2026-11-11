@@ -197,7 +197,7 @@ function publicTicketSummary(ticket: CustomerTicketSummary) {
   };
 }
 
-function publicTicketView(view: CustomerTicketView) {
+export function publicTicketView(view: CustomerTicketView) {
   return {
     ticket: publicTicketSummary(view.ticket),
     messages: view.messages.map((message) => ({
