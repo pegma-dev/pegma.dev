@@ -197,7 +197,7 @@ export default {
         probe: 'disabled' | 'ok' | 'fail';
       } = {
         storage: 'cloudflare-d1',
-        packages: '@pegma/support-desk-application@0.2.0',
+        packages: '@pegma/support-desk-application@0.2.3',
         probe: 'disabled',
       };
       if (supportHealthProbeEnabled(env)) {
