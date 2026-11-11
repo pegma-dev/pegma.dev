@@ -23,6 +23,7 @@ import {
   ticketNumbers,
   type SupportDeskApplication,
   type ResolutionLearningOptions,
+  type EngineeringOptions,
 } from '@pegma/support-desk-application';
 import { defineTemplate } from '@pegma/support-desk-templates';
 import type { IdentityLinkProjector, IdentityPort } from './identity-contracts';
@@ -182,6 +183,7 @@ export interface SupportCompositionOptions {
   readonly createLimiter?: DurableRateLimiter;
   readonly replyLimiter?: DurableRateLimiter;
   readonly resolutionLearning?: ResolutionLearningOptions;
+  readonly engineering?: EngineeringOptions;
 }
 
 export interface SupportRuntime {
@@ -327,6 +329,7 @@ export function createSupportRuntime(
     allowedCategories: PEGMA_SUPPORT_CATEGORIES,
     queueTerminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
     ...(options.resolutionLearning === undefined ? {} : { resolutionLearning: options.resolutionLearning }),
+    ...(options.engineering === undefined ? {} : { engineering: options.engineering }),
   });
 
   // Audited role store on the SAME Store, partitioned by this host's

@@ -78,7 +78,7 @@ unified host policy's `defaults` (no paid entitlement):
 - `support.ticket.reply.own`
 - `support.ticket.request_person.own`
 
-Policy version: `pegma.dev-policy-5` — one `PolicyDocumentV1` for the whole
+Policy version: `pegma.dev-policy-6` — one `PolicyDocumentV1` for the whole
 host, schema-validated in tests (see `docs/ROLE_ADOPTION_PLAN.md`).
 
 ### Staff (stored `Support` role)
@@ -404,3 +404,27 @@ store probe runs only when `SUPPORT_HEALTH_PROBE` is exactly `"true"`.
   documented further before accepting production-sensitive data at scale.
 
 Built in the open by RetireGolden, LLC.
+
+
+## Optional engineering human composition
+
+The [engineering assembly](SUPPORT_ENGINEERING.md) uses policy version 6.
+Support receives the five named human engineering permissions. Admin adds
+repository-policy read and manage permissions. Policy operations require
+current Admin and Support queue authority together.
+
+The Worker accepts a trusted optional engineering composition. Its current
+enabled callback and dependency bundle gate the router and staff-detail hints.
+Human review has an additional strict current flag. The default Worker passes
+no engineering configuration, leaving intake, review and processing OFF.
+
+A configured staged-learning factory receives the same optional composition
+as its third `create` argument. It composes `composeSupportEngineeringHuman`
+into its existing `createSupportApi` call so current staff-detail hints and
+its learning queue use their actual shared runtime. Engineering namespaces
+also pass through the request-local root assembly before legacy routes.
+
+Both engineering review entry points pass fresh host authority through the
+public coordinator's `verifyBeforeCommit` option. The SDK returns its final
+synchronous proof assertion to the Application commit boundary. Exact retained
+review commands recover accepted receipts before mutable proof reads.

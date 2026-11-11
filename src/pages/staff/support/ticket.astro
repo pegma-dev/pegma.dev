@@ -137,6 +137,15 @@ import Base from '../../../layouts/Base.astro';
 
   <section id="staff-learning-panel" class="account-panel" hidden></section>
 
+  <section id="staff-engineering-panel" class="account-panel" hidden></section>
+  <section id="staff-engineering-recovery" class="account-panel" hidden>
+    <h2>Retained engineering commands</h2>
+    <p id="staff-engineering-recovery-status" role="status" aria-live="polite"></p>
+    <div id="staff-engineering-recovery-owners" class="support-message-body"></div>
+    <button id="staff-engineering-check-access" type="button">Check original account access</button>
+    <a href="/account" target="_blank" rel="noopener noreferrer">Sign in in another tab</a>
+  </section>
+  <script is:inline src="/staff-support-engineering.js"></script>
   <script is:inline src="/staff-support-learning.js"></script>
   <script is:inline type="module" src="/staff-support-ticket.js"></script>
 </Base>

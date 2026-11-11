@@ -1,3 +1,6 @@
+import { composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
+  type SupportEngineeringHumanComposition } from './support-engineering-composition';
+import { isSupportEngineeringRequest } from './support-engineering-router';
 import {
   createDetailCheck,
   createProcessCheck,
@@ -34,6 +37,7 @@ import {
   createAdminLookupLimiter,
   createAdminMutationLimiter,
   createProductionSupportRuntime,
+  createSupportRuntime,
   createProductionSupportMaintenanceRuntime,
   probeSupportStore,
   supportHealthProbeEnabled,
@@ -71,7 +75,8 @@ type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED'> &
 /** Trusted source composition only; no product/check/source ports are invented here. */
 export interface SupportLearningReviewWorkerComposition {
   readonly enabled: () => boolean;
-  create(environment: AppEnv, logger: ReturnType<typeof createAppLogger>): {
+  create(environment: AppEnv, logger: ReturnType<typeof createAppLogger>,
+    engineering?: SupportEngineeringHumanComposition): {
     /** The actual configured Support API, including its fresh staff-detail hints. */
     readonly api: (request: Request) => Promise<Response>;
     readonly queue: ReturnType<typeof createSupportLearningReviewQueue>;
@@ -105,14 +110,21 @@ function createKnowledgeProjectionStore(environment: {
 function createSupportHandler(
   env: AppEnv,
   logger: ReturnType<typeof createAppLogger>,
+  engineering: SupportEngineeringHumanComposition = {},
 ) {
-  const identityRuntime = createProductionIdentityRuntime(env, logger);
-  const supportRuntime = createProductionSupportRuntime(env, {
+  const configured = supportEngineeringHumanEnabled(engineering);
+  const identityRuntime = createProductionIdentityRuntime(env, logger, configured ? 512 : undefined);
+  const intake = supportEngineeringIntakeOptions(engineering);
+  const dependencies = {
     sessions: identityRuntime.sessions,
     identity: identityRuntime.identity,
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
     logger,
-  });
+    ...(intake === undefined ? {} : { engineering: intake }),
+  };
+  const supportRuntime = configured
+    ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
+    : createProductionSupportRuntime(env, dependencies);
   const api = createSupportApi({
     application: supportRuntime.application,
     sessions: supportRuntime.sessions,
@@ -121,6 +133,7 @@ function createSupportHandler(
     createLimiter: supportRuntime.createLimiter,
     replyLimiter: supportRuntime.replyLimiter,
     logger,
+    ...(configured ? { engineering: composeSupportEngineeringHuman(supportRuntime, logger, engineering) } : {}),
     // The stored Support ROLE is the only staff gate (fail closed).
     roleStore: supportRuntime.roleStore,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
@@ -141,12 +154,25 @@ function createSupportHandler(
   return { supportRuntime, api, adminApi };
 }
 
+/** Request-local optional human composition used by the registered Worker route. */
+export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>,
+  engineering: SupportEngineeringHumanComposition = {}) {
+  return async (request: Request): Promise<Response> => {
+    if (isSupportEngineeringRequest(new URL(request.url).pathname) && !supportEngineeringHumanEnabled(engineering))
+      return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+    return createSupportHandler(env, logger, engineering).api(request);
+  };
+}
+
 /**
  * Thin Workers slice that proves pegma.dev's Pegma Logger wiring:
  * Cloudflare Workers Logs (via @pegma/logger-cloudflare + observability)
  * teed with Datadog when DATADOG_API_KEY is set.
  */
-export function createWorker(options: { readonly learningReviews?: SupportLearningReviewWorkerComposition } = {}) {
+export function createWorker(options: {
+  readonly learningReviews?: SupportLearningReviewWorkerComposition;
+  readonly engineering?: SupportEngineeringHumanComposition;
+} = {}) {
 return {
   async fetch(
     request: Request,
@@ -401,10 +427,12 @@ return {
 
     if (path.startsWith('/api/support/')) {
       try {
+        if (isSupportEngineeringRequest(path))
+          return await createSupportRequestHandler(env, logger, options.engineering)(request);
         const reviews = options.learningReviews;
         if (reviews !== undefined && learningReviewsEnabled(env, reviews))
-          return await reviews.create(env, logger).api(request);
-        return await createSupportHandler(env, logger).api(request);
+          return await reviews.create(env, logger, options.engineering).api(request);
+        return await createSupportRequestHandler(env, logger, options.engineering)(request);
       } catch (error) {
         logger.log('error', 'support.runtime_unavailable', {
           error: error instanceof Error ? error.name : 'unknown',
