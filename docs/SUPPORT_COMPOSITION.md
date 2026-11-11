@@ -4,21 +4,35 @@ Public host composition notes for authenticated product feedback on
 [pegma.dev](https://pegma.dev). This is the ecosystem's Cloudflare reference
 environment for Support Desk customer create / list / read / reply and a small
 staff operator surface over the same application services, including human
-requests, takeover and private handoff context. Assistant handling remains
-explicitly disabled; no model is configured by this composition.
+requests, takeover and private handoff context. The human HTTP handlers keep
+assistant handling disabled.
+
+The separate synthetic stage source defines its own Worker, Queue and D1
+binding with a scripted local model. It starts disabled and has no production
+HTTP or cron registration. Actual broker and CPU qualification remain pending;
+provider and customer activation retain their acceptance gates. See the
+[isolated assistant stage guide](SUPPORT_ASSISTANT_STAGE.md).
 
 ## Packages
 
 Exact published versions:
 
-- `@pegma/support-desk-application@0.2.0`
-- `@pegma/support-desk-contracts@0.2.0`
-- `@pegma/support-desk-core@0.2.0`
-- `@pegma/support-desk-templates@0.2.0`
+- `@pegma/support-desk-application@0.2.3`
+- `@pegma/support-desk-contracts@0.2.3`
+- `@pegma/support-desk-core@0.2.3`
+- `@pegma/support-desk-templates@0.2.3`
+- `@pegma/support-desk-ai@0.2.3` (isolated scripted stage only)
 - `@pegma/authorization-admin@0.4.0` (role administration service)
 - `@pegma/authorization-core@0.4.0` (AccessContext resolution)
 - `@pegma/authorization-policy@0.4.0` (PolicyDocumentV1 schema validation)
 - `@pegma/authorization-storage@0.4.0` (D1-backed role store)
+
+All five Support Desk packages have completed producer publication and
+registry qualification. The optional AI package selects exact KB application
+and contracts `0.1.5`; the host selects all four KB packages at that version.
+Producer qualification and installation do not complete host or provider
+acceptance. [Verified Support Desk `0.2.3` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.3),
+[verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
 `@pegma/storage-cloudflare-d1@0.4.6`, `@pegma/sessions@0.2.0`,

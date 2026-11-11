@@ -2,14 +2,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { CompositionCatalog } from './catalog-schema';
-import {
-  getComponent,
-  getRecipe,
-  listComponents,
-  listRecipes,
-  planComposition,
-} from './mcp-tools';
+import type { CatalogComponent, CatalogRecipe, CompositionCatalog } from './catalog-schema';
+import { getComponent, getRecipe, listComponents, listRecipes, planComposition } from './mcp-tools';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const exampleCatalog = JSON.parse(
@@ -105,9 +99,7 @@ describe('plan_composition', () => {
     // Accounts recipe shares storage only as an incidental tag — skip it.
     expect(plan.recipes.map((r) => r.id)).not.toContain('example-accounts');
     expect(
-      plan.skipped.some(
-        (s) => s.id === 'example-accounts' && s.reason.includes('incidental'),
-      ),
+      plan.skipped.some((s) => s.id === 'example-accounts' && s.reason.includes('incidental')),
     ).toBe(true);
   });
 
@@ -212,10 +204,7 @@ describe('plan_composition', () => {
     });
     expect(plan.recipes).toEqual([]);
     expect(
-      plan.skipped.some(
-        (s) =>
-          s.id === 'example-outbox' && s.reason.includes('fixture.status'),
-      ),
+      plan.skipped.some((s) => s.id === 'example-outbox' && s.reason.includes('fixture.status')),
     ).toBe(true);
   });
 
@@ -247,11 +236,7 @@ describe('plan_composition', () => {
     expect(plan.recipes[0]?.id).toBe('example-accounts');
     // Closure + recipe packages include store deps, not only tag-matched roots.
     expect(plan.packages.map((p) => p.name)).toEqual(
-      expect.arrayContaining([
-        '@example/contracts',
-        '@example/store',
-        '@example/store-cloud',
-      ]),
+      expect.arrayContaining(['@example/contracts', '@example/store', '@example/store-cloud']),
     );
   });
 
@@ -275,6 +260,116 @@ describe('plan_composition', () => {
     expect(plan.packages.map((p) => p.name)).toEqual(
       expect.arrayContaining(['@example/store', '@example/contracts']),
     );
+  });
+
+  function catalogWithOptionalPackage(optionalPublished: boolean): CompositionCatalog {
+    return {
+      ...exampleCatalog,
+      components: exampleCatalog.components.map<CatalogComponent>((component) =>
+        component.id === 'example-store'
+          ? {
+              ...component,
+              publishUsability: optionalPublished ? 'usable' : 'partial',
+              packages: [
+                ...component.packages,
+                {
+                  name: '@example/store-ai',
+                  version: optionalPublished ? '0.0.1' : null,
+                  published: optionalPublished,
+                },
+              ],
+            }
+          : component,
+      ),
+      recipes: exampleCatalog.recipes.map<CatalogRecipe>((recipe) =>
+        recipe.id === 'example-outbox'
+          ? { ...recipe, fixture: { ...recipe.fixture, status: 'green' } }
+          : recipe,
+      ),
+    };
+  }
+
+  it.each([false, true])(
+    'keeps exact recipe packages when optional publication is %s',
+    (optionalPublished) => {
+      const plan = planComposition(catalogWithOptionalPackage(optionalPublished), {
+        capabilityTags: ['storage', 'audit', 'mail_transactional'],
+      });
+      expect(plan.recipes[0]?.id).toBe('example-outbox');
+      expect(plan.packages.map((pkg) => pkg.name)).toEqual(
+        expect.arrayContaining(['@example/store', '@example/contracts']),
+      );
+      expect(plan.packages.map((pkg) => pkg.name)).not.toContain('@example/store-ai');
+    },
+  );
+
+  it('refuses a missing named package on a partial component', () => {
+    const partial = catalogWithOptionalPackage(false);
+    const catalog: CompositionCatalog = {
+      ...partial,
+      components: partial.components.map((component) =>
+        component.id === 'example-store'
+          ? {
+              ...component,
+              packages: component.packages.map((pkg) =>
+                pkg.name === '@example/store' ? { ...pkg, published: false, version: null } : pkg,
+              ),
+            }
+          : component,
+      ),
+    };
+    const plan = planComposition(catalog, {
+      capabilityTags: ['storage', 'audit', 'mail_transactional'],
+    });
+    expect(plan.recipes.map((recipe) => recipe.id)).not.toContain('example-outbox');
+    expect(plan.skipped).toContainEqual({
+      id: 'example-outbox',
+      kind: 'recipe',
+      reason: 'recipe packages not published with pins',
+    });
+  });
+
+  it('refuses a different named package pin on a partial component', () => {
+    const partial = catalogWithOptionalPackage(false);
+    const catalog: CompositionCatalog = {
+      ...partial,
+      recipes: partial.recipes.map((recipe) =>
+        recipe.id === 'example-outbox'
+          ? {
+              ...recipe,
+              packages: ['@example/store@9.9.9', '@example/contracts'],
+            }
+          : recipe,
+      ),
+    };
+    const plan = planComposition(catalog, {
+      capabilityTags: ['storage', 'audit', 'mail_transactional'],
+    });
+    expect(plan.recipes.map((recipe) => recipe.id)).not.toContain('example-outbox');
+    expect(plan.skipped).toContainEqual({
+      id: 'example-outbox',
+      kind: 'recipe',
+      reason: 'recipe packages not published with pins',
+    });
+  });
+
+  it('refuses an unnamed partial required component', () => {
+    const partial = catalogWithOptionalPackage(false);
+    const catalog: CompositionCatalog = {
+      ...partial,
+      recipes: partial.recipes.map((recipe) =>
+        recipe.id === 'example-outbox' ? { ...recipe, packages: ['@example/contracts'] } : recipe,
+      ),
+    };
+    const plan = planComposition(catalog, {
+      capabilityTags: ['storage', 'audit', 'mail_transactional'],
+    });
+    expect(plan.recipes.map((recipe) => recipe.id)).not.toContain('example-outbox');
+    expect(plan.skipped).toContainEqual({
+      id: 'example-outbox',
+      kind: 'recipe',
+      reason: 'requiresPublished not usable: example-store',
+    });
   });
 
   it('keeps tag-matched components alongside a primary recipe', () => {
@@ -330,11 +425,7 @@ describe('plan_composition', () => {
               ...r,
               fixture: { ...r.fixture, status: 'green' as const },
               // cloud-sql package is a cloudflare adapter on example-store
-              packages: [
-                '@example/contracts',
-                '@example/store',
-                '@example/store-cloud',
-              ],
+              packages: ['@example/contracts', '@example/store', '@example/store-cloud'],
             }
           : r,
       ),
@@ -345,8 +436,8 @@ describe('plan_composition', () => {
       productionOnly: true,
     });
     expect(plan.packages.map((p) => p.name)).not.toContain('@example/store-cloud');
-    expect(
-      plan.notes.some((n) => n.includes('skipped recipe pin @example/store-cloud')),
-    ).toBe(true);
+    expect(plan.notes.some((n) => n.includes('skipped recipe pin @example/store-cloud'))).toBe(
+      true,
+    );
   });
 });

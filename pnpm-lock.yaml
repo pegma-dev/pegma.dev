@@ -39,17 +39,17 @@ importers:
         specifier: 0.1.2
         version: 0.1.2
       '@pegma/knowledge-base-application':
-        specifier: 0.1.4
-        version: 0.1.4
+        specifier: 0.1.5
+        version: 0.1.5
       '@pegma/knowledge-base-contracts':
-        specifier: 0.1.4
-        version: 0.1.4
+        specifier: 0.1.5
+        version: 0.1.5
       '@pegma/knowledge-base-core':
-        specifier: 0.1.4
-        version: 0.1.4
+        specifier: 0.1.5
+        version: 0.1.5
       '@pegma/knowledge-base-mcp':
-        specifier: 0.1.4
-        version: 0.1.4
+        specifier: 0.1.5
+        version: 0.1.5
       '@pegma/logger-cloudflare':
         specifier: ^0.1.1
         version: 0.1.1
@@ -80,18 +80,21 @@ importers:
       '@pegma/storage-core':
         specifier: 0.4.0
         version: 0.4.0
+      '@pegma/support-desk-ai':
+        specifier: 0.2.3
+        version: 0.2.3
       '@pegma/support-desk-application':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.3
+        version: 0.2.3
       '@pegma/support-desk-contracts':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.3
+        version: 0.2.3
       '@pegma/support-desk-core':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.3
+        version: 0.2.3
       '@pegma/support-desk-templates':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.3
+        version: 0.2.3
       '@pegma/webhooks':
         specifier: 0.1.1
         version: 0.1.1
@@ -1146,20 +1149,20 @@ packages:
     resolution: {integrity: sha512-r8AsVTnwCSBU2LZZjieW5FgIJ2TUWi5DlU9kp+4tuaWDFfl85EezkD6F5omAFjTnaFqCRN1T2d/KsHoESarB2A==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-application@0.1.4':
-    resolution: {integrity: sha512-j27QtdalETp3VW/bn92dmrGhzcorCuXeh79O1+2C0eY9QgRYP1eThN07op8DsQqjZJeyrwezU+I+mCvwkzV+Hg==}
+  '@pegma/knowledge-base-application@0.1.5':
+    resolution: {integrity: sha512-tH9Hw+BSVmLzQPzdyhK9YaiAthWEwgYuG0Ef2kxT7FohMqYq4iaW/vDOHQdGa/gIMAlULqS/p0vCOPr7rPQfdA==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-contracts@0.1.4':
-    resolution: {integrity: sha512-en4R5pLgKhMnnJqtA4A2A/5hUdQZWsUV+XbzlLdQCYqIABnJnLehL+MhwTvwZJfYdaddrhfBwPPJk/EL/DYajg==}
+  '@pegma/knowledge-base-contracts@0.1.5':
+    resolution: {integrity: sha512-TgK0HNLlBJ6a3EYS0aBmF+UO9v2ykK0xVYPo51Cmcn1ET15Fj90w3dpyzBX7dRomi1aGBAW3FX4X+djrayqbzg==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-core@0.1.4':
-    resolution: {integrity: sha512-eztpYFfXyTgvJTgx9PxitXkwLrFP+h03yJYxhQnM8mbNZNjulXF1j//eH8FjmQZzLRDGU1vW9Ec35T9xL43G1A==}
+  '@pegma/knowledge-base-core@0.1.5':
+    resolution: {integrity: sha512-ZuaXkuuyuMN+n1xGfPcXvInvwdNsCQpjo8m9GhFmc0fu1reisj0oeVzF4i9DvYbhHqMA6QoZgIUBUCVijLd9ug==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-mcp@0.1.4':
-    resolution: {integrity: sha512-Lk9Ig88bIWsxVEzutPJLLwv6yfK+e7QjdmnWPArDCe+NahmNtAWrLK7fomslmJ+PCEHMh3EeXzi85xxPuJHGow==}
+  '@pegma/knowledge-base-mcp@0.1.5':
+    resolution: {integrity: sha512-IBdsjzxVhGeMGViJpWLwzKTXGr2iOLeVylaBRnT9Bn+oSeAKxe1yMez+/eg7Nu19Ru/bweIrmUb0JuqIxem0Nw==}
     engines: {node: '>=22'}
 
   '@pegma/logger-cloudflare@0.1.1':
@@ -1206,20 +1209,24 @@ packages:
     resolution: {integrity: sha512-aWbRhhis4Qs4TvH1Sb+OCI0a0ddOyV+6pm6HhPs+XPlaP86mTaV7OlwkIIPqk5Hw45t//tNaqfaggUeOc7rIGA==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-application@0.2.0':
-    resolution: {integrity: sha512-0Ihqjn6RunIbDivVRBYn+vOhK9OmS4irN02ZCwiklpGcn+C3+s/hzHXZjF2bcd8+CveigVcN6t266olsdC9m5g==}
+  '@pegma/support-desk-ai@0.2.3':
+    resolution: {integrity: sha512-6xkWXPuOAyPboqvnpybP4bMLMmxpOMw5WQAr9NypL18iEKr5E3J/AJbDPaVWSNr03ossPHLSD+JrIJCbkuQRFg==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-contracts@0.2.0':
-    resolution: {integrity: sha512-mwzL/odYt0yvrFKEfzJWIZlXhmPbVwvEFgEGK/1jI/fTKDRKBdFP8yzXCFzfRiwkXNYlElN5iS/9srHsXkwYVw==}
+  '@pegma/support-desk-application@0.2.3':
+    resolution: {integrity: sha512-Ul64+A+5ccIcdFiAnzVdjnm7L3hXSPbz7U/g5ZREkEPMDs3uX/c9/pMpBy7yZIAJvrYLIizbctEv5NpoAuARsg==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-core@0.2.0':
-    resolution: {integrity: sha512-guakhYvLfpUwbT/9DrfbcplldrlK+HcyTqfK7vvXoH/Q3zk32suI0/1xT6IkYDh5jLrps30ilcv0arbeF0Tk9A==}
+  '@pegma/support-desk-contracts@0.2.3':
+    resolution: {integrity: sha512-Xa4jHOpe30s+tAlJB1ZGfY/kIEZ0eCKg5bbo3oVqsPqRVtTtUU/dXP25KldrNOG3RFUDQo3ASjbjXzLsgDsvhA==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-templates@0.2.0':
-    resolution: {integrity: sha512-AIX03LEU2wJn7mT3BFsPXH74KLPvE8jdFgPQk+D8v25XqTEpineMpXfJ85m/4WW7Fp88hndFb5l3DdsdZpNDyA==}
+  '@pegma/support-desk-core@0.2.3':
+    resolution: {integrity: sha512-BgF2/WnDXW5dbqShOHRhwQ0i/cWHuNlUkWVxfW8abZ5/qN2wW9MqAO3dci3hjK6DT5i4SpzKgnT7Zzx0a9f5IA==}
+    engines: {node: '>=22'}
+
+  '@pegma/support-desk-templates@0.2.3':
+    resolution: {integrity: sha512-VMXt8BsVI8p74b9EfJzW9Y1EaUXMhKnY/RWW/k46EEH0qKIYz6f6WIq6iRaVL8z+fh2AbTaA6WsGjMWF56nDLw==}
     engines: {node: '>=22'}
 
   '@pegma/webhooks@0.1.1':
@@ -4108,31 +4115,31 @@ snapshots:
       unicode-case-folding: 1.1.1
       unorm: 1.6.0
 
-  '@pegma/knowledge-base-application@0.1.4':
+  '@pegma/knowledge-base-application@0.1.5':
     dependencies:
       '@pegma/audit': 0.2.0
       '@pegma/authorization-core': 0.4.0
-      '@pegma/knowledge-base-contracts': 0.1.4
-      '@pegma/knowledge-base-core': 0.1.4
+      '@pegma/knowledge-base-contracts': 0.1.5
+      '@pegma/knowledge-base-core': 0.1.5
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
 
-  '@pegma/knowledge-base-contracts@0.1.4':
+  '@pegma/knowledge-base-contracts@0.1.5':
     dependencies:
       '@pegma/spine': 0.1.2
 
-  '@pegma/knowledge-base-core@0.1.4':
+  '@pegma/knowledge-base-core@0.1.5':
     dependencies:
-      '@pegma/knowledge-base-contracts': 0.1.4
+      '@pegma/knowledge-base-contracts': 0.1.5
 
-  '@pegma/knowledge-base-mcp@0.1.4':
+  '@pegma/knowledge-base-mcp@0.1.5':
     dependencies:
       '@cfworker/json-schema': 4.1.6
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
       '@pegma/authorization-core': 0.4.0
-      '@pegma/knowledge-base-application': 0.1.4
-      '@pegma/knowledge-base-contracts': 0.1.4
-      '@pegma/knowledge-base-core': 0.1.4
+      '@pegma/knowledge-base-application': 0.1.5
+      '@pegma/knowledge-base-contracts': 0.1.5
+      '@pegma/knowledge-base-core': 0.1.5
       zod: 4.6.7
     transitivePeerDependencies:
       - supports-color
@@ -4179,25 +4186,33 @@ snapshots:
 
   '@pegma/storage-core@0.4.0': {}
 
-  '@pegma/support-desk-application@0.2.0':
+  '@pegma/support-desk-ai@0.2.3':
+    dependencies:
+      '@pegma/authorization-core': 0.4.0
+      '@pegma/knowledge-base-application': 0.1.5
+      '@pegma/knowledge-base-contracts': 0.1.5
+      '@pegma/spine': 0.1.2
+      '@pegma/support-desk-application': 0.2.3
+
+  '@pegma/support-desk-application@0.2.3':
     dependencies:
       '@pegma/audit': 0.2.0
       '@pegma/authorization-core': 0.4.0
       '@pegma/mail': 0.1.1
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
-      '@pegma/support-desk-contracts': 0.2.0
-      '@pegma/support-desk-core': 0.2.0
+      '@pegma/support-desk-contracts': 0.2.3
+      '@pegma/support-desk-core': 0.2.3
 
-  '@pegma/support-desk-contracts@0.2.0':
+  '@pegma/support-desk-contracts@0.2.3':
     dependencies:
       '@pegma/spine': 0.1.2
 
-  '@pegma/support-desk-core@0.2.0':
+  '@pegma/support-desk-core@0.2.3':
     dependencies:
-      '@pegma/support-desk-contracts': 0.2.0
+      '@pegma/support-desk-contracts': 0.2.3
 
-  '@pegma/support-desk-templates@0.2.0': {}
+  '@pegma/support-desk-templates@0.2.3': {}
 
   '@pegma/webhooks@0.1.1':
     dependencies:

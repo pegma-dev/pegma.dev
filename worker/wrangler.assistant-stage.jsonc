@@ -1,0 +1,38 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "pegma-dev-support-assistant-stage",
+  "main": "src/support-assistant-stage-entry.ts",
+  "account_id": "ef243694ddbe86b2d5e2a68e857ee28c",
+  "compatibility_date": "2026-07-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "triggers": { "crons": [] },
+  "vars": {
+    "PEGMA_SUPPORT_ASSISTANT_STAGE_TARGET": "isolated-stage",
+    "PEGMA_SUPPORT_ASSISTANT_STAGE_ENABLED": "false",
+    "PEGMA_SUPPORT_ASSISTANT_STAGE_SCENARIO_JSON": "",
+  },
+  "d1_databases": [
+    {
+      "binding": "ASSISTANT_STAGE_DB",
+      "database_name": "pegma-dev-support-assistant-stage",
+      "database_id": "d71988a0-28b5-4149-8523-eddf9ad66bf2",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "pegma-support-assistant-stage-wakeup",
+        "max_batch_size": 1,
+        "max_batch_timeout": 0,
+        "max_concurrency": 1,
+        "max_retries": 7,
+        "retry_delay": 5,
+      },
+    ],
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

@@ -194,8 +194,9 @@ public acknowledgement endpoint.
 
 ## Support Desk composition
 
-Authenticated product feedback uses the four exact `@pegma/support-desk-*`
-packages at `0.2.0` over
+Authenticated product feedback composes exact `0.2.3` versions of
+`@pegma/support-desk-contracts`, `@pegma/support-desk-core`,
+`@pegma/support-desk-application`, and `@pegma/support-desk-templates` over
 the same `IDENTITY_DB` D1 binding. Support Desk collections
 (`support-desk.*.v1`) and host cursor collection
 `pegma-dev-support-maintenance` are isolated from Identity mail cursors and
@@ -203,6 +204,9 @@ session rows. Customer permissions are granted to any authenticated account
 via AccessContext defaults (not a paid entitlement). Categories:
 `feedback`, `bug`, `feature_request`, `documentation`, `question`. Subject
 marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/ticket/?id=…`.
+
+The optional `@pegma/support-desk-ai@0.2.3` package is installed for the
+[isolated scripted answering stage](../docs/SUPPORT_ASSISTANT_STAGE.md).
 
 Create and reply use durable rate limits `pegma.support.ticket.create` and
 `pegma.support.ticket.reply`. Rotating cleanup runs queue repair and

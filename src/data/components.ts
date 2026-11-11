@@ -83,8 +83,7 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/storage-s3',
     ],
     status: 'published',
-    summary:
-      'Opaque object bytes through a narrow port — the counterpart to storage-core records.',
+    summary: 'Opaque object bytes through a narrow port — the counterpart to storage-core records.',
     owns: [
       'Streaming put/get, head, delete, and etag-conditioned writes for one container/bucket',
       'Bounded prefix listing for retention and GC',
@@ -166,8 +165,7 @@ export const components: readonly PegmaComponent[] = [
     title: 'Audit',
     packages: ['@pegma/audit'],
     status: 'published',
-    summary:
-      'Append-only audit records that commit atomically with the change they describe.',
+    summary: 'Append-only audit records that commit atomically with the change they describe.',
     owns: [
       'One audit vocabulary — actor, subject, event, idempotency — for every component',
       'A TransactionAction the caller includes in its own transact call',
@@ -187,6 +185,7 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/support-desk-core',
       '@pegma/support-desk-application',
       '@pegma/support-desk-templates',
+      '@pegma/support-desk-ai',
     ],
     status: 'published',
     summary:
@@ -208,8 +207,7 @@ export const components: readonly PegmaComponent[] = [
     title: 'Webhooks',
     packages: ['@pegma/webhooks'],
     status: 'published',
-    summary:
-      'Inbound webhook receipts: idempotent dedup, poison quarantine, retention.',
+    summary: 'Inbound webhook receipts: idempotent dedup, poison quarantine, retention.',
     owns: [
       'One receipt per provider event id — the durable answer to “did we already process this?”',
       'Quarantine-then-acknowledge after bounded failures, ending retry storms',
@@ -228,8 +226,7 @@ export const components: readonly PegmaComponent[] = [
     title: 'Sessions',
     packages: ['@pegma/sessions'],
     status: 'published',
-    summary:
-      'Server-side session records: hashed ids, dual expiry, revoke-everywhere.',
+    summary: 'Server-side session records: hashed ids, dual expiry, revoke-everywhere.',
     owns: [
       'SHA-256-hashed identifiers, non-optionally — a leaked table hands out no sessions',
       'Absolute plus idle expiry through one liveness predicate',
@@ -247,8 +244,7 @@ export const components: readonly PegmaComponent[] = [
     title: 'Mail',
     packages: ['@pegma/mail'],
     status: 'published',
-    summary:
-      'Transactional mail: provider ports and an outbox pattern that owns no store.',
+    summary: 'Transactional mail: provider ports and an outbox pattern that owns no store.',
     owns: [
       'A delivery-job projection committed in the CALLER’s transaction — the lost-send gap closed by construction',
       'A lease-claiming delivery worker: bounded retries, dead jobs kept as durable human-visible rows',
@@ -287,8 +283,7 @@ export const components: readonly PegmaComponent[] = [
     title: 'Identity',
     packages: ['@pegma/identity'],
     status: 'published',
-    summary:
-      'First-party identity: passkeys-first, email-code fallback, no passwords.',
+    summary: 'First-party identity: passkeys-first, email-code fallback, no passwords.',
     owns: [
       'Account creation, passkey sign-in, and email one-time codes for enrollment, fallback, and recovery',
       'User records in the host’s own storage — no external provider',
@@ -335,8 +330,7 @@ export const components: readonly PegmaComponent[] = [
       '@pegma/flags-launchdarkly',
     ],
     status: 'published',
-    summary:
-      'A flag port and adapters: typed evaluation, honest reasons, no authoring UI.',
+    summary: 'A flag port and adapters: typed evaluation, honest reasons, no authoring UI.',
     owns: [
       'Typed flag schema (declareFlags / flag.boolean|string|number|json)',
       'Standardized EvaluationContext and EvaluationDetail',
@@ -383,8 +377,7 @@ export const components: readonly PegmaComponent[] = [
     title: 'Health',
     packages: ['@pegma/health'],
     status: 'published',
-    summary:
-      'Composable health probes and HTTP responses for public liveness checks.',
+    summary: 'Composable health probes and HTTP responses for public liveness checks.',
     owns: [
       'Check contracts, aggregation, and HTTP status mapping',
       'Process, detail, and injected Store ping helpers',

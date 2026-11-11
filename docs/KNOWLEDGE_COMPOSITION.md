@@ -4,7 +4,7 @@ The KB host integration is merged in
 [PR #59](https://github.com/pegma-dev/pegma.dev/pull/59), with public activation
 disabled. The host uses
 exact published `@pegma/agent-access@0.1.1` and all four
-`@pegma/knowledge-base-*` packages at `0.1.4`, over its existing Identity,
+`@pegma/knowledge-base-*` packages at `0.1.5`, over its existing Identity,
 Sessions, stored roles and D1 Store. The public catalog at `/api/mcp` remains
 separate from protected article authoring.
 
@@ -16,12 +16,21 @@ at signed source
 [`72358940203e1d398087f2fbe49d33ee95b6fb71`](https://github.com/pegma-dev/rate-limit/commit/72358940203e1d398087f2fbe49d33ee95b6fb71)
 passed independent exact-byte, signature/provenance and registry-consumer
 verification. Existing Identity and Support Desk keep their
-`@pegma/rate-limit@0.2.0` dependency; human controls now select all four
-Support Desk packages at `0.2.0`.
+`@pegma/rate-limit@0.2.0` dependency. The current host selects all five Support
+Desk packages at `0.2.3`, including the optional AI coordinator used only by the
+separate default-disabled synthetic stage. The
+[verified Support Desk `0.2.3` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.3)
+pins its optional AI dependency on KB application/contracts `0.1.5`.
 
-All four exact KB `0.1.4` packages, including the shared report factory and
-governed authoring-context/report-query APIs, are installed in the manifest and
-lockfile. The
+All four exact KB `0.1.5` packages are installed in the manifest and lockfile.
+The answering read-batching release retains the shared report factory and
+governed authoring-context/report-query APIs. Its producer verification covers
+original registry bytes, signatures/source provenance and public-consumer
+checks at signed source
+[`6dae20df8dace50ad961d9c5fe8d28c90bf4918f`](https://github.com/pegma-dev/knowledge-base/commit/6dae20df8dace50ad961d9c5fe8d28c90bf4918f).
+[Verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
+
+The historical
 [verified `0.1.4` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.4)
 at signed source
 [`541e8c93fe1b15bee9345e59b36325f422f97c50`](https://github.com/pegma-dev/knowledge-base/commit/541e8c93fe1b15bee9345e59b36325f422f97c50)
@@ -35,7 +44,13 @@ checkout, local tarball, dependency override, or forced SDK/schema deduplication
 for the released producer graph. The catalog transport and protected KB
 transport retain their respective released dependencies.
 
-The current manifest and lockfile pin released KB `0.1.4`,
+The [isolated assistant stage](SUPPORT_ASSISTANT_STAGE.md) uses a separate
+Queue consumer and D1 binding with fictional SDK data and a scripted local
+model. It adds no public ingress or sixth cron to the existing human/KB
+handlers. Actual stage broker and CPU proof remain pending, together with the
+existing production, customer and provider acceptance gates.
+
+The current manifest and lockfile pin released KB `0.1.5`,
 `@pegma/storage-cloudflare-d1@0.4.6` and genuine `@pegma/storage-core@0.4.0`.
 The D1 adapter itself retains that exact Core `0.4.0` dependency; no source alias,
 local archive, override or forced Core deduplication supplies the canonical
@@ -104,8 +119,8 @@ acceptances, provider/staging controls, production readiness, or pilot results.
 The [host policy](../worker/src/support-access.ts) keeps authority explicit:
 
 - `Support` retains its original six Support Desk permissions (queue read,
-  staff reply, notes, assignment, management and Audit read) and adds explicit
-  human takeover through Support Desk `0.2.0`. Existing
+  staff reply, notes, assignment, management and Audit read) and the explicit
+  human takeover introduced in Support Desk `0.2.0`. Existing
   assignments are not migrated or silently granted KB powers.
 - `Knowledge` is a separately assigned role for collection reads, draft and
   evidence work, human report review, publication and withdrawal. Admin-only
