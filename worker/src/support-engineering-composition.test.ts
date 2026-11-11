@@ -48,6 +48,7 @@ describe('optional public engineering root composition', () => {
       get exports(): Cloudflare.Exports { throw new Error('Disabled engineering must not read Worker exports'); },
       props: {},
       get tracing(): Tracing { throw new Error('Disabled engineering must not initialize tracing'); },
+      abort() { throw new Error('Disabled engineering must not abort its Worker context'); },
     };
     const response = await worker.fetch(new Request('https://pegma.dev/api/support/admin/engineering/policy'), env, context);
     await Promise.all(pending);

@@ -207,9 +207,14 @@ describe('maintenance cursor writes over D1', () => {
     const secretRead = vi.fn(() => { throw new Error('Support rate cleanup must not initialize Identity.'); });
     const environment: Parameters<typeof worker.scheduled>[1] = {
       ...env, IDENTITY_DB: metered.database, DATADOG_API_KEY: undefined,
-      PEGMA_KNOWLEDGE_ENABLED: 'false', PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED: 'false',
+      PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED: 'false',
       get IDENTITY_EMAIL_CODE_SECRET_BASE64(): string { return secretRead(); },
     };
+    // Match the generated deployment literal while explicitly testing an
+    // isolated disabled cleanup invocation, as the parent root fixtures do.
+    Object.defineProperty(environment, 'PEGMA_KNOWLEDGE_ENABLED', {
+      value: 'false', writable: true, enumerable: true, configurable: true,
+    });
     const start = Math.floor(Date.now() / 60_000) * 60_000;
     const scheduledTime = Array.from({ length: 120 }, (_, offset) => start + offset * 60_000).find((time) => {
       const lane = cleanupLaneAt(time);
