@@ -51,6 +51,10 @@ export const PEGMA_SUPPORT_CATEGORY_SET: ReadonlySet<string> = new Set(
 /** Durable rate-limit policy names (separate from Identity). */
 export const SUPPORT_CREATE_LIMIT_POLICY = 'pegma.support.ticket.create';
 export const SUPPORT_REPLY_LIMIT_POLICY = 'pegma.support.ticket.reply';
+export const SUPPORT_ENGINEERING_READ_LIMIT_POLICY = 'pegma.support.engineering.read';
+export const SUPPORT_ENGINEERING_MUTATION_LIMIT_POLICY = 'pegma.support.engineering.mutate';
+export const SUPPORT_ENGINEERING_READ_LIMIT = 120;
+export const SUPPORT_ENGINEERING_MUTATION_LIMIT = 30;
 
 export const SUPPORT_TERMINAL_RETENTION_MS =
   defaultQueueTerminalRetentionMilliseconds;
@@ -182,6 +186,8 @@ export interface SupportCompositionOptions {
   readonly clock?: Clock;
   readonly createLimiter?: DurableRateLimiter;
   readonly replyLimiter?: DurableRateLimiter;
+  readonly engineeringReadLimiter?: DurableRateLimiter;
+  readonly engineeringMutationLimiter?: DurableRateLimiter;
   readonly resolutionLearning?: ResolutionLearningOptions;
   readonly engineering?: EngineeringOptions;
 }
@@ -195,6 +201,8 @@ export interface SupportRuntime {
   readonly clock: Clock;
   readonly createLimiter: DurableRateLimiter;
   readonly replyLimiter: DurableRateLimiter;
+  readonly engineeringReadLimiter: DurableRateLimiter;
+  readonly engineeringMutationLimiter: DurableRateLimiter;
   readonly limiters: readonly DurableRateLimiter[];
   readonly terminalRetentionMilliseconds: number;
   readonly sessions: SessionStore;
@@ -267,6 +275,20 @@ function createSupportLimiters(store: Store, clock: Clock) {
       60 * 60_000,
       clock,
     ),
+    engineeringReadLimiter: durableLimiter(
+      store,
+      SUPPORT_ENGINEERING_READ_LIMIT_POLICY,
+      SUPPORT_ENGINEERING_READ_LIMIT,
+      60 * 60_000,
+      clock,
+    ),
+    engineeringMutationLimiter: durableLimiter(
+      store,
+      SUPPORT_ENGINEERING_MUTATION_LIMIT_POLICY,
+      SUPPORT_ENGINEERING_MUTATION_LIMIT,
+      60 * 60_000,
+      clock,
+    ),
   };
 }
 
@@ -279,7 +301,7 @@ export function createProductionSupportMaintenanceRuntime(
     createSchemaIfMissing: false,
   });
   const clock = systemClock;
-  const { createLimiter, replyLimiter } = createSupportLimiters(store, clock);
+  const { createLimiter, replyLimiter, engineeringReadLimiter, engineeringMutationLimiter } = createSupportLimiters(store, clock);
   return {
     store,
     clock,
@@ -289,6 +311,8 @@ export function createProductionSupportMaintenanceRuntime(
       replyLimiter,
       createAdminMutationLimiter(store, clock),
       createAdminLookupLimiter(store, clock),
+      engineeringReadLimiter,
+      engineeringMutationLimiter,
     ],
   };
 }
@@ -320,6 +344,8 @@ export function createSupportRuntime(
   const defaults = createSupportLimiters(store, clock);
   const createLimiter = options.createLimiter ?? defaults.createLimiter;
   const replyLimiter = options.replyLimiter ?? defaults.replyLimiter;
+  const engineeringReadLimiter = options.engineeringReadLimiter ?? defaults.engineeringReadLimiter;
+  const engineeringMutationLimiter = options.engineeringMutationLimiter ?? defaults.engineeringMutationLimiter;
 
   const application = createSupportDeskApplication({
     store,
@@ -343,7 +369,9 @@ export function createSupportRuntime(
     clock,
     createLimiter,
     replyLimiter,
-    limiters: Object.freeze([createLimiter, replyLimiter]),
+    engineeringReadLimiter,
+    engineeringMutationLimiter,
+    limiters: Object.freeze([createLimiter, replyLimiter, engineeringReadLimiter, engineeringMutationLimiter]),
     terminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
     sessions: options.sessions,
     identity: options.identity,

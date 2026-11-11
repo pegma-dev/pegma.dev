@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import type { Clock } from '@pegma/spine';
 import { createSupportApi } from './support-api';
-import { createSupportRuntime } from './support-desk';
+import { createSupportRuntime, SUPPORT_ENGINEERING_READ_LIMIT,
+  SUPPORT_ENGINEERING_MUTATION_LIMIT } from './support-desk';
 import { SUPPORT_ROLE } from './support-access';
 import { createWorker, createSupportRequestHandler } from './index';
 import { composeSupportEngineeringHuman, supportEngineeringIntakeOptions } from './support-engineering-composition';
 import { createSupportEngineeringHttpFixture, engineeringHttpObject, engineeringHttpResult } from './support-engineering-http-fixtures';
 import { engineeringTicketId } from './support-engineering-fixtures';
 
-async function fixture() {
+async function fixture(clock?: Clock) {
   const f = await createSupportEngineeringHttpFixture(); const ticket = await f.legacyTicket();
   const state = { enabled: true };
   const human = { enabled: () => state.enabled, configuration: { application: { enabled: true }, repositories: f.options.repositories } };
@@ -15,7 +17,7 @@ async function fixture() {
   if (intake === undefined) throw new Error('Expected explicit synthetic human intake configuration');
   const runtime = createSupportRuntime({ store: f.host.store, identity: f.identity, sessions: f.sessions,
     identityLinkFromClaims: f.options.identityLinkFromClaims, logger: f.options.logger,
-    engineering: intake });
+    engineering: intake, ...(clock === undefined ? {} : { clock }) });
   const engineering = composeSupportEngineeringHuman(runtime, f.options.logger, human);
   const api = createSupportApi({ ...f.options, application: runtime.application, roleStore: runtime.roleStore, createLimiter: runtime.createLimiter,
     replyLimiter: runtime.replyLimiter, engineering });
@@ -59,6 +61,60 @@ describe('optional public engineering root composition', () => {
     expect(response.status).toBe(200);
     expect(engineeringHttpResult(await engineeringHttpObject(response))).toMatchObject({ ticketId: engineeringTicketId, sourceGeneration: 0 });
     expect(f.engineering.state.modelCalls).toBe(0); expect(f.engineering.state.creates).toEqual([]);
+  });
+
+  it('keeps engineering reads and enrollment available after the ordinary reply quota is exhausted', async () => {
+    const { f, ticket, runtime, api } = await fixture();
+    for (let index = 0; index < 30; index += 1)
+      expect((await runtime.replyLimiter.allow(f.principals.staff)).allowed).toBe(true);
+    expect((await runtime.replyLimiter.allow(f.principals.staff)).allowed).toBe(false);
+    expect((await api(f.request())).status).toBe(404);
+    expect((await api(f.request('enroll', { commandId: 'SEPARATE-ENGINEERING-ENROLL',
+      expectedRevision: ticket.revision }))).status).toBe(200);
+  });
+
+  it('keeps ordinary replies and engineering writes independent of repeated engineering reads', async () => {
+    const { f, ticket, runtime, api } = await fixture();
+    for (let index = 0; index < 31; index += 1)
+      expect((await api(f.request())).status).toBe(404);
+    expect((await runtime.replyLimiter.allow(f.principals.staff)).allowed).toBe(true);
+    expect((await api(f.request('enroll', { commandId: 'READS-DO-NOT-SPEND-WRITES',
+      expectedRevision: ticket.revision }))).status).toBe(200);
+  });
+
+  it('retains dedicated read exhaustion across cold compositions, returns real Retry-After and restores access after expiry', async () => {
+    let milliseconds = Date.now();
+    const clock = { now: () => new Date(milliseconds).toISOString() };
+    const { f, ticket, human, runtime, api } = await fixture(clock);
+    for (let index = 0; index < SUPPORT_ENGINEERING_READ_LIMIT; index += 1)
+      expect((await runtime.engineeringReadLimiter.allow(f.principals.staff)).allowed).toBe(true);
+    const denied = await api(f.request()); expect(denied.status).toBe(429);
+    expect(Number(denied.headers.get('Retry-After'))).toBeGreaterThan(0);
+    expect(Number(denied.headers.get('Retry-After'))).toBeLessThanOrEqual(3600);
+    const restarted = createSupportRuntime({ store: runtime.store, identity: runtime.identity,
+      sessions: runtime.sessions, identityLinkFromClaims: runtime.identityLinkFromClaims,
+      logger: f.options.logger, clock, engineering: supportEngineeringIntakeOptions(human) });
+    const current = createSupportApi({ ...f.options, application: restarted.application,
+      createLimiter: restarted.createLimiter, replyLimiter: restarted.replyLimiter,
+      engineering: composeSupportEngineeringHuman(restarted, f.options.logger, human) });
+    expect((await current(f.request())).status).toBe(429);
+    expect((await current(f.request('enroll', { commandId: 'READ-QUOTA-DOES-NOT-BLOCK-WITHDRAWAL-INTAKE',
+      expectedRevision: ticket.revision }))).status).toBe(200);
+    expect((await restarted.replyLimiter.allow(f.principals.staff)).allowed).toBe(true);
+    milliseconds += 60 * 60_000 + 1;
+    // The actual source is protected. Expiry restores its real authorization
+    // result; a limiter success must never fabricate source-read permission.
+    expect((await current(f.request())).status).toBe(403);
+  });
+
+  it('exhausts engineering writes independently while reads and ordinary replies remain available', async () => {
+    const { f, ticket, runtime, api } = await fixture();
+    for (let index = 0; index < SUPPORT_ENGINEERING_MUTATION_LIMIT; index += 1)
+      expect((await runtime.engineeringMutationLimiter.allow(f.principals.staff)).allowed).toBe(true);
+    const denied = await api(f.request('enroll', { commandId: 'ACTUAL-WRITE-QUOTA-DENIAL', expectedRevision: ticket.revision }));
+    expect(denied.status).toBe(429); expect(Number(denied.headers.get('Retry-After'))).toBeGreaterThan(0);
+    expect((await api(f.request())).status).toBe(404);
+    expect((await runtime.replyLimiter.allow(f.principals.staff)).allowed).toBe(true);
   });
 
   it('computes capability from fresh real staff authority and retains both independent defaults', async () => {

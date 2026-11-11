@@ -3,13 +3,14 @@
 Developer and operator documentation for the optional engineering assembly.
 The Worker and staff ticket controller accept the human engineering composition
 through explicit trusted configuration. The default Worker supplies no such
-configuration, so engineering intake and review remain OFF.
+configuration, so engineering intake and review remain OFF. This assembly uses
+the five published Support Desk packages at exact version `0.2.6`.
 
 The [runtime](../worker/src/support-engineering.ts),
 [HTTP adapter](../worker/src/support-engineering-handlers.ts),
 [router](../worker/src/support-engineering-router.ts) and
 [panel](../public/staff-support-engineering.js) reuse the host's existing
-Support application, Identity, sessions, stored roles and durable limiter.
+Support application, Identity, sessions, stored roles and durable limiters.
 The [human composition](../worker/src/support-engineering-composition.ts)
 provides the request-local assembly. The existing learning queue and its
 physical phase boundaries continue through the same Worker entry point.
@@ -65,7 +66,7 @@ Let **T** be `/api/support/admin/tickets/:ticketId/engineering` and **P** be
 | `POST T/review` | Only `intent`, the complete actor-bound SDK command |
 | `POST T/enroll` | `commandId`, `expectedRevision` |
 | `POST T/evidence` | `commandId`, `expectedRevision`, `expectedBehavior`, `actualBehavior`, `reproductionSteps`, `visibleMessageIds`, `verificationReference`, `security` |
-| `POST T/repository` | `commandId`, `sourceGeneration`, `expectedWorkGeneration`, `repositoryKey`, `policyGeneration`, `policyHash`, `reason` |
+| `POST T/repository` | `commandId`, `sourceGeneration`, `expectedWorkGeneration`, `repositoryKey`, `repositoryId`, `repositoryDescriptorHash`, `policyGeneration`, `policyHash`, `reason` |
 | `POST T/withdraw` | `commandId`, `reason` |
 | `POST T/invalidate` | `commandId`, `reason` |
 | `GET P` | No body/query |
@@ -80,6 +81,14 @@ session, stored roles and original request-header bindings are checked across
 awaits and before responses. A closing denial can withhold an ACK after a real
 SDK commit; it does not undo that commit. Errors expose bounded codes, not private
 proof or raw dependency messages. Honor `Retry-After`.
+
+Engineering reads have their own durable 120-per-hour policy; engineering
+mutations have a separate 30-per-hour policy, both keyed by the current human
+principal. These counters share the existing Store but consume neither the
+ordinary ticket-reply quota nor each other's quota. Their expired windows are
+swept in separate rotating cleanup invocations. A denied request returns the
+actual limiter's `Retry-After`; crossing that deadline permits an explicit
+retry and never schedules a command automatically.
 
 Ordinary bodies, including preparation, use the existing **64 KiB / 10-second**
 reader. Only full policy submission uses **128 KiB / 10 seconds**; its prepared
@@ -103,11 +112,14 @@ The current SDK receipt lookup precedes mutable export proofs. Exact accepted
 replay therefore survives source withdrawal or unavailable repository facts.
 
 The runtime passes its fresh staff check and original-browser callback through
-the public coordinator's `verifyBeforeCommit` option. The coordinator retains
-the final synchronous proof assertion for the Application transaction boundary.
-Both approval and rejection require this current-human guard. New approval also
-requires the configured read-only routing, checks and repository proof ports.
-The independent review switch defaults OFF.
+the public SDK's `verifyBeforeCommit` option for all seven human intake and
+policy mutations. The SDK looks for an exact accepted receipt before invoking
+the new-command guard; that guard supplies the final synchronous deadline and
+principal assertion at the Application transaction boundary. Current browser
+and role checks still protect every replay and response. The separate proposal
+review guard applies to both approval and rejection. New approval also requires
+the configured read-only routing, checks and repository proof ports. The
+independent review switch defaults OFF.
 
 An unresolved engineering review retains its original full command. The public
 SDK exposes receipt-first replay through `reviewProposal`. A never-accepted
@@ -141,6 +153,13 @@ form. Internal notes are not public message choices. See the
 [HTTP fixture](../worker/src/support-engineering-http-fixtures.ts) and
 [panel tests](../src/support-engineering-ui.test.ts).
 
+A known, bound evidence ACK can settle after a new same-actor staff-ticket
+read even when the private source still returns 403. This does not grant
+restricted-read permission or prove the current source state. In that case
+the panel permits explicit withdrawal, while evidence reclassification and
+invalidation remain unavailable. Unknown commands stay retained; a denial
+alone cannot acknowledge them.
+
 ## Immutable policy intent and recovery
 
 Policy GET distinguishes saved mapped entries, `unmappedRepositoryCount` and the
@@ -156,16 +175,26 @@ Keep it out of DOM, URLs, logs and browser storage. Do not reconstruct it from a
 later catalog. Current Admin + Support and browser authority are still required
 on every preparation, submission and replay.
 
-At the expected current head, the adapter compares the prepared snapshot with
-current trusted configuration. A future generation is rejected. At a newer
-**monotonic SDK head**, the exact retained command can reach receipt-first
-replay before the stale expected-generation CAS: changed descriptors or removed
-keys cannot strand an already committed ACK. Missing/pruned receipts cannot
-create a new commit under that stale generation. Do not reset/reuse policy
-heads or edit SDK policy rows outside supported operations. Complete normalized
-intent bytes, including wrapper keys and ordering, bind the server-derived
-correlation identity. Altering a snapshot while reusing an ID is a conflict,
-not a corrected retry.
+The SDK checks the complete retained command for an accepted receipt before
+new-command policy and catalog checks. Only a new command must match current
+trusted configuration and pass the SDK's expected-generation CAS. Changed
+descriptors or removed keys cannot strand an already committed ACK. A missing
+or pruned receipt cannot create a new commit under a stale generation. Do not
+reset/reuse policy heads or edit SDK policy rows outside supported operations.
+Complete normalized intent bytes, including wrapper keys and ordering, bind the
+server-derived correlation identity. Altering a snapshot while reusing an ID
+is a conflict, not a corrected retry.
+
+Repository selection follows the same boundary. The checked work response
+provides ordered `repositoryChoices` containing each friendly key, immutable
+repository ID and full normalized descriptor hash, together with the current
+policy generation and hash. Retain the chosen pair, descriptor hash and policy
+fences in the original command. Only the friendly key is displayed; descriptors
+and installation bindings are not browser fields. New selections must match the
+current configured descriptor and SDK policy. Exact accepted replay bypasses
+obsolete catalog facts while still requiring current browser and Support
+review authority. A removed key or changed descriptor without an accepted
+receipt cannot authorize a new selection.
 
 The [actual HTTP policy cases](../worker/src/support-engineering-handlers.test.ts)
 cover changed/removed catalogs, altered wrappers, future heads, missing/pruned

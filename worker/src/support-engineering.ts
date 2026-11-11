@@ -21,6 +21,7 @@ import {
   type WithdrawEngineeringSourceCommand,
   type PutEngineeringPolicyCommand,
   type EngineeringPolicyCommand,
+  type EngineeringMutationOptions,
 } from '@pegma/support-desk-application';
 import {
   supportEngineeringCommandIdentity,
@@ -40,6 +41,12 @@ export type EngineeringInvalidationPacket = Packet<InvalidateEngineeringSourceCo
 export type EngineeringWithdrawalPacket = Packet<WithdrawEngineeringSourceCommand>;
 export type EngineeringPolicyPacket = Packet<PutEngineeringPolicyCommand>;
 export type EngineeringDisablePacket = Packet<EngineeringPolicyCommand>;
+/** The HTTP host resolves the original browser and current human authority. */
+export type SupportEngineeringHumanCommitGuard = () => Promise<AccessContext>;
+export interface SupportEngineeringSelectionControl {
+  readonly beforeCommit?: SupportEngineeringHumanCommitGuard;
+  readonly intentFingerprint?: string;
+}
 
 /** Read-only facts required for a NEW approval; no processing or dispatch ports. */
 export interface SupportEngineeringReviewProofs {
@@ -117,13 +124,20 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
   } });
 
   async function staff<Result>(original: AccessContext, permission: string,
-    run: (access: AccessContext, refresh: () => Promise<AccessContext>, signal: AbortSignal) => Promise<Result>): Promise<Result> {
+    run: (access: AccessContext, refresh: () => Promise<AccessContext>, signal: AbortSignal,
+      assertCurrent: () => true) => Promise<Result>): Promise<Result> {
     const bound = structuredClone(original);
     const started = performance.now();
     const controller = new AbortController();
     const ensure = (): void => {
       if (controller.signal.aborted || performance.now() - started >= staffOperationMilliseconds)
         throw new SupportEngineeringUnavailableError();
+    };
+    const assertCurrent = (): true => {
+      ensure();
+      if (original.principalId !== bound.principalId)
+        throw new SupportDeskAuthorizationError(permission);
+      return true;
     };
     let rejectDeadline: (error: Error) => void = () => {};
     const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
@@ -159,7 +173,7 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
     }
     try {
       const current = await refresh();
-      const value = await within(() => run(current, refresh, controller.signal));
+      const value = await within(() => run(current, refresh, controller.signal, assertCurrent));
       // A direct SDK mutation may commit after this boundary stops waiting.
       // Withhold its unknown acknowledgement; only exact packet replay can
       // recover it. Timeout never proves nonacceptance or rolls it back.
@@ -174,13 +188,31 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
   async function command<Input extends { readonly clientCommandId: string }, Result>(access: AccessContext,
     permission: string, operation: SupportEngineeringOperation, ticketId: string, input: Input,
     invoke: (current: AccessContext, packet: Omit<Input, 'clientCommandId'> & { commandId: string; correlationId: string },
-      refresh: () => Promise<AccessContext>, signal: AbortSignal) => Promise<Result>): Promise<Result> {
+      refresh: () => Promise<AccessContext>, signal: AbortSignal, control: EngineeringMutationOptions) => Promise<Result>,
+    beforeCommit?: SupportEngineeringHumanCommitGuard): Promise<Result> {
     const packet = structuredClone(input);
     const principalId = access.principalId;
-    return staff(access, permission, async (_current, refresh, signal) => {
+    const ceiling = structuredClone(access);
+    if (beforeCommit !== undefined && typeof beforeCommit !== 'function')
+      throw new TypeError('Expected an engineering human commit guard');
+    return staff(access, permission, async (_current, refresh, signal, assertCurrent) => {
       const { clientCommandId, ...fields } = packet;
       const identity = await supportEngineeringCommandIdentity({ principalId, ticketId, operation, clientCommandId });
-      return invoke(await refresh(), { ...fields, ...identity }, refresh, signal);
+      const control: EngineeringMutationOptions = { signal, verifyBeforeCommit: async () => {
+        // A complete current browser guard already resolves current staff roles.
+        // Trusted direct callers use the same current-role resolver instead.
+        const current = beforeCommit === undefined ? await refresh() : await beforeCommit();
+        assertCurrent();
+        if (current.principalId !== principalId) throw new SupportDeskAuthorizationError(permission);
+        const bounded: AccessContext = { principalId, policyVersion: current.policyVersion,
+          roles: current.roles.filter((entry) => ceiling.roles.includes(entry)),
+          entitlements: current.entitlements.filter((entry) => ceiling.entitlements.includes(entry)),
+          permissions: current.permissions.filter((entry) => ceiling.permissions.includes(entry)) };
+        for (const required of [permission, supportPermissions.queueRead])
+          if (!hasPermission(bounded, required)) throw new SupportDeskAuthorizationError(required);
+        return assertCurrent;
+      } };
+      return invoke(await refresh(), { ...fields, ...identity }, refresh, signal, control);
     });
   }
 
@@ -199,15 +231,25 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
 
   return Object.freeze({
     reviewCommand,
-    enroll: (access: AccessContext, input: EngineeringEnrollmentPacket) =>
+    enroll: (access: AccessContext, input: EngineeringEnrollmentPacket, beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringEvidenceSubmit, 'enroll', input.ticketId, input,
-        (current, packet) => application.enrollEngineeringSource(current, packet)),
-    submitVerifiedFailure: (access: AccessContext, input: EngineeringFailurePacket) =>
+        (current, packet, _refresh, _signal, control) => application.enrollEngineeringSource(current, packet, control), beforeCommit),
+    submitVerifiedFailure: (access: AccessContext, input: EngineeringFailurePacket, beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringEvidenceSubmit, 'failure', input.ticketId, input,
-        (current, packet) => application.submitEngineeringEvidence(current, packet)),
-    selectRepository: (access: AccessContext, input: EngineeringSelectionPacket) =>
-      command(access, supportPermissions.engineeringReview, 'select', input.ticketId, input,
-        (current, packet) => application.selectEngineeringRepository(current, packet)),
+        (current, packet, _refresh, _signal, control) => application.submitEngineeringEvidence(current, packet, control), beforeCommit),
+    selectRepository(access: AccessContext, input: EngineeringSelectionPacket, options: SupportEngineeringSelectionControl = {}) {
+      const { intentFingerprint, beforeCommit } = options;
+      return command(access, supportPermissions.engineeringReview, 'select', input.ticketId, input,
+        (current, packet, _refresh, _signal, control) => {
+          if (intentFingerprint !== undefined && !/^[a-f0-9]{64}$/u.test(intentFingerprint))
+            throw new TypeError('Invalid engineering selection intent fingerprint');
+          return application.selectEngineeringRepository(current, { ...packet,
+            ...(intentFingerprint === undefined ? {} : {
+              correlationId: 'engineering-selection-intent:' + intentFingerprint,
+            }),
+          }, control);
+        }, beforeCommit);
+    },
     reviewProposal: (access: AccessContext, input: EngineeringReviewPacket) =>
       command(access, supportPermissions.engineeringReview, 'review', input.ticketId, input,
         async (current, packet, refresh, signal) => {
@@ -215,12 +257,12 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
             verifyBeforeCommit: async () => { await refresh(); },
           });
         }),
-    invalidate: (access: AccessContext, input: EngineeringInvalidationPacket) =>
+    invalidate: (access: AccessContext, input: EngineeringInvalidationPacket, beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringWithdraw, 'invalidate', input.ticketId, input,
-        (current, packet) => application.invalidateEngineeringSource(current, packet)),
-    withdraw: (access: AccessContext, input: EngineeringWithdrawalPacket) =>
+        (current, packet, _refresh, _signal, control) => application.invalidateEngineeringSource(current, packet, control), beforeCommit),
+    withdraw: (access: AccessContext, input: EngineeringWithdrawalPacket, beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringWithdraw, 'withdraw', input.ticketId, input,
-        (current, packet) => application.withdrawEngineeringSource(current, packet)),
+        (current, packet, _refresh, _signal, control) => application.withdrawEngineeringSource(current, packet, control), beforeCommit),
     readSource: (access: AccessContext, ticketId: string) =>
       staff(access, supportPermissions.engineeringRead, (current) => application.readEngineeringSource(current, ticketId)),
     readWork(access: AccessContext, input: EngineeringKey) {
@@ -229,9 +271,10 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
     },
     readPolicy: (access: AccessContext) =>
       staff(access, supportPermissions.engineeringPolicyRead, (current) => application.readRepositoryPolicy(current)),
-    putPolicy: (access: AccessContext, input: EngineeringPolicyPacket, intentFingerprint?: string) =>
+    putPolicy: (access: AccessContext, input: EngineeringPolicyPacket, intentFingerprint?: string,
+      beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringPolicyManage, 'policy_put', 'policy-instance', input,
-        (current, packet) => {
+        (current, packet, _refresh, _signal, control) => {
           if (intentFingerprint !== undefined && !/^[a-f0-9]{64}$/u.test(intentFingerprint))
             throw new TypeError('Invalid engineering policy intent fingerprint');
           return application.putRepositoryPolicy(current, {
@@ -239,11 +282,11 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
             ...(intentFingerprint === undefined ? {} : {
               correlationId: 'engineering-policy-intent:' + intentFingerprint,
             }),
-          });
-        }),
-    disableExports: (access: AccessContext, input: EngineeringDisablePacket) =>
+          }, control);
+        }, beforeCommit),
+    disableExports: (access: AccessContext, input: EngineeringDisablePacket, beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringPolicyManage, 'policy_disable', 'policy-instance', input,
-        (current, packet) => application.disableEngineeringExports(current, packet)),
+        (current, packet, _refresh, _signal, control) => application.disableEngineeringExports(current, packet, control), beforeCommit),
     scanReview(access: AccessContext, input: Parameters<EngineeringApplication['scanEngineeringCandidates']>[1]) {
       const bounds = structuredClone(input);
       return staff(access, supportPermissions.engineeringReview, (current) => application.scanEngineeringCandidates(current, bounds));

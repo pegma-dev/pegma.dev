@@ -98,6 +98,8 @@ describe('checked human engineering review panel through real SDK and HTTP adapt
     expect(body.intent.command).toMatchObject({ decision: 'reject', proposalHash: h.checked.proposal?.proposalHash,
       expectedWorkGeneration: h.checked.workGeneration, sourceGeneration: h.checked.sourceGeneration });
     expect((await h.f.work()).approval).toMatchObject({ decision: 'reject' });
+    expect((await h.f.work()).status).toBe('held');
+    expect(h.panel.hasPending()).toBe(false);
     expect(h.f.engineering.state.creates).toEqual([]);
   });
 

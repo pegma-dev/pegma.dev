@@ -149,3 +149,32 @@ import Base from '../../../layouts/Base.astro';
   <script is:inline src="/staff-support-learning.js"></script>
   <script is:inline type="module" src="/staff-support-ticket.js"></script>
 </Base>
+
+<style is:global>
+  #staff-engineering-panel label {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  #staff-engineering-panel input:not([type='checkbox']),
+  #staff-engineering-panel select,
+  #staff-engineering-panel textarea {
+    display: block;
+    box-sizing: border-box;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  #staff-engineering-panel pre {
+    max-width: 100%;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  #staff-engineering-recovery-owners button {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+</style>

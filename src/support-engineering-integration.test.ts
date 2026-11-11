@@ -80,6 +80,24 @@ async function harness(autoEnrolled = false) {
     writes: () => calls.filter((call) => call.method === 'POST') };
 }
 
+async function readySelection(h: Awaited<ReturnType<typeof harness>>) {
+  const catalog = h.f.options.repositories.map((entry, index) => ({ ...entry, key: 'public-repository-choice-' + index }));
+  h.state.handle = createSupportEngineeringHandlers({ ...h.f.options, repositories: catalog });
+  await h.open(); await h.action('enroll'); h.evidence(); await h.action('evidence');
+  const source = await h.f.engineering.source();
+  h.f.engineering.state.modelRouting = 'ambiguous';
+  expect((await h.f.state.runtime.processWork({ ticketId: engineeringTicketId, sourceGeneration: source.sourceGeneration,
+    workerId: 'synthetic-ui-selection-worker', leaseMilliseconds: 30_000 })).outcome).toBe('candidate');
+  await h.action('work');
+  const response = await h.state.handle(h.f.request('work', undefined, 'staff', '?sourceGeneration=' + source.sourceGeneration));
+  if (response === null || !response.ok) throw new Error('Actual immutable selection read unavailable');
+  const envelope = await response.json() as { result: { selection: { repositoryChoices: { key: string; repositoryId: string; descriptorHash: string }[] } } };
+  const choice = envelope.result.selection.repositoryChoices[1];
+  if (choice === undefined) throw new Error('Actual immutable repository choice missing');
+  h.node('repository', true).value = choice.key; h.node('repository-reason', true).value = 'The verified failure concerns the configured download API.';
+  return { catalog, choice };
+}
+
 describe('public engineering panel through actual Memory SDK and HTTP authority', () => {
   it('keeps an engineering-prefixed ticket ID on the actual staff detail route before engineering intake', async () => {
     const h = await harness(); await h.open();
@@ -123,6 +141,103 @@ describe('public engineering panel through actual Memory SDK and HTTP authority'
     expect((await h.f.engineering.source()).state).toBe('held');
     expect((await h.f.rows()).filter((row) => row.kind === 'engineering_work')).toEqual([]);
     expect(h.f.engineering.state.modelCalls).toBe(0); expect(h.f.engineering.state.creates).toEqual([]);
+  });
+
+  it('replays the immutable real SDK repository selection after committed ACK loss and catalog removal without rebuilding its packet', async () => {
+    const h = await harness(); const { choice } = await readySelection(h);
+    const rendered = JSON.stringify(h.root.all().map((item) => ({ text: item.textContent, value: item.value,
+      dataset: item.dataset, attributes: [...item.attributes] })));
+    for (const opaque of [choice.repositoryId, choice.descriptorHash, 'repositoryId', 'descriptorHash', 'installationBinding'])
+      expect(rendered).not.toContain(opaque);
+    let lose = true;
+    h.state.fault = async (path, response) => {
+      if (lose && path.endsWith('/repository') && response.ok) {
+        lose = false; throw Object.assign(new Error('Synthetic selection ACK loss AFTER actual SDK commit'), { status: 503 });
+      }
+    };
+    await h.action('repository'); const original = h.writes().at(-1)!;
+    expect(original.serverStatus).toBe(200);
+    expect(JSON.parse(original.body ?? '{}')).toMatchObject({ repositoryKey: choice.key, repositoryId: choice.repositoryId,
+      repositoryDescriptorHash: choice.descriptorHash });
+    expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(false);
+    const source = await h.f.engineering.source();
+    const committed = await h.f.engineering.application.readEngineeringWork(h.f.engineering.actors.security,
+      { ticketId: engineeringTicketId, sourceGeneration: source.sourceGeneration });
+    expect(committed.staffSelection).toMatchObject({ repositoryId: choice.repositoryId,
+      reason: 'The verified failure concerns the configured download API.' });
+    const rows = await h.f.rows(); const modelCalls = h.f.engineering.state.modelCalls; const ids = h.state.ids;
+    h.state.fault = undefined;
+    h.state.handle = createSupportEngineeringHandlers({ ...h.f.options, repositories: [] });
+    await h.action('retry-ticket');
+    expect(h.writes().at(-1)?.body).toBe(original.body); expect(h.writes().at(-1)?.serverStatus).toBe(200);
+    expect(h.state.ids).toBe(ids); expect(await h.f.rows()).toEqual(rows);
+    expect(h.f.engineering.state.modelCalls).toBe(modelCalls); expect(h.f.engineering.state.creates).toEqual([]);
+    expect(h.panel.hasPending()).toBe(false);
+    for (const opaque of [choice.repositoryId, choice.descriptorHash, 'repositoryDescriptorHash'])
+      expect(JSON.stringify(h.ownership)).not.toContain(opaque);
+  });
+
+  it('keeps an unaccepted immutable repository packet unknown after its key is removed and retries only those original bytes', async () => {
+    const h = await harness(); const { catalog, choice } = await readySelection(h);
+    h.state.handle = createSupportEngineeringHandlers({ ...h.f.options, repositories: catalog.filter((entry) => entry.key !== choice.key) });
+    const rows = await h.f.rows(); const modelCalls = h.f.engineering.state.modelCalls;
+    await h.action('repository'); const original = h.writes().at(-1)!; const ids = h.state.ids;
+    expect(original.serverStatus).toBe(409); expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(false);
+    expect(JSON.parse(original.body ?? '{}')).toMatchObject({ repositoryKey: choice.key, repositoryId: choice.repositoryId,
+      repositoryDescriptorHash: choice.descriptorHash });
+    await h.panel.refresh(); expect(h.panel.hasPending()).toBe(true);
+    await h.action('retry-ticket');
+    expect(h.writes().at(-1)?.body).toBe(original.body); expect(h.writes().at(-1)?.serverStatus).toBe(409);
+    expect(h.state.ids).toBe(ids); expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(false);
+    expect(await h.f.rows()).toEqual(rows); expect(h.f.engineering.state.modelCalls).toBe(modelCalls);
+    expect(h.f.engineering.state.creates).toEqual([]);
+  });
+
+  it.each(['missing choices', 'mismatched key', 'duplicate key', 'duplicate identity', 'malformed hash', 'extra choice field', 'too many choices', 'null selection'])(
+    'rejects a corrupted real HTTP selection response with %s before allowing any repository command', async (fault) => {
+      const h = await harness(); await readySelection(h); const posts = h.writes().length; const ids = h.state.ids;
+      const modelCalls = h.f.engineering.state.modelCalls;
+      h.state.fault = async (path, response) => {
+        if (!path.includes('/work?') || !response.ok) return;
+        // Explicit transport corruption of a genuine protected HTTP response.
+        const envelope = await response.clone().json() as { result: { selection: {
+          repositoryKeys: string[]; repositoryChoices?: { key: string; repositoryId: string; descriptorHash: string; extra?: string }[];
+        } | null } };
+        const selection = envelope.result.selection;
+        if (!selection?.repositoryChoices?.[0] || !selection.repositoryChoices[1]) throw new Error('Actual selection choices missing before corruption');
+        if (fault === 'missing choices') delete selection.repositoryChoices;
+        else if (fault === 'mismatched key') selection.repositoryChoices[0].key = 'not-the-listed-key';
+        else if (fault === 'duplicate key') {
+          selection.repositoryKeys[1] = selection.repositoryKeys[0]!;
+          selection.repositoryChoices[1].key = selection.repositoryChoices[0].key;
+        } else if (fault === 'duplicate identity') selection.repositoryChoices[1].repositoryId = selection.repositoryChoices[0].repositoryId;
+        else if (fault === 'malformed hash') selection.repositoryChoices[0].descriptorHash = 'not-a-descriptor-hash';
+        else if (fault === 'extra choice field') selection.repositoryChoices[0].extra = 'untrusted opaque field';
+        else if (fault === 'too many choices') {
+          const descriptorHash = selection.repositoryChoices[0].descriptorHash;
+          selection.repositoryChoices = Array.from({ length: 21 }, (_, index) => ({ key: 'key-' + index, repositoryId: 'id-' + index, descriptorHash }));
+          selection.repositoryKeys = selection.repositoryChoices.map((choice) => choice.key);
+        } else envelope.result.selection = null;
+        response.json = async () => envelope;
+      };
+      await h.action('work'); expect(h.node('repository').disabled).toBe(true);
+      await h.action('repository'); expect(h.writes()).toHaveLength(posts); expect(h.state.ids).toBe(ids);
+      expect(h.panel.hasPending()).toBe(false); expect(h.f.engineering.state.modelCalls).toBe(modelCalls);
+      expect(h.f.engineering.state.creates).toEqual([]);
+    },
+  );
+
+  it('reads real work metadata without repository admission when the HTTP DTO has no selection object', async () => {
+    const h = await harness(); await readySelection(h); const posts = h.writes().length; const ids = h.state.ids;
+    h.state.fault = async (path, response) => {
+      if (!path.includes('/work?') || !response.ok) return;
+      const envelope = await response.clone().json() as { result: { selection?: unknown } };
+      delete envelope.result.selection; response.json = async () => envelope;
+    };
+    await h.action('work'); expect(h.root.textContent).toContain('"hasCandidate": true');
+    expect(h.node('repository').disabled).toBe(true); await h.action('repository');
+    expect(h.writes()).toHaveLength(posts); expect(h.state.ids).toBe(ids); expect(h.panel.hasPending()).toBe(false);
+    expect(h.f.engineering.state.creates).toEqual([]);
   });
 
   it('retains the exact uppercase unknown evidence packet across actual withdrawal and replay without a new command', async () => {
@@ -191,13 +306,70 @@ describe('public engineering panel through actual Memory SDK and HTTP authority'
     expect(h.panel.hasPending()).toBe(false); expect(await h.f.policyRows()).toEqual(before);
   });
 
-  it('keeps a restricted evidence ACK known while protected GET recovery remains unreadable', async () => {
+  it('settles a restricted evidence ACK with fresh staff authority and allows only explicit withdrawal while source GET remains protected', async () => {
     const h = await harness(); await h.open(); await h.action('enroll'); h.evidence('uncertain'); await h.action('evidence');
     expect((await h.f.engineering.source()).state).toBe('restricted');
+    const evidence = h.calls.findIndex((call) => call.path.endsWith('/evidence'));
+    const protectedRead = h.calls.findIndex((call, index) => index > evidence && call.path.endsWith('/engineering') && call.serverStatus === 403);
+    expect(protectedRead).toBeGreaterThan(evidence);
+    expect(h.calls.slice(protectedRead + 1).some((call) => call.path === '/api/support/admin/tickets/' + engineeringTicketId && call.serverStatus === 200)).toBe(true);
+    expect((await h.f.resolve(h.f.principals.staff))?.permissions).not.toContain(supportPermissions.engineeringRestrictedRead);
+    expect(h.panel.hasPending()).toBe(false);
+    expect(h.node('evidence').disabled).toBe(true); expect(h.node('invalidate').disabled).toBe(true);
+    expect(h.node('withdraw').disabled).toBe(false);
+    const posts = h.writes().length;
+    await h.action('evidence'); await h.action('invalidate'); expect(h.writes()).toHaveLength(posts);
+    await h.action('withdraw'); expect(h.writes()).toHaveLength(posts + 1);
+    expect(JSON.parse(h.writes().at(-1)?.body ?? '{}').reason).toBe('privacy_withdrawal');
+    expect((await h.f.engineering.source()).state).toBe('withdrawn'); expect(h.panel.hasPending()).toBe(false);
+    expect(h.node('evidence').disabled).toBe(true); expect(h.root.textContent).not.toContain(engineeringCanary);
+    expect(h.f.engineering.state.creates).toEqual([]);
+  });
+
+  it('retains a known restricted evidence ACK until a NEW same-actor staff-ticket read succeeds, then recovers by GET only', async () => {
+    const h = await harness(); await h.open(); await h.action('enroll'); h.evidence('restricted');
+    let accepted = false;
+    h.state.fault = async (path, response) => {
+      if (path.endsWith('/evidence') && response.ok) accepted = true;
+      else if (accepted && path === '/api/support/admin/tickets/' + engineeringTicketId)
+        throw Object.assign(new Error('Synthetic current staff ticket outage AFTER accepted evidence'), { status: 503 });
+    };
+    await h.action('evidence'); expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(true);
+    expect(h.node('withdraw').disabled).toBe(true); const posts = h.writes().length; const rows = await h.f.rows();
+    h.state.fault = undefined; await h.action('retry-ticket');
+    expect(h.writes()).toHaveLength(posts); expect(await h.f.rows()).toEqual(rows);
+    expect(h.panel.hasPending()).toBe(false); expect(h.node('withdraw').disabled).toBe(false);
+    expect(h.node('evidence').disabled).toBe(true); expect(h.node('invalidate').disabled).toBe(true);
+    expect(h.f.engineering.state.creates).toEqual([]);
+  });
+
+  it('never settles unknown restricted evidence from a protected GET and replays its exact packet only explicitly', async () => {
+    const h = await harness(); await h.open(); await h.action('enroll'); h.evidence('restricted');
+    h.state.fault = async (path, response) => {
+      if (path.endsWith('/evidence') && response.ok)
+        throw Object.assign(new Error('Synthetic restricted evidence ACK loss AFTER SDK commit'), { status: 503 });
+    };
+    await h.action('evidence'); const original = h.writes().at(-1)?.body; const posts = h.writes().length;
+    expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(false); const rows = await h.f.rows();
+    h.state.fault = undefined; await h.panel.refresh();
+    expect(h.writes()).toHaveLength(posts); expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(false);
+    expect(h.node('withdraw').disabled).toBe(true); expect(h.node('evidence').disabled).toBe(true);
+    await h.action('retry-ticket'); expect(h.writes().at(-1)?.body).toBe(original);
+    expect(h.state.ids).toBe(2); expect(await h.f.rows()).toEqual(rows);
+    expect(h.panel.hasPending()).toBe(false); expect(h.node('withdraw').disabled).toBe(false);
+    expect(h.node('evidence').disabled).toBe(true); expect(h.node('invalidate').disabled).toBe(true);
+    expect(h.f.engineering.state.creates).toEqual([]);
+  });
+
+  it('retains a known restricted evidence ACK when its closing actual session is destroyed during the protected GET', async () => {
+    const h = await harness(); await h.open(); await h.action('enroll'); h.evidence('restricted');
+    h.state.fault = async (path, response) => {
+      if (path.endsWith('/engineering') && response.status === 403) await h.f.destroy('staff');
+    };
+    await h.action('evidence'); expect((await h.f.engineering.source()).state).toBe('restricted');
     expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(true);
-    const posts = h.writes().length; await h.action('retry-ticket');
-    expect(h.writes()).toHaveLength(posts); expect(h.panel.hasPending()).toBe(true);
-    expect(h.node('evidence').disabled).toBe(true); expect(h.f.engineering.state.creates).toEqual([]);
+    expect(h.node('withdraw').disabled).toBe(true); expect(h.node('evidence').disabled).toBe(true);
+    expect(h.root.textContent).not.toContain(engineeringCanary); expect(h.f.engineering.state.creates).toEqual([]);
   });
 
   it('retains owner A across A to peer B to A and never submits A under B credentials', async () => {

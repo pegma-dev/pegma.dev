@@ -36,7 +36,8 @@ export function composeSupportEngineeringHuman(runtime: SupportRuntime, logger: 
     identityLinkFromClaims: runtime.identityLinkFromClaims, roleStore: runtime.roleStore, logger };
   const resolve = createAgentPrincipalResolver(authority);
   return { enabled: () => supportEngineeringHumanEnabled(options), configuration: {
-    ...authority, limiter: runtime.replyLimiter, repositories: options.configuration!.repositories,
+    ...authority, readLimiter: runtime.engineeringReadLimiter,
+    mutationLimiter: runtime.engineeringMutationLimiter, repositories: options.configuration!.repositories,
     reviewEnabled: () => { try { return options.reviewEnabled?.() === true; } catch { return false; } },
     runtime: () => createSupportEngineeringRuntime({ application: runtime.application,
       clock: runtime.clock, staffAccess: { resolve }, processingEnabled: () => false,

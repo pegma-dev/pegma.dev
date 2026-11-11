@@ -6,6 +6,7 @@ import { ADMIN_ROLE, APPLICATION_SCOPE, SUPPORT_ROLE } from './support-access';
 import { controlledHumanBody } from './support-human-control-fixtures';
 import { engineeringCanary, engineeringProofReference, engineeringRepositories, engineeringTicketId } from './support-engineering-fixtures';
 import { createSupportEngineeringHandlers } from './support-engineering-handlers';
+import { createSupportEngineeringRuntime } from './support-engineering';
 import {
   createSupportEngineeringHttpFixture, engineeringHttpCommand, engineeringHttpNumber,
   engineeringHttpObject, engineeringHttpResult, engineeringHttpRoute,
@@ -15,6 +16,23 @@ const fixture = createSupportEngineeringHttpFixture;
 const object = engineeringHttpObject;
 const result = engineeringHttpResult;
 const number = engineeringHttpNumber;
+
+function selectionPacket(work: Record<string, unknown>, key: string) {
+  const selected = work.selection;
+  if (!isPlainObject(selected) || !Array.isArray(selected.repositoryChoices))
+    throw new Error('Expected actual immutable repository choices');
+  const choice: unknown = selected.repositoryChoices.find((value: unknown) => isPlainObject(value) && value.key === key);
+  if (!isPlainObject(choice)) throw new Error('Expected the configured choice');
+  return { repositoryKey: choice.key, repositoryId: choice.repositoryId,
+    repositoryDescriptorHash: choice.descriptorHash,
+    policyGeneration: selected.policyGeneration, policyHash: selected.policyHash };
+}
+
+function useApplication(f: Awaited<ReturnType<typeof fixture>>, application: typeof f.engineering.application) {
+  f.state.runtime = createSupportEngineeringRuntime({ application, clock: f.engineering.clock,
+    staffAccess: { resolve: (id) => f.resolve(id) }, ports: f.engineering.ports,
+    processingEnabled: () => false });
+}
 
 function firstIntentRepository(packet: { intent: Record<string, unknown> }) {
   const policy = packet.intent.policy;
@@ -66,8 +84,8 @@ describe('unregistered engineering HTTP through current real host authority', ()
 
   it('enrolls and records an actual verified failure with exact uppercase command replay', async () => {
     const f = await fixture(); const original = f.state.runtime;
-    f.state.runtime = { ...original, async enroll(access, packet) {
-      f.state.captured.push(packet.clientCommandId); return original.enroll(access, packet);
+    f.state.runtime = { ...original, async enroll(...args: Parameters<typeof original.enroll>) {
+      f.state.captured.push(args[1].clientCommandId); return original.enroll(...args);
     } };
     const ticket = await f.engineering.createTicket();
     const packet = { commandId: engineeringHttpCommand, expectedRevision: ticket.revision };
@@ -157,11 +175,8 @@ describe('unregistered engineering HTTP through current real host authority', ()
     expect((await f.process()).outcome).toBe('candidate');
     const response = await f.send(f.request('work', undefined, 'staff', '?sourceGeneration=' + accepted.key.sourceGeneration));
     const view = result(await object(response));
-    if (typeof view.selection !== 'object' || view.selection === null || !('policyGeneration' in view.selection) ||
-      !('policyHash' in view.selection)) throw new Error('Missing actual selection policy fences');
     const packet = { commandId: 'SELECT-EXACT', sourceGeneration: accepted.key.sourceGeneration,
-      expectedWorkGeneration: number(view.workGeneration), repositoryKey: engineeringRepositories[1]!.repositoryId,
-      policyGeneration: view.selection.policyGeneration, policyHash: view.selection.policyHash,
+      expectedWorkGeneration: number(view.workGeneration), ...selectionPacket(view, engineeringRepositories[1]!.repositoryId),
       reason: 'Select the allowlisted download API.' };
     const first = await object(await f.send(f.request('repository', packet)));
     expect(result(first).status).toBe('candidate');
@@ -175,13 +190,15 @@ describe('unregistered engineering HTTP through current real host authority', ()
 
   it('rejects arbitrary repository URLs or identities before changing a work target', async () => {
     const f = await fixture(); const accepted = await f.verified(); expect((await f.process()).outcome).toBe('candidate');
-    const work = await f.work(); const policy = await f.engineering.runtime.readPolicy(f.engineering.actors.admin); const before = await f.rows();
+    const work = await f.work(); const before = await f.rows();
+    const view = result(await object(await f.send(f.request('work', undefined, 'staff', '?sourceGeneration=' + accepted.key.sourceGeneration))));
     const packet = { commandId: 'UNKNOWN-REPOSITORY', sourceGeneration: accepted.key.sourceGeneration,
-      expectedWorkGeneration: work.workGeneration, repositoryKey: 'https://foreign.example/repository',
-      policyGeneration: policy.generation, policyHash: policy.policyHash, reason: 'Unapproved destination.' };
-    expect((await f.send(f.request('repository', packet))).status).toBe(400);
+      expectedWorkGeneration: work.workGeneration, ...selectionPacket(view, engineeringRepositories[0]!.repositoryId),
+      repositoryKey: 'https://foreign.example/repository', reason: 'Unapproved destination.' };
+    expect((await f.send(f.request('repository', packet))).status).toBe(409);
     expect(await f.rows()).toEqual(before);
   });
+
 
   it('uses declarative server-only policy descriptors and replays independently of live metadata availability', async () => {
     const f = await fixture(); const policy = await f.engineering.runtime.readPolicy(f.engineering.actors.admin);
@@ -253,8 +270,8 @@ describe('unregistered engineering HTTP through current real host authority', ()
       enabled: true, repositoryKeys: [engineeringRepositories[0]!.repositoryId] });
     const original = f.state.runtime; let lose = true;
     let accepted: Awaited<ReturnType<typeof original.putPolicy>> | undefined;
-    f.state.runtime = { ...original, async putPolicy(access, packet, binding) {
-      const value = await original.putPolicy(access, packet, binding); accepted = value;
+    f.state.runtime = { ...original, async putPolicy(...args: Parameters<typeof original.putPolicy>) {
+      const value = await original.putPolicy(...args); accepted = value;
       if (lose) { lose = false; throw new Error('Synthetic committed policy ACK loss'); } return value;
     } };
     expect((await f.send(f.request('policy', retained, 'both'))).status).toBe(503);
@@ -335,20 +352,22 @@ describe('unregistered engineering HTTP through current real host authority', ()
     expect(await f.policyRows()).toEqual(before);
   });
 
-  it('lets the actual SDK CAS reject a head advance after the fresh-catalog observation', async () => {
+  it('lets the actual SDK CAS reject a head advance after the actual late catalog guard', async () => {
     const f = await fixture(); const retained = await f.preparePolicy({ commandId: 'CAS-INTENT-EXACT', expectedGeneration: 1,
       enabled: true, repositoryKeys: [engineeringRepositories[0]!.repositoryId] });
-    const original = f.state.runtime; let advanced = false;
+    const application = f.engineering.application; let advanced = false;
     let racedRows: Awaited<ReturnType<typeof f.policyRows>> | undefined;
-    f.state.runtime = { ...original, async readPolicy(access) {
-      const observed = await original.readPolicy(access);
-      if (!advanced) {
-        advanced = true;
-        await f.engineering.runtime.disableExports(f.engineering.actors.admin, { clientCommandId: 'CAS-COMPETITOR', expectedGeneration: observed.generation });
-        racedRows = await f.policyRows();
-      }
-      return observed;
-    } };
+    useApplication(f, { ...application, putRepositoryPolicy: (access, command, control) =>
+      application.putRepositoryPolicy(access, command, { ...control, verifyBeforeCommit: async () => {
+        const assertion = await control?.verifyBeforeCommit?.();
+        if (!advanced) {
+          advanced = true;
+          await f.engineering.runtime.disableExports(f.engineering.actors.admin,
+            { clientCommandId: 'CAS-COMPETITOR', expectedGeneration: command.expectedGeneration });
+          racedRows = await f.policyRows();
+        }
+        return assertion;
+      } }) });
     expect((await f.send(f.request('policy', retained, 'both'))).status).toBe(409);
     expect(advanced).toBe(true); expect(await f.policyRows()).toEqual(racedRows);
   });
@@ -495,26 +514,26 @@ describe('unregistered engineering HTTP through current real host authority', ()
   it('rechecks current authority after the real limiter before beginning the protected body/SDK operation', async () => {
     const f = await fixture(); const ticket = await f.legacyTicket(); const before = await f.rows();
     let revoked = false;
-    const limiter = { ...f.options.limiter, async allow(...args: Parameters<typeof f.options.limiter.allow>) {
-      const decision = await f.options.limiter.allow(...args);
+    const mutationLimiter = { ...f.options.mutationLimiter, async allow(...args: Parameters<typeof f.options.mutationLimiter.allow>) {
+      const decision = await f.options.mutationLimiter.allow(...args);
       if (!revoked) { revoked = true; await f.revoke('staff', SUPPORT_ROLE); }
       return decision;
     } };
-    const handle = createSupportEngineeringHandlers({ ...f.options, limiter });
+    const handle = createSupportEngineeringHandlers({ ...f.options, mutationLimiter });
     const response = await handle(f.request('enroll', { commandId: 'LIMITER-HANDOFF-EXACT', expectedRevision: ticket.revision }));
     expect(response?.status).toBe(403); expect(revoked).toBe(true);
     expect(await f.rows()).toEqual(before); expect(f.state.runtimeCalls).toBe(0);
   });
 
-  it.each([ADMIN_ROLE, SUPPORT_ROLE])('rechecks %s after an actual policy head read before any policy write', async (role) => {
+  it.each([ADMIN_ROLE, SUPPORT_ROLE])('rechecks %s at the actual policy commit callback after its head read', async (role) => {
     const f = await fixture(); const retained = await f.preparePolicy({ commandId: 'HEAD-AUTH-HANDOFF', expectedGeneration: 1,
       enabled: true, repositoryKeys: [engineeringRepositories[0]!.repositoryId] });
-    const original = f.state.runtime; let revoked = false; const before = await f.policyRows();
-    f.state.runtime = { ...original, async readPolicy(access) {
-      const head = await original.readPolicy(access);
-      if (!revoked) { revoked = true; await f.revoke('both', role); }
-      return head;
-    } };
+    const application = f.engineering.application; let revoked = false; const before = await f.policyRows();
+    useApplication(f, { ...application, putRepositoryPolicy: (access, command, control) =>
+      application.putRepositoryPolicy(access, command, { ...control, verifyBeforeCommit: async () => {
+        if (!revoked) { revoked = true; await f.revoke('both', role); }
+        return control?.verifyBeforeCommit?.();
+      } }) });
     expect((await f.send(f.request('policy', retained, 'both'))).status).toBe(403);
     expect(revoked).toBe(true); expect(await f.policyRows()).toEqual(before);
   });
@@ -574,8 +593,8 @@ describe('unregistered engineering HTTP through current real host authority', ()
 
   it('recovers the exact SDK enrollment receipt after a synthetic post-commit response loss', async () => {
     const f = await fixture(); const ticket = await f.engineering.createTicket(); const original = f.state.runtime; let lose = true;
-    f.state.runtime = { ...original, async enroll(access, packet) {
-      const value = await original.enroll(access, packet); if (lose) { lose = false; throw new Error('Synthetic response loss'); } return value;
+    f.state.runtime = { ...original, async enroll(...args: Parameters<typeof original.enroll>) {
+      const value = await original.enroll(...args); if (lose) { lose = false; throw new Error('Synthetic response loss'); } return value;
     } };
     const packet = { commandId: 'LOST-ACK-EXACT', expectedRevision: ticket.revision };
     expect((await f.send(f.request('enroll', packet))).status).toBe(503); const rows = await f.rows();
@@ -601,8 +620,8 @@ describe('unregistered engineering HTTP through current real host authority', ()
     expect(f.engineering.state.modelCalls).toBe(0);
   });
 
-  it('shares the existing durable limiter and returns its Retry-After without a private factory call', async () => {
-    const f = await fixture(); for (let index = 0; index < 30; index += 1) await f.host.replyLimiter.allow(f.principals.staff);
+  it('returns the dedicated durable read quota Retry-After without a private factory call', async () => {
+    const f = await fixture(); for (let index = 0; index < 120; index += 1) await f.host.engineeringReadLimiter.allow(f.principals.staff);
     const response = await f.send(f.request()); expect(response.status).toBe(429);
     expect(Number(response.headers.get('Retry-After'))).toBeGreaterThan(0);
     expect(await object(response)).toEqual({ error: 'rate_limited' }); expect(f.state.runtimeCalls).toBe(0);

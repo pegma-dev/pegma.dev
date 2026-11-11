@@ -14,7 +14,7 @@ import { createSupportApi } from './support-api';
 import { engineeringCanary, engineeringProofReference, engineeringRepositories } from './support-engineering-fixtures';
 import {
   createSupportEngineeringHttpFixture, engineeringHttpCommand,
-  engineeringHttpObject, engineeringHttpResult, engineeringHttpRoute,
+  engineeringHttpNumber, engineeringHttpObject, engineeringHttpResult, engineeringHttpRoute,
 } from './support-engineering-http-fixtures';
 import { createSupportEngineeringRouter } from './support-engineering-router';
 
@@ -171,6 +171,46 @@ function evidence(revision: number) {
   };
 }
 
+async function selection(f: Awaited<ReturnType<typeof fixture>>) {
+  const catalog = f.options.repositories.map((entry, index) => ({ ...entry, key: 'native-repository-choice-' + index }));
+  const route = f.router(catalog); const ticket = await f.legacyTicket();
+  expect((await f.invoke('selection.setup.enroll', f.request('enroll', {
+    commandId: 'NATIVE-SELECTION-ENROLL', expectedRevision: ticket.revision,
+  }), route)).status).toBe(200);
+  const verified = await f.invoke('selection.setup.evidence', f.request('evidence', evidence(ticket.revision)), route);
+  expect(verified.status).toBe(200);
+  const source = engineeringHttpResult(await engineeringHttpObject(verified));
+  expect(source.state).toBe('eligible');
+  const key = { ticketId: ticket.id, sourceGeneration: engineeringHttpNumber(source.sourceGeneration) };
+  f.engineering.state.modelRouting = 'ambiguous';
+  // Genuine trusted processor preparation is fixture setup, outside the human
+  // HTTP binding profiles. The next request reads its actual persisted Work.
+  expect((await f.state.runtime.processWork({ ...key, workerId: 'synthetic-native-selection-worker',
+    leaseMilliseconds: 30_000 })).outcome).toBe('candidate');
+  const response = await f.invoke('selection.work.immutable-choices',
+    f.request('work', undefined, 'staff', '?sourceGeneration=' + key.sourceGeneration), route);
+  expect(response.status).toBe(200);
+  const work = engineeringHttpResult(await engineeringHttpObject(response));
+  if (!isPlainObject(work.selection) || !Array.isArray(work.selection.repositoryChoices))
+    throw new Error('Expected actual immutable repository choices.');
+  const choices = work.selection.repositoryChoices;
+  function choice(index: number) {
+    const value: unknown = choices[index];
+    if (!isPlainObject(value) || typeof value.key !== 'string' || typeof value.repositoryId !== 'string' ||
+      typeof value.descriptorHash !== 'string' || !/^[a-f0-9]{64}$/u.test(value.descriptorHash))
+      throw new Error('Expected an actual bounded immutable repository choice.');
+    return { key: value.key, repositoryId: value.repositoryId, descriptorHash: value.descriptorHash };
+  }
+  const chosen = choice(1); const other = choice(0);
+  if (typeof work.selection.policyHash !== 'string') throw new Error('Expected an actual selection policy hash.');
+  const packet = { commandId: 'NATIVE-IMMUTABLE-SELECTION-EXACT', sourceGeneration: key.sourceGeneration,
+    expectedWorkGeneration: engineeringHttpNumber(work.workGeneration), repositoryKey: chosen.key,
+    repositoryId: chosen.repositoryId, repositoryDescriptorHash: chosen.descriptorHash,
+    policyGeneration: engineeringHttpNumber(work.selection.policyGeneration), policyHash: work.selection.policyHash,
+    reason: 'The verified failure concerns the configured download API.' };
+  return { key, catalog, route, chosen, other, packet };
+}
+
 describe('enabled human engineering router and HTTP over genuine D1', () => {
   it('enrolls a real legacy source0, keeps its uncertain read forbidden, then accepts exact visible evidence within each request budget', async () => {
     const f = await fixture(); const ticket = await f.legacyTicket(); const before = await f.rows();
@@ -244,6 +284,109 @@ describe('enabled human engineering router and HTTP over genuine D1', () => {
       f.budget.assertBounds();
     },
   );
+
+  it('recovers a genuinely committed immutable selection after ACK loss and catalog removal, while altered same-command coordinates cannot fake its ACK', async () => {
+    const f = await fixture(); const prepared = await selection(f);
+    const request = f.request('repository', prepared.packet); const originalBytes = await request.clone().text();
+    const before = await f.rows(); const original = f.state.runtime; let lose = true;
+    let acknowledgement: Awaited<ReturnType<typeof original.selectRepository>> | undefined;
+    f.state.runtime = { ...original, async selectRepository(...args: Parameters<typeof original.selectRepository>) {
+      const value = await original.selectRepository(...args); acknowledgement ??= value;
+      if (lose) { lose = false; throw new Error('Synthetic real committed selection transport ACK loss'); }
+      return value;
+    } };
+    const unknown = await f.invoke('selection.commit-lost-ack', await retainedPost(request), prepared.route);
+    expect(unknown.status).toBe(503);
+    expect(await engineeringHttpObject(unknown)).toEqual({ error: 'support_engineering_unavailable' });
+    const committed = await f.rows(); expect(committed).not.toEqual(before);
+    expect(committed.filter((row) => row.kind === 'engineering_receipt')).toHaveLength(
+      before.filter((row) => row.kind === 'engineering_receipt').length + 1);
+    const work = await f.engineering.application.readEngineeringWork(f.engineering.actors.security, prepared.key);
+    expect(work.staffSelection).toMatchObject({ repositoryId: prepared.chosen.repositoryId, reason: prepared.packet.reason });
+    const modelCalls = f.engineering.state.modelCalls; const removed = f.router([]);
+    expect(await request.clone().text()).toBe(originalBytes);
+    const replay = await f.invoke('selection.removed-catalog.exact-replay', await retainedPost(request), removed);
+    expect(replay.status).toBe(200); expect(acknowledgement).toBeDefined();
+    if (acknowledgement === undefined) throw new Error('Expected the actual committed SDK selection acknowledgement.');
+    const replayBody = await engineeringHttpObject(replay);
+    expect(engineeringHttpResult(replayBody)).toEqual({ ticketId: acknowledgement.ticketId,
+      sourceGeneration: acknowledgement.sourceGeneration, workGeneration: acknowledgement.workGeneration, status: acknowledgement.status });
+    for (const privateText of [engineeringCanary, engineeringProofReference])
+      expect(JSON.stringify(replayBody)).not.toContain(privateText);
+    expect(await f.rows()).toEqual(committed);
+    const altered = [
+      { label: 'key', packet: { ...prepared.packet, repositoryKey: prepared.other.key } },
+      { label: 'identity', packet: { ...prepared.packet, repositoryId: prepared.other.repositoryId } },
+      { label: 'descriptor-hash', packet: { ...prepared.packet,
+        repositoryDescriptorHash: (prepared.chosen.descriptorHash[0] === '0' ? '1' : '0') + prepared.chosen.descriptorHash.slice(1) } },
+    ];
+    for (const change of altered) {
+      const denied = await f.invoke('selection.same-command.changed-' + change.label,
+        f.request('repository', change.packet), removed);
+      expect(denied.status).toBe(409); expect(await engineeringHttpObject(denied)).not.toHaveProperty('result');
+      expect(await f.rows()).toEqual(committed);
+    }
+    expect(f.engineering.state.modelCalls).toBe(modelCalls); expect(f.engineering.state.creates).toEqual([]);
+    f.budget.assertBounds();
+  });
+
+  it('denies a never-accepted immutable selection after its key disappears and keeps exact retries free of writes', async () => {
+    const f = await fixture(); const prepared = await selection(f);
+    const request = f.request('repository', prepared.packet); const originalBytes = await request.clone().text();
+    const later = f.router(prepared.catalog.filter((entry) => entry.key !== prepared.chosen.key));
+    const before = await f.rows(); const modelCalls = f.engineering.state.modelCalls;
+    const refused = await f.invoke('selection.unaccepted.removed-key', await retainedPost(request), later);
+    expect(refused.status).toBe(409);
+    expect(await engineeringHttpObject(refused)).toEqual({ error: 'engineering_selection_changed' });
+    expect(await f.rows()).toEqual(before);
+    expect(await request.clone().text()).toBe(originalBytes);
+    const retry = await f.invoke('selection.unaccepted.removed-key.exact-retry', await retainedPost(request), later);
+    expect(retry.status).toBe(409);
+    expect(await engineeringHttpObject(retry)).toEqual({ error: 'engineering_selection_changed' });
+    expect(await f.rows()).toEqual(before);
+    const work = await f.engineering.application.readEngineeringWork(f.engineering.actors.security, prepared.key);
+    expect(work.staffSelection).toBeUndefined(); expect(f.engineering.state.modelCalls).toBe(modelCalls);
+    expect(f.engineering.state.creates).toEqual([]); f.budget.assertBounds();
+  });
+
+  it.each(['invalidate', 'withdraw'] as const)('commits genuine %s source controls and recovers their exact acknowledgements without another D1 mutation', async (operation) => {
+    const f = await fixture(); await f.verified(); const before = await f.rows();
+    const request = f.request(operation, { commandId: 'NATIVE-' + operation.toUpperCase() + '-EXACT',
+      reason: operation === 'withdraw' ? 'privacy_withdrawal' : 'evidence_revoked' });
+    const originalBytes = await request.clone().text();
+    const accepted = await f.invoke(operation + '.commit', await retainedPost(request)); expect(accepted.status).toBe(200);
+    const acknowledgement = await engineeringHttpObject(accepted);
+    expect(acknowledgement.csrfToken).toBe(f.csrf.get('staff'));
+    expect(engineeringHttpResult(acknowledgement).state).toBe(operation === 'withdraw' ? 'withdrawn' : 'held');
+    const committed = await f.rows(); expect(committed).not.toEqual(before);
+    expect(committed.filter((row) => row.kind === 'engineering_receipt')).toHaveLength(
+      before.filter((row) => row.kind === 'engineering_receipt').length + 1);
+    expect(await request.clone().text()).toBe(originalBytes);
+    const replay = await f.invoke(operation + '.exact-replay', await retainedPost(request)); expect(replay.status).toBe(200);
+    expect(await engineeringHttpObject(replay)).toEqual(acknowledgement); expect(await f.rows()).toEqual(committed);
+    const source = await f.engineering.source(); expect(source.state).toBe(operation === 'withdraw' ? 'withdrawn' : 'held');
+    if (operation === 'withdraw') { expect(source.evidence).toBeUndefined(); expect(source.product).toBeUndefined(); }
+    expect(f.engineering.state.modelCalls).toBe(0); expect(f.engineering.state.creates).toEqual([]);
+    f.budget.assertBounds();
+  });
+
+  it('commits the actual guarded policy disable and exactly replays its original acknowledgement without another policy write', async () => {
+    const f = await fixture(); const initial = await f.engineering.runtime.readPolicy(f.engineering.actors.admin);
+    expect(initial.policy.enabled).toBe(true); const before = await f.policyRows();
+    const request = f.request('policy/disable', { commandId: 'NATIVE-POLICY-DISABLE-EXACT', expectedGeneration: initial.generation }, 'both');
+    const originalBytes = await request.clone().text();
+    const accepted = await f.invoke('policy.disable.commit', await retainedPost(request)); expect(accepted.status).toBe(200);
+    const acknowledgement = await engineeringHttpObject(accepted);
+    expect(acknowledgement.csrfToken).toBe(f.csrf.get('both'));
+    expect(engineeringHttpResult(acknowledgement)).toMatchObject({ generation: initial.generation + 1, enabled: false });
+    const committed = await f.policyRows(); expect(committed).not.toEqual(before);
+    expect(await request.clone().text()).toBe(originalBytes);
+    const replay = await f.invoke('policy.disable.exact-replay', await retainedPost(request)); expect(replay.status).toBe(200);
+    expect(await engineeringHttpObject(replay)).toEqual(acknowledgement); expect(await f.policyRows()).toEqual(committed);
+    expect((await f.engineering.runtime.readPolicy(f.engineering.actors.admin)).policy.enabled).toBe(false);
+    expect(f.engineering.state.modelCalls).toBe(0); expect(f.engineering.state.creates).toEqual([]);
+    f.budget.assertBounds();
+  });
 
   it('rechecks actual stored Support and Admin role revocation on successive private router requests', async () => {
     const f = await fixture(); const ticket = await f.legacyTicket();

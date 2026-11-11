@@ -74,7 +74,7 @@ function policyIntent(raw: unknown): EngineeringPolicyIntent {
   return intent;
 }
 
-async function intentFingerprint(intent: EngineeringPolicyIntent): Promise<string> {
+async function intentFingerprint(intent: unknown): Promise<string> {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(intent)));
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -85,7 +85,8 @@ export interface SupportEngineeringHandlerOptions extends AgentBrowserOptions {
   /** Separate current human review gate, with strict false as the default. */
   readonly reviewEnabled?: () => boolean;
   readonly runtime: () => SupportEngineeringRuntime;
-  readonly limiter: DurableRateLimiter;
+  readonly readLimiter: DurableRateLimiter;
+  readonly mutationLimiter: DurableRateLimiter;
   readonly repositories?: readonly EngineeringHttpRepository[];
 }
 
@@ -252,7 +253,7 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
       if (url.hash !== '' || (!['work', 'proposal'].includes(operation) && url.search !== '')) throw new ApiError(400, 'invalid_request');
       const initial = await current();
       const principalId = initial.access.principalId;
-      await enforceRateLimit(options.limiter, principalId);
+      await enforceRateLimit(mutation ? options.mutationLimiter : options.readLimiter, principalId);
       let result: unknown;
       if (operation === 'policy_read') {
         const value = await awaited((access) => options.runtime().readPolicy(access));
@@ -282,10 +283,17 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
         const choice = hasPermission(actor.access, supportPermissions.engineeringReview) &&
           hasPermission(actor.access, supportPermissions.engineeringPolicyRead)
           ? await awaited((access) => options.runtime().readPolicy(access)) : null;
+        const repositoryChoices = choice === null ? [] : await Promise.all(configured.flatMap((entry) => {
+          const allowed = choice.policy.repositories.find((descriptor) => descriptor.repositoryId === entry.descriptor.repositoryId);
+          if (!entry.descriptor.enabled || allowed?.enabled !== true) return [];
+          const declared = normalizedPolicy({ enabled: true, repositories: [entry.descriptor] }).repositories[0]!;
+          if (JSON.stringify(declared) !== JSON.stringify(allowed)) return [];
+          return [intentFingerprint(declared).then((descriptorHash) => ({ key: entry.key,
+            repositoryId: entry.descriptor.repositoryId, descriptorHash }))];
+        }));
         result = { ...workDto(work), ...(choice === null ? {} : { selection: {
           policyGeneration: choice.generation, policyHash: choice.policyHash,
-          repositoryKeys: configured.filter((entry) => choice.policy.repositories.some((allowed) =>
-            allowed.repositoryId === entry.descriptor.repositoryId && allowed.enabled)).map((entry) => entry.key),
+          repositoryKeys: repositoryChoices.map((entry) => entry.key), repositoryChoices,
         } }) };
       } else {
         const body = await awaited(() => readJson(request, { timeoutMs: 10_000,
@@ -306,31 +314,28 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
           const packet = exactObject(body, ['intent']);
           const intent = policyIntent(packet.intent);
           // Identity equality only: never reuse admission roles/permissions.
-          // The immediately following head read performs fresh browser auth.
+          // The following protected SDK call performs fresh browser auth.
           if (intent.actorId !== principalId) throw new ApiError(403, 'forbidden');
-          const currentPolicy = await awaited((access) => options.runtime().readPolicy(access));
-          if (currentPolicy.generation < intent.expectedGeneration) throw new ApiError(409, 'policy_changed');
-          if (currentPolicy.generation === intent.expectedGeneration) {
-            const currentPolicyPacket = normalizedPolicy({ enabled: intent.policy.enabled,
-              repositories: intent.repositoryKeys.map((key) => repository(key).descriptor) });
-            if (JSON.stringify(currentPolicyPacket) !== JSON.stringify(intent.policy))
-              throw new ApiError(409, 'policy_intent_changed');
-          }
-          // A monotonic newer head makes this receipt-only: the public SDK
-          // replays an exact receipt before CAS; no missing/pruned receipt can
-          // write under the stale generation. Never reconstruct old snapshots
-          // from a changed/removed catalog or add a mutable metadata gate.
-          // Local hashing carries no authority; the write refreshes after it.
+          // Immutable validation and hashing precede the public SDK receipt.
+          // Only a NEW command reaches the actual026 catalog/browser guard.
           const binding = await intentFingerprint(intent);
           const value = await awaited((access) => options.runtime().putPolicy(access, {
             clientCommandId: intent.commandId, expectedGeneration: intent.expectedGeneration, policy: intent.policy,
-          }, binding));
+          }, binding, async () => {
+            let declared: EngineeringRepositoryPolicy;
+            try { declared = normalizedPolicy({ enabled: intent.policy.enabled,
+              repositories: intent.repositoryKeys.map((key) => repository(key).descriptor) }); }
+            catch { throw new ApiError(409, 'policy_intent_changed'); }
+            if (JSON.stringify(declared) !== JSON.stringify(intent.policy))
+              throw new ApiError(409, 'policy_intent_changed');
+            return (await current()).access;
+          }));
           result = { generation: value.generation, policyHash: value.policyHash, enabled: value.enabled };
         } else if (operation === 'policy_disable') {
           const packet = exactObject(body, ['commandId', 'expectedGeneration']);
           const value = await awaited((access) => options.runtime().disableExports(access, {
             clientCommandId: boundedString(packet.commandId, 1, 200), expectedGeneration: integer(packet.expectedGeneration, 0),
-          }));
+          }, async () => (await current()).access));
           result = { generation: value.generation, policyHash: value.policyHash, enabled: value.enabled };
         } else {
           if (ticketId === undefined) throw new ApiError(400, 'invalid_request');
@@ -345,7 +350,8 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
           } else if (operation === 'enroll') {
             const packet = exactObject(body, ['commandId', 'expectedRevision']);
             result = sourceResultDto(await awaited((access) => options.runtime().enroll(access, { ticketId,
-              clientCommandId: boundedString(packet.commandId, 1, 200), expectedRevision: integer(packet.expectedRevision) })));
+              clientCommandId: boundedString(packet.commandId, 1, 200), expectedRevision: integer(packet.expectedRevision) },
+              async () => (await current()).access)));
           } else if (operation === 'evidence') {
             const packet = exactObject(body, ['commandId', 'expectedRevision', 'expectedBehavior', 'actualBehavior',
               'reproductionSteps', 'visibleMessageIds', 'verificationReference', 'security']);
@@ -359,30 +365,46 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
                 reproductionSteps: strings(packet.reproductionSteps, 16, 1_000, true),
                 visibleMessageIds: strings(packet.visibleMessageIds, 16, 200),
                 verificationReference: boundedString(packet.verificationReference, 1, 200) } };
-            result = sourceResultDto(await awaited((access) => options.runtime().submitVerifiedFailure(access, input)));
+            result = sourceResultDto(await awaited((access) => options.runtime().submitVerifiedFailure(access, input,
+              async () => (await current()).access)));
           } else if (operation === 'repository') {
             const packet = exactObject(body, ['commandId', 'sourceGeneration', 'expectedWorkGeneration',
-              'repositoryKey', 'policyGeneration', 'policyHash', 'reason']);
-            const selected = repository(packet.repositoryKey);
-            result = stepDto(await awaited((access) => options.runtime().selectRepository(access, { ticketId,
+              'repositoryKey', 'repositoryId', 'repositoryDescriptorHash', 'policyGeneration', 'policyHash', 'reason']);
+            const repositoryKey = boundedString(packet.repositoryKey, 1, 100);
+            const repositoryDescriptorHash = fingerprint(packet.repositoryDescriptorHash);
+            const input = { ticketId,
               clientCommandId: boundedString(packet.commandId, 1, 200), sourceGeneration: integer(packet.sourceGeneration),
-              expectedWorkGeneration: integer(packet.expectedWorkGeneration), repositoryId: selected.descriptor.repositoryId,
+              expectedWorkGeneration: integer(packet.expectedWorkGeneration), repositoryId: boundedString(packet.repositoryId, 1, 200),
               policyGeneration: integer(packet.policyGeneration, 0), policyHash: fingerprint(packet.policyHash),
-              reason: boundedString(packet.reason, 1, 200) })));
+              reason: boundedString(packet.reason, 1, 200) };
+            const binding = await intentFingerprint({ actorId: principalId, repositoryKey, repositoryDescriptorHash, input });
+            result = stepDto(await awaited((access) => options.runtime().selectRepository(access, input, {
+              intentFingerprint: binding, beforeCommit: async () => {
+                const entry = configured.find((candidate) => candidate.key === repositoryKey);
+                if (entry === undefined || !entry.descriptor.enabled || entry.descriptor.repositoryId !== input.repositoryId)
+                  throw new ApiError(409, 'engineering_selection_changed');
+                const declared = normalizedPolicy({ enabled: true, repositories: [entry.descriptor] }).repositories[0]!;
+                if (await intentFingerprint(declared) !== repositoryDescriptorHash)
+                  throw new ApiError(409, 'engineering_selection_changed');
+                // SDK policy generation/hash checks have already followed its
+                // receipt lookup. This final browser read follows local hashing.
+                return (await current()).access;
+              },
+            })));
           } else if (operation === 'invalidate') {
             const packet = exactObject(body, ['commandId', 'reason']);
             if (packet.reason !== 'evidence_revoked' && packet.reason !== 'product_binding_revoked' && packet.reason !== 'check_policy_revoked')
               throw new ApiError(400, 'invalid_request');
             const reason = packet.reason;
             result = sourceResultDto(await awaited((access) => options.runtime().invalidate(access, { ticketId,
-              clientCommandId: boundedString(packet.commandId, 1, 200), reason })));
+              clientCommandId: boundedString(packet.commandId, 1, 200), reason }, async () => (await current()).access)));
           } else {
             const packet = exactObject(body, ['commandId', 'reason']);
             if (packet.reason !== 'privacy_withdrawal' && packet.reason !== 'source_access_revoked' && packet.reason !== 'source_deleted')
               throw new ApiError(400, 'invalid_request');
             const reason = packet.reason;
             result = sourceResultDto(await awaited((access) => options.runtime().withdraw(access, { ticketId,
-              clientCommandId: boundedString(packet.commandId, 1, 200), reason })));
+              clientCommandId: boundedString(packet.commandId, 1, 200), reason }, async () => (await current()).access)));
           }
         }
       }

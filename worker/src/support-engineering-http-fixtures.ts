@@ -83,7 +83,8 @@ export async function createSupportEngineeringHttpFixture(backing: Store = creat
     ports: engineering.ports, staffAccess: { resolve: (principalId) => resolve(principalId) },
     processingEnabled: () => engineering.state.enabled });
   const state = { enabled: true, runtimeCalls: 0, runtime, captured: [] as string[] };
-  const options = { ...authority, enabled: () => state.enabled, limiter: host.replyLimiter,
+  const options = { ...authority, enabled: () => state.enabled,
+    readLimiter: host.engineeringReadLimiter, mutationLimiter: host.engineeringMutationLimiter,
     runtime: () => { state.runtimeCalls += 1; return state.runtime; },
     repositories: engineeringRepositories.map((descriptor) => ({ key: descriptor.repositoryId, descriptor })) };
   const handle = createSupportEngineeringHandlers(options);

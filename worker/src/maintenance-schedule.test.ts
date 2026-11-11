@@ -7,6 +7,7 @@ import {
   CLEANUP_CRON,
   RATE_LIMIT_CRON,
   cleanupLaneAt,
+  CLEANUP_LANE_COUNT,
   rateKnowledgeLaneAt,
 } from './maintenance-schedule';
 import {
@@ -47,13 +48,13 @@ vi.mock('./support-desk', () => ({
   createProductionSupportMaintenanceRuntime: () => ({
     store: {},
     clock: {},
-    limiters: [{}, {}, {}, {}],
+    limiters: [{}, {}, {}, {}, {}, {}],
     terminalRetentionMilliseconds: 1,
   }),
   createProductionSupportRuntime: () => ({
     store: {},
     clock: {},
-    limiters: [{}, {}],
+    limiters: [{}, {}, {}, {}],
     terminalRetentionMilliseconds: 1,
   }),
   createAdminMutationLimiter: () => ({}),
@@ -174,8 +175,8 @@ describe('maintenance dispatch', () => {
         observed.push(JSON.stringify(cleanupLaneAt(time)));
       }
     }
-    const cycle = observed.slice(0, 16);
-    expect(new Set(cycle).size).toBe(16);
+    const cycle = observed.slice(0, CLEANUP_LANE_COUNT);
+    expect(new Set(cycle).size).toBe(18);
     for (let index = 0; index < observed.length; index++) {
       expect(observed[index]).toBe(cycle[index % cycle.length]);
     }
@@ -207,10 +208,10 @@ describe('maintenance dispatch', () => {
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
-  it('preserves all 16 cleanup lanes across a UTC day boundary without sharing the global rate job', async () => {
+  it('preserves all 18 cleanup lanes across a UTC day boundary without sharing the global rate job', async () => {
     const lanes = [];
     const start = Date.parse('2026-10-15T23:53:00Z');
-    for (let minute = 0; minute < 17; minute++) {
+    for (let minute = 0; minute < CLEANUP_LANE_COUNT + 1; minute++) {
       const time = start + minute * 60_000;
       if (new Date(time).getUTCMinutes() === 59) continue;
       const lane = cleanupLaneAt(time);
@@ -239,7 +240,7 @@ describe('maintenance dispatch', () => {
       }
       expect(runReleaseReconciliation).not.toHaveBeenCalled();
     }
-    expect(new Set(lanes).size).toBe(16);
+    expect(new Set(lanes).size).toBe(18);
     expect(
       lanes.filter(
         (lane) =>
@@ -251,7 +252,7 @@ describe('maintenance dispatch', () => {
       ),
     ).toHaveLength(1);
     for (const kind of ['identity', 'support']) {
-      for (let limiterIndex = 0; limiterIndex < 4; limiterIndex++) {
+      for (let limiterIndex = 0; limiterIndex < (kind === 'support' ? 6 : 4); limiterIndex++) {
         expect(lanes).toContain(
           JSON.stringify({ kind, task: 'rate_limits', limiterIndex }),
         );
@@ -261,7 +262,7 @@ describe('maintenance dispatch', () => {
 
   it('leaves the learning dispatch lane port-free when trusted review composition is absent', async () => {
     const start = Date.parse('2026-10-15T00:00:00Z');
-    const offset = Array.from({ length: 16 }, (_, minute) => minute).find(
+    const offset = Array.from({ length: CLEANUP_LANE_COUNT }, (_, minute) => minute).find(
       (minute) => cleanupLaneAt(start + minute * 60_000).kind === 'learning_reviews',
     );
     if (offset === undefined) throw new Error('Expected the exclusive review dispatch lane');
@@ -323,7 +324,7 @@ describe('maintenance dispatch', () => {
   it('isolates a failed rate invocation from later identity and support cleanup invocations', async () => {
     const start = Date.parse('2026-10-15T00:00:00Z');
     for (const kind of ['identity', 'support'] as const) {
-      const offset = Array.from({ length: 16 }, (_, minute) => minute).find(
+      const offset = Array.from({ length: CLEANUP_LANE_COUNT }, (_, minute) => minute).find(
         (minute) => cleanupLaneAt(start + minute * 60_000).kind === kind,
       );
       if (offset === undefined)

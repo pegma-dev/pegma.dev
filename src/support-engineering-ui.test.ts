@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { createDurableLimiter, defineRateLimitPolicy } from '@pegma/rate-limit';
 import { describe, expect, it } from 'vitest';
 import { authenticate } from '../worker/src/api-auth';
 import { IDENTITY_ISSUER } from '../worker/src/identity-api';
@@ -17,9 +18,9 @@ async function harness() {
   const f = await createSupportEngineeringHttpFixture(); const ticket = await f.legacyTicket();
   const support = createSupportApi({ ...f.options, application: f.engineering.application,
     createLimiter: f.host.createLimiter, replyLimiter: f.host.replyLimiter });
-  const root = new BrowserNode('section'); const calls: { path: string; method: string; body?: string }[] = [];
+  const root = new BrowserNode('section'); const calls: { path: string; method: string; body?: string; serverStatus?: number; retryAfter?: string | null }[] = [];
   const changes: unknown[] = [];
-  const state = { actor: 'staff' as EngineeringHttpActor, enabled: true, ids: 0, sessionReads: 0,
+  const state = { actor: 'staff' as EngineeringHttpActor, enabled: true, ids: 0, sessionReads: 0, time: Date.now(),
     fault: undefined as ((path: string, response: Response) => Promise<void>) | undefined };
   function incoming(path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers); headers.set('Cookie', f.cookies.get(state.actor)!);
@@ -27,15 +28,19 @@ async function harness() {
     return new Request(IDENTITY_ISSUER + path, { ...init, headers });
   }
   async function request(path: string, init: RequestInit = {}) {
-    calls.push({ path, method: init.method ?? 'GET', ...(typeof init.body === 'string' ? { body: init.body } : {}) });
+    const call = { path, method: init.method ?? 'GET', ...(typeof init.body === 'string' ? { body: init.body } : {}),
+      serverStatus: 0, retryAfter: null as string | null };
+    calls.push(call);
     const request = incoming(path, init);
     const pathname = new URL(path, IDENTITY_ISSUER).pathname;
     const engineering = /^\/api\/support\/admin\/tickets\/[^/]+\/engineering(?:\/|$)/u.test(pathname) ||
       /^\/api\/support\/admin\/engineering(?:\/|$)/u.test(pathname);
     const response = engineering ? await f.handle(request) : await support(request);
     if (response === null) throw new Error('Expected a registered adapter path');
+    call.serverStatus = response.status; call.retryAfter = response.headers.get('Retry-After');
     await state.fault?.(path, response);
-    if (!response.ok) throw Object.assign(new Error('request_failed'), { status: response.status });
+    if (!response.ok) throw Object.assign(new Error('request_failed'), { status: response.status,
+      ...(response.status === 429 ? { retryAt: state.time + Number(call.retryAfter) * 1000 } : {}) });
     return response.json();
   }
   async function readSession() {
@@ -50,7 +55,7 @@ async function harness() {
   const factory = vm.PegmaSupportEngineering as { createPanel(options: unknown): Panel };
   const panel = factory.createPanel({ root, request, readSession,
     readCurrentTicket: (id: string) => request('/api/support/admin/tickets/' + encodeURIComponent(id)),
-    isEnabled: () => state.enabled, commandId: () => 'PUBLIC-ENGINEERING-UPPERCASE-' + ++state.ids,
+    isEnabled: () => state.enabled, now: () => state.time, commandId: () => 'PUBLIC-ENGINEERING-UPPERCASE-' + ++state.ids,
     onPendingChange: (owners: unknown) => changes.push(owners) });
   function node(key: string, field = false) {
     const found = root.all().find((item) => item.dataset[field ? 'engineeringField' : 'engineeringAction'] === key);
@@ -132,5 +137,29 @@ describe('standalone public engineering panel with actual authority adapters', (
     h.state.enabled = true; h.state.fault = undefined; await h.open(); await h.action('retry-ticket');
     expect(h.writes().at(-1)?.body).toBe(original); expect(h.panel.hasPending()).toBe(false);
     expect(JSON.stringify(h.changes)).not.toContain('commandId');
+  });
+
+  it('honors actual HTTP Retry-After without a premature probe and explicitly recovers the same packet when its deadline elapses', async () => {
+    const h = await harness(); await h.open();
+    h.state.time = Math.ceil(h.state.time / 30_000) * 30_000;
+    const limiter = createDurableLimiter(defineRateLimitPolicy({ name: 'public-engineering-ui-retry', limit: 10, windowMs: 30_000 }),
+      h.f.engineering.store, { clock: { now: () => new Date(h.state.time).toISOString() } });
+    Object.assign(h.f.options, { mutationLimiter: limiter });
+    for (let index = 0; index < 10; index++) await limiter.allow(h.f.principals.staff);
+    const rows = await h.f.rows(); const ids = h.state.ids;
+    await h.action('enroll'); const original = h.writes().at(-1)!;
+    expect(original.serverStatus).toBe(429); expect(original.retryAfter).toBe('30');
+    expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(false); expect(await h.f.rows()).toEqual(rows);
+    expect(h.node('retry-ticket').disabled).toBe(false);
+    const calls = h.calls.length; const sessions = h.state.sessionReads; const deadline = h.state.time + 30_000;
+    await h.action('retry-ticket'); h.state.time = deadline - 1; await h.action('retry-ticket');
+    expect(h.calls).toHaveLength(calls); expect(h.state.sessionReads).toBe(sessions);
+    expect(h.state.ids).toBe(ids + 1); expect(h.panel.hasPending()).toBe(true);
+    h.state.time = deadline;
+    expect(h.calls).toHaveLength(calls); // Advancing time does not retry automatically.
+    await h.action('retry-ticket');
+    expect(h.writes().at(-1)?.body).toBe(original.body); expect(h.writes().at(-1)?.serverStatus).toBe(200);
+    expect(h.state.ids).toBe(ids + 1); expect(h.panel.hasPending()).toBe(false);
+    expect(h.node('evidence').disabled).toBe(false); expect(h.f.engineering.state.creates).toEqual([]);
   });
 });

@@ -132,6 +132,10 @@
       for (const input of inputs) input.value = '';
       withdrawal.input.value = withdrawals[0]; invalidation.input.value = invalidations[0];
     }
+    function evidenceLocked() {
+      const intake = source ?? enrolled.get(key('ticket'));
+      return intake?.withdrawalOnly === true || ['restricted', 'withdrawn'].includes(intake?.state);
+    }
     function controls() {
       const active = context !== null && enabled();
       for (const item of ticketNodes) item.hidden = context?.ticketId === null;
@@ -142,14 +146,14 @@
       // Private-read denial does not establish absence. Explicit enrollment is
       // a separately authorized SDK command which can confirm existing intake.
       enrollButton.disabled ||= !canWrite || source !== null || enrolled.has(key('ticket'));
-      evidenceButton.disabled ||= !canWrite || (source?.state === 'withdrawn' || enrolled.get(key('ticket'))?.state === 'withdrawn') || !(source !== null || enrolled.has(key('ticket')));
+      evidenceButton.disabled ||= !canWrite || evidenceLocked() || !(source !== null || enrolled.has(key('ticket')));
       workButton.disabled ||= source === null || source.sourceGeneration <= 0;
       proposalButton.disabled ||= !reviewEnabled() || workButton.disabled || held !== undefined;
       approveButton.disabled ||= !reviewEnabled() || !canWrite || proposal?.approvable !== true;
       rejectButton.disabled ||= !reviewEnabled() || !canWrite || proposal?.rejectionAvailable !== true;
       selectButton.disabled ||= !canWrite || work?.selection === undefined || work.selection.repositoryKeys.length === 0;
       withdrawButton.disabled ||= !canWrite || !(source !== null || enrolled.has(key('ticket')));
-      invalidateButton.disabled ||= withdrawButton.disabled;
+      invalidateButton.disabled ||= withdrawButton.disabled || evidenceLocked();
       prepareButton.disabled ||= policy === null || policy.unmappedRepositoryCount !== 0 || policy.catalog.length === 0 || policyHeld !== undefined;
       saveButton.disabled ||= preparedPolicy === null || policyHeld !== undefined;
       disableButton.disabled ||= policy === null || policyHeld !== undefined;
@@ -234,12 +238,18 @@
         if (![403, 404].includes(error?.status)) throw error;
         await viewer(observation, actor);
         notice(error.status === 403 ? 'Source details are unavailable with current access.' : 'No source details were returned; explicit enrollment is checked by the server.');
-        // A 403 is never absence or RestrictedRead. Only our bound known enroll
-        // ACK plus a NEW current same-actor staff-ticket read admits evidence.
-        if (acknowledged?.action === 'enroll') {
-          await currentTicket(observation, actor); enrolled.set(key('ticket'), copy(acknowledged.ack));
+        // Denial is never absence or RestrictedRead. A bound source-command
+        // ACK plus a NEW current same-actor staff-ticket read can settle that
+        // command. Only enrollment admits evidence; other protected ACKs admit
+        // explicit withdrawal, without asserting the current private state.
+        if (acknowledged && ['enroll', 'evidence', 'withdraw'].includes(acknowledged.action) &&
+          pending.get(acknowledged.key) === acknowledged && ack(acknowledged.ack, acknowledged)) {
+          await currentTicket(observation, actor);
+          enrolled.set(key('ticket'), { ...copy(acknowledged.ack), withdrawalOnly: acknowledged.action !== 'enroll' });
           pending.delete(acknowledged.key); changed();
-          notice('Enrollment acknowledged. Current staff ticket refreshed; record evidence explicitly. Source details remain protected.');
+          notice(acknowledged.action === 'enroll' && !evidenceLocked()
+            ? 'Enrollment acknowledged. Current staff ticket refreshed; record evidence explicitly. Source details remain protected.'
+            : 'Command acknowledged. Current staff ticket refreshed; source details remain protected. Explicit withdrawal remains available.');
           return;
         }
         if (acknowledged) return;
@@ -269,9 +279,20 @@
         counter(value.workGeneration, 1); text(value.status); text(value.stage);
         for (const key of ['hasCandidate', 'hasPreparedProposal', 'hasApproval', 'hasDispatch']) if (typeof value[key] !== 'boolean') throw invalid();
         const selected = value.selection;
-        if (selected !== undefined && (!object(selected) || !Array.isArray(selected.repositoryKeys) || selected.repositoryKeys.length > 20 ||
-          new Set(selected.repositoryKeys).size !== selected.repositoryKeys.length)) throw invalid();
-        if (selected) { counter(selected.policyGeneration); hash(selected.policyHash); selected.repositoryKeys.forEach((key) => text(key, 100)); }
+        if (selected !== undefined) {
+          if (!object(selected) || !Array.isArray(selected.repositoryKeys) || !Array.isArray(selected.repositoryChoices) ||
+            selected.repositoryKeys.length > 20 || selected.repositoryChoices.length !== selected.repositoryKeys.length ||
+            new Set(selected.repositoryKeys).size !== selected.repositoryKeys.length) throw invalid();
+          counter(selected.policyGeneration); hash(selected.policyHash); selected.repositoryKeys.forEach((key) => text(key, 100));
+          const identities = new Set();
+          selected.repositoryChoices.forEach((choice, index) => {
+            if (!object(choice) || JSON.stringify(Object.keys(choice).sort()) !== JSON.stringify(['descriptorHash', 'key', 'repositoryId']) ||
+              choice.key !== selected.repositoryKeys[index]) throw invalid();
+            text(choice.repositoryId); hash(choice.descriptorHash);
+            if (identities.has(choice.repositoryId)) throw invalid();
+            identities.add(choice.repositoryId);
+          });
+        }
         await viewer(observation, actor); work = copy(value); session = actor;
         workText.textContent = JSON.stringify({ sourceGeneration: value.sourceGeneration, workGeneration: value.workGeneration,
           status: value.status, stage: value.stage, security: value.security, hasCandidate: value.hasCandidate,
@@ -331,7 +352,7 @@
       return operation(async (observation) => {
         await viewer(observation, session);
         const retained = retain('ticket', 'review', base() + '/review', { intent: original },
-          { sourceGeneration: original.command.sourceGeneration, expectedWorkGeneration: original.command.expectedWorkGeneration });
+          { sourceGeneration: original.command.sourceGeneration, expectedWorkGeneration: original.command.expectedWorkGeneration, decision });
         proposal = null; proposalText.textContent = '';
         await send(retained, observation);
       });
@@ -402,7 +423,8 @@
         typeof value.enabled === 'boolean' && typeof value.policyHash === 'string' && /^[0-9a-f]{64}$/u.test(value.policyHash);
       if (value.ticketId !== retained.ticketId || !Number.isSafeInteger(value.sourceGeneration) || value.sourceGeneration < 0) return false;
       if (retained.action === 'review') return value.sourceGeneration === retained.sourceGeneration &&
-        value.workGeneration === retained.expectedWorkGeneration + 1 && value.status === 'approved';
+        value.workGeneration === retained.expectedWorkGeneration + 1 &&
+        ((retained.decision === 'approve' && value.status === 'approved') || (retained.decision === 'reject' && value.status === 'held'));
       if (retained.action === 'repository') return value.sourceGeneration === retained.sourceGeneration &&
         Number.isSafeInteger(value.workGeneration) && value.workGeneration > 0 && typeof value.status === 'string';
       return states.includes(value.state) && securityValues.includes(value.security);
@@ -458,7 +480,7 @@
       try {
         if (action === 'enroll') fields = { expectedRevision: ticket.revision };
         else if (action === 'evidence') {
-          if ((source?.state === 'withdrawn' || enrolled.get(key('ticket'))?.state === 'withdrawn') || !(source || enrolled.has(key('ticket'))) || !securityValues.includes(sensitivity.input.value)) throw new Error('invalid_input');
+          if (evidenceLocked() || !(source || enrolled.has(key('ticket'))) || !securityValues.includes(sensitivity.input.value)) throw new Error('invalid_input');
           const reproductionSteps = steps.input.value.split(/\r?\n/u).map((entry) => text(entry, 1000, true));
           const selected = [...messageChoices.querySelectorAll('input')].filter((item) => item.checked).map((item) => item.value);
           if (!selected.length || selected.length > 16 || selected.some((id) => !ticket.visibleMessageIds.includes(id)) ||
@@ -467,12 +489,14 @@
             actualBehavior: text(actual.input.value, 2000, true), reproductionSteps, visibleMessageIds: selected,
             verificationReference: text(reference.input.value), security: sensitivity.input.value };
         } else if (action === 'repository') {
-          if (!work?.selection?.repositoryKeys.includes(repository.input.value)) throw new Error('invalid_input');
+          const choice = work?.selection?.repositoryChoices.find((entry) => entry.key === repository.input.value);
+          if (!choice) throw new Error('invalid_input');
           fields = { sourceGeneration: work.sourceGeneration, expectedWorkGeneration: work.workGeneration,
-            repositoryKey: repository.input.value, policyGeneration: work.selection.policyGeneration,
+            repositoryKey: choice.key, repositoryId: choice.repositoryId, repositoryDescriptorHash: choice.descriptorHash,
+            policyGeneration: work.selection.policyGeneration,
             policyHash: work.selection.policyHash, reason: text(reason.input.value) };
         } else if (action === 'withdraw' && withdrawals.includes(withdrawal.input.value)) fields = { reason: withdrawal.input.value };
-        else if (action === 'invalidate' && invalidations.includes(invalidation.input.value)) fields = { reason: invalidation.input.value };
+        else if (action === 'invalidate' && !evidenceLocked() && invalidations.includes(invalidation.input.value)) fields = { reason: invalidation.input.value };
         else if (action === 'policy-disable') fields = { expectedGeneration: policy.generation };
         else throw new Error('invalid_input');
       } catch { notice('Complete the bounded required fields and choose sensitivity explicitly. No command was sent.'); return; }
