@@ -62,7 +62,7 @@
     "tsx": "^4.23.13",
     "typescript": "^5.9.2",
     "vitest": "4.1.10",
-    "wrangler": "^4.114.0"
+    "wrangler": "4.128.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

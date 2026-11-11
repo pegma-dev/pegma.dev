@@ -126,6 +126,14 @@ The two exact discovery routes belong to Worker ingress. Logical collections
 use the existing generic Storage Core schema with
 `createSchemaIfMissing:false`; no new SQL migration is added by this slice.
 
+The main Worker pins [Wrangler `4.128.0`](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.128.0)
+and sets root `observability.redact_query_string:true` to remove query strings
+from request URLs in Workers Logs and traces. This setting does not establish
+redaction of arbitrary application messages, exception strings, or Live Tail
+output. Keep application diagnostics content-free and qualify the deployed
+configuration with synthetic query sentinels before private OAuth acceptance;
+source configuration and a dry run alone do not prove deployed redaction.
+
 Keep test collections closed during controlled staff acceptance. The disabled
 candidate is not advertised through new global navigation or Account links.
 Expose those entry points only after activation requirements pass. Actual
