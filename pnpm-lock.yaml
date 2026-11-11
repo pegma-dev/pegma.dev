@@ -69,8 +69,8 @@ importers:
         specifier: npm:@pegma/rate-limit@0.3.3
         version: '@pegma/rate-limit@0.3.3'
       '@pegma/sessions':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.1
+        version: 0.2.1
       '@pegma/spine':
         specifier: ^0.1.1
         version: 0.1.1
@@ -1219,8 +1219,8 @@ packages:
     resolution: {integrity: sha512-Bu2t3WjD4VsQj5lWnz+XZ0KQ/F2rbs1CkDmH6aSl9kCg1cYNZHviL9o5XJhbsA7siFo9G+FOJXK2REnnzWtk9Q==}
     engines: {node: '>=22'}
 
-  '@pegma/sessions@0.2.0':
-    resolution: {integrity: sha512-dHGmFzQjHe9O+arGEQUcwutLuZ9+cA409hetiqxzQUXIOHOulOsA4/ywlDDRGiskMijyXLVlxvmGryjxV8NxZQ==}
+  '@pegma/sessions@0.2.1':
+    resolution: {integrity: sha512-GOpwpL0S7/wXpUFuuR0aza+2enGDuUdFrgvOKAbUljDABSj1g/+QOzwQPbe9QYsGI7AImlk4El8cc5qzguNP9Q==}
     engines: {node: '>=22'}
 
   '@pegma/spine@0.1.1':
@@ -4245,7 +4245,7 @@ snapshots:
       '@pegma/spine': 0.1.1
       '@pegma/storage-core': 0.4.0
 
-  '@pegma/sessions@0.2.0':
+  '@pegma/sessions@0.2.1':
     dependencies:
       '@pegma/spine': 0.1.1
       '@pegma/storage-core': 0.4.0

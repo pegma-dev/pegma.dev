@@ -169,4 +169,15 @@ describe('registered staff controller and engineering panel composition', () => 
     expect(await h.f.rows()).toEqual(committedRows);
     expect(h.f.engineering.state.modelCalls).toBe(0);
   });
+
+  it('identifies a retained engineering action generically when Reload is used from another ticket address', async () => {
+    const h = await fixture(); h.state.loseEngineering = true; h.control('enroll').fire('click');
+    await until(() => !h.control('retry-ticket').hidden && !h.control('retry-ticket').disabled);
+    const before = h.calls.length;
+    h.window.location.href = IDENTITY_ISSUER + '/staff/support/ticket/?id=another-fictional-ticket';
+    h.node('staff-ticket-reload').fire('click');
+    expect(h.calls).toHaveLength(before);
+    expect(h.node('staff-ticket-status').textContent).toContain('An earlier retained action may have completed.');
+    expect(h.node('staff-ticket-status').textContent).not.toContain('learning action');
+  });
 });

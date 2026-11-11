@@ -9,7 +9,8 @@ import { supportRecords } from '@pegma/support-desk-application';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { isPlainObject } from './api-auth';
 import { IDENTITY_ISSUER } from './identity-api';
-import { ADMIN_ROLE, SUPPORT_ROLE } from './support-access';
+import { ADMIN_ROLE, APPLICATION_SCOPE, SUPPORT_ROLE } from './support-access';
+import { createSupportEngineeringRuntime } from './support-engineering';
 import { createSupportApi } from './support-api';
 import { engineeringCanary, engineeringProofReference, engineeringRepositories } from './support-engineering-fixtures';
 import {
@@ -58,6 +59,7 @@ function meter(backing: D1Database) {
   function charge(statements: readonly D1PreparedStatement[]) {
     const budget = scope.getStore(); if (budget === undefined) return;
     budget.calls += 1; budget.statements += statements.length;
+
     budget.maximumParameters = Math.max(budget.maximumParameters,
       ...statements.map((statement) => parameters.get(statement) ?? 0));
     if (budget.calls > 50 || budget.maximumParameters > 100) {
@@ -132,9 +134,9 @@ async function fixture() {
     identity: f.identity, identityLinkFromClaims: f.options.identityLinkFromClaims,
     logger: f.options.logger, roleStore: f.host.roleStore,
     createLimiter: f.host.createLimiter, replyLimiter: f.host.replyLimiter });
-  function router(repositories = configuration.repositories) {
+  function router(repositories = configuration.repositories, reviewEnabled = false) {
     return createSupportEngineeringRouter({ enabled: () => f.state.enabled,
-      configuration: { ...configuration, repositories } });
+      configuration: { ...configuration, repositories, reviewEnabled: () => reviewEnabled } });
   }
   const defaultRouter = router();
   async function invoke(operation: string, incoming: Request, route = defaultRouter) {
@@ -209,6 +211,27 @@ async function selection(f: Awaited<ReturnType<typeof fixture>>) {
     policyGeneration: engineeringHttpNumber(work.selection.policyGeneration), policyHash: work.selection.policyHash,
     reason: 'The verified failure concerns the configured download API.' };
   return { key, catalog, route, chosen, other, packet };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+async function review(f: Awaited<ReturnType<typeof fixture>>, decision: 'approve' | 'reject' = 'approve') {
+  await f.verified(); const work = await f.prepared();
+  const route = f.router(f.options.repositories, true);
+  const response = await f.invoke('review.proposal.read', f.request('proposal', undefined, 'staff',
+    '?sourceGeneration=' + f.key().sourceGeneration), route);
+  expect(response.status).toBe(200); const view = engineeringHttpResult(await engineeringHttpObject(response));
+  if (!isPlainObject(view.intent) || !isPlainObject(view.intent.command)) throw new Error('Expected actual actor-bound review intent');
+  expect(view.approvable).toBe(true); expect(JSON.stringify(view)).not.toContain(engineeringCanary);
+  expect(JSON.stringify(view)).not.toContain(engineeringProofReference);
+  expect(new TextEncoder().encode(JSON.stringify(view)).byteLength).toBeLessThanOrEqual(65536);
+  const intent = structuredClone(view.intent);
+  if (!isPlainObject(intent.command)) throw new Error('Expected cloned complete command');
+  Object.assign(intent.command, { decision });
+  return { work, route, body: { intent } };
 }
 
 describe('enabled human engineering router and HTTP over genuine D1', () => {
@@ -386,6 +409,80 @@ describe('enabled human engineering router and HTTP over genuine D1', () => {
     expect((await f.engineering.runtime.readPolicy(f.engineering.actors.admin)).policy.enabled).toBe(false);
     expect(f.engineering.state.modelCalls).toBe(0); expect(f.engineering.state.creates).toEqual([]);
     f.budget.assertBounds();
+  });
+
+  it.each(['approve', 'reject'] as const)('meters actual proposal, %s and receipt-first replay after source withdrawal', async (decision) => {
+    const f = await fixture(); const prepared = await review(f, decision); const before = await f.rows();
+    const modelCalls = f.engineering.state.modelCalls; const request = f.request('review', prepared.body);
+    const accepted = await f.invoke('review.' + decision + '.commit', await retainedPost(request), prepared.route);
+    expect(accepted.status).toBe(200); const acknowledgement = await engineeringHttpObject(accepted);
+    expect(engineeringHttpResult(acknowledgement)).toEqual({ ticketId: prepared.work.ticketId,
+      sourceGeneration: prepared.work.sourceGeneration, workGeneration: prepared.work.workGeneration + 1,
+      status: decision === 'approve' ? 'approved' : 'held' });
+    const committed = await f.rows(); expect(committed).not.toEqual(before);
+    expect(committed.filter((row) => row.kind === 'engineering_receipt')).toHaveLength(
+      before.filter((row) => row.kind === 'engineering_receipt').length + 1);
+    expect((await f.work()).approval).toMatchObject({ decision, reviewedBy: f.principals.staff });
+    await f.engineering.runtime.withdraw(f.engineering.actors.staff, { ticketId: prepared.work.ticketId,
+      clientCommandId: 'NATIVE-POST-' + decision.toUpperCase() + '-WITHDRAW', reason: 'privacy_withdrawal' });
+    f.engineering.state.installationActive = false; f.engineering.metadata.clear();
+    const afterWithdrawal = await f.rows();
+    const replay = await f.invoke('review.' + decision + '.exact-replay', await retainedPost(request), prepared.route);
+    expect(replay.status).toBe(200); expect(await engineeringHttpObject(replay)).toEqual(acknowledgement);
+    expect(await f.rows()).toEqual(afterWithdrawal); expect(f.engineering.state.modelCalls).toBe(modelCalls);
+    expect(f.engineering.state.creates).toEqual([]); f.budget.assertBounds();
+  });
+
+  it('meters a forged review actor denial before any SDK mutation', async () => {
+    const f = await fixture(); const prepared = await review(f); const before = await f.rows();
+    const body = structuredClone(prepared.body); body.intent.actorId = f.principals.peer;
+    const response = await f.invoke('review.actor-mismatch', f.request('review', body), prepared.route);
+    expect(response.status).toBe(403); expect(await engineeringHttpObject(response)).toEqual({ error: 'forbidden' });
+    expect(await f.rows()).toEqual(before); expect(f.engineering.state.creates).toEqual([]); f.budget.assertBounds();
+  });
+
+  it.each(['session', 'role'] as const)('meters late %s denial during genuine read-only approval proof without a commit', async (change) => {
+    const f = await fixture(); const prepared = await review(f); const entered = deferred(); const resume = deferred();
+    const ports = f.engineering.ports; const before = await f.rows(); const modelCalls = f.engineering.state.modelCalls;
+    f.state.runtime = createSupportEngineeringRuntime({ application: f.engineering.application, clock: f.engineering.clock,
+      staffAccess: { resolve: (id) => f.resolve(id) }, processingEnabled: () => false,
+      reviewProofs: { serviceAccess: ports.serviceAccess, routing: { resolve: ports.routing.resolve, verify: ports.routing.verify },
+        checks: { resolvePolicy: ports.checks.resolvePolicy, verify: ports.checks.verify }, github: {
+          async getMetadata(...args) { const actual = await ports.github.getMetadata(...args); entered.resolve(); await resume.promise; return actual; },
+        } } });
+    const pending = f.invoke('review.late-' + change + '-denial', f.request('review', prepared.body), prepared.route);
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('Expected actual SDK read-only proof boundary'); })]);
+    // The actual peer revocation is another invocation, outside this request's
+    // AsyncLocalStorage meter, matching normal separate-request role changes.
+    try { if (change === 'session') await f.destroy('staff'); else await f.revoke('staff', SUPPORT_ROLE); }
+    finally { resume.resolve(); }
+    const response = await pending; expect(response.status).toBe(change === 'session' ? 401 : 403);
+    expect(await engineeringHttpObject(response)).not.toHaveProperty('result'); expect(await f.rows()).toEqual(before);
+    expect(f.engineering.state.modelCalls).toBe(modelCalls); expect(f.engineering.state.creates).toEqual([]); f.budget.assertBounds();
+  });
+
+  it('meters closing role denial after actual approval and recovers its receipt after authority restoration', async () => {
+    const f = await fixture(); const prepared = await review(f); const entered = deferred(); const resume = deferred();
+    const modelCalls = f.engineering.state.modelCalls; const request = f.request('review', prepared.body);
+    f.hooks.commit = async () => { entered.resolve(); await resume.promise; };
+    const pending = f.invoke('review.committed-closing-denial', await retainedPost(request), prepared.route);
+    await Promise.race([entered.promise, pending.then(() => { throw new Error('Expected actual committed SDK transaction'); })]);
+    const committed = await f.rows();
+    try { await f.revoke('staff', SUPPORT_ROLE); } finally { delete f.hooks.commit; resume.resolve(); }
+    const response = await pending; expect(response.status).toBe(403);
+    expect(await engineeringHttpObject(response)).not.toHaveProperty('result'); expect(await f.rows()).toEqual(committed);
+    expect((await f.engineering.application.readEngineeringWork(f.engineering.actors.security, f.key())).status).toBe('approved');
+    await f.host.roleStore.grantRoleAssignmentWithAudit({ assignment: { id: 'native-review-restored-support',
+      principalId: f.principals.staff, role: SUPPORT_ROLE, scope: APPLICATION_SCOPE,
+      grantedBy: { kind: 'system', systemId: 'synthetic-native-review' }, grantedAtEpochMs: Date.now(), status: 'active',
+    }, auditEventId: 'native-review-restored-support-audit' });
+    f.engineering.state.installationActive = false; f.engineering.metadata.clear();
+    const replay = await f.invoke('review.closing-denial.exact-replay', await retainedPost(request), prepared.route);
+    expect(replay.status).toBe(200); expect(engineeringHttpResult(await engineeringHttpObject(replay))).toEqual({
+      ticketId: prepared.work.ticketId, sourceGeneration: prepared.work.sourceGeneration,
+      workGeneration: prepared.work.workGeneration + 1, status: 'approved' });
+    expect(await f.rows()).toEqual(committed); expect(f.engineering.state.modelCalls).toBe(modelCalls);
+    expect(f.engineering.state.creates).toEqual([]); f.budget.assertBounds();
   });
 
   it('rechecks actual stored Support and Admin role revocation on successive private router requests', async () => {

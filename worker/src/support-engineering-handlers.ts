@@ -346,7 +346,7 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
             // No Work, Source, repository catalog or policy pre-read here. A
             // committed historical ACK must survive changes to those resources.
             result = stepDto(await awaited((access) => options.runtime().reviewCommand(access, intent.command,
-              async () => { await current(); })));
+              async () => (await current()).access)));
           } else if (operation === 'enroll') {
             const packet = exactObject(body, ['commandId', 'expectedRevision']);
             result = sourceResultDto(await awaited((access) => options.runtime().enroll(access, { ticketId,

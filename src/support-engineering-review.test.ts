@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { authenticate } from '../worker/src/api-auth';
@@ -21,7 +22,7 @@ async function harness() {
   const ticket = (await f.engineering.application.readStaffTicket(f.engineering.actors.staff, engineeringTicketId)).ticket;
   const support = createSupportApi({ ...f.options, application: f.engineering.application,
     createLimiter: f.host.createLimiter, replyLimiter: f.host.replyLimiter });
-  const root = new BrowserNode('section'); const calls: { path: string; method: string; body?: string }[] = [];
+  const root = new BrowserNode('section'); const calls: { path: string; method: string; body?: string; serverStatus?: number }[] = [];
   const changes: unknown[] = [];
   const state = { actor: 'staff' as EngineeringHttpActor, enabled: true, reviewEnabled: true,
     fault: undefined as ((path: string, response: Response) => Promise<void>) | undefined };
@@ -31,11 +32,13 @@ async function harness() {
     return new Request(IDENTITY_ISSUER + path, { ...init, headers });
   }
   async function request(path: string, init: RequestInit = {}) {
-    calls.push({ path, method: init.method ?? 'GET', ...(typeof init.body === 'string' ? { body: init.body } : {}) });
+    const call = { path, method: init.method ?? 'GET', ...(typeof init.body === 'string' ? { body: init.body } : {}), serverStatus: 0 };
+    calls.push(call);
     const original = incoming(path, init);
     const response = /\/engineering(?:\/|$)/u.test(new URL(original.url).pathname)
       ? await f.handle(original) : await support(original);
     if (response === null) throw new Error('Expected an actual registered HTTP adapter');
+    call.serverStatus = response.status;
     await state.fault?.(path, response);
     if (!response.ok) throw Object.assign(new Error('request_failed'), { status: response.status });
     return response.json();
@@ -46,7 +49,7 @@ async function harness() {
     return { subject: value.link.subject, csrfToken: value.csrfToken };
   }
   const vm: Record<string, unknown> = { document: { createElement: (tag: string) => new BrowserNode(tag) },
-    AbortController, TextEncoder };
+    AbortController, TextEncoder, crypto: { randomUUID } };
   runInNewContext(readFileSync(new URL('../public/staff-support-engineering.js', import.meta.url), 'utf8'), vm);
   const factory = vm.PegmaSupportEngineering as { createPanel(options: unknown): Panel };
   const panel = factory.createPanel({ root, request, readSession,
@@ -101,6 +104,21 @@ describe('checked human engineering review panel through real SDK and HTTP adapt
     expect((await h.f.work()).status).toBe('held');
     expect(h.panel.hasPending()).toBe(false);
     expect(h.f.engineering.state.creates).toEqual([]);
+  });
+
+  it.each(['invalidate', 'withdraw'] as const)('retires an unsent checked proposal after actual source %s without retaining a stale review', async (action) => {
+    const h = await harness(); await h.open(); await h.action('proposal');
+    const title = h.checked.proposal?.request.bundle.title;
+    if (title === undefined) throw new Error('Actual checked proposal title missing');
+    expect(h.root.textContent).toContain(title); expect(h.node('approve').disabled).toBe(false);
+    const modelCalls = h.f.engineering.state.modelCalls;
+    expect(h.node(action).disabled).toBe(false);
+    await h.action(action); expect(h.writes().at(-1)?.serverStatus).toBe(200);
+    expect((await h.f.engineering.source()).state).toBe(action === 'withdraw' ? 'withdrawn' : 'held');
+    expect(h.root.textContent).not.toContain(title); expect(h.node('approve').disabled).toBe(true); expect(h.node('reject').disabled).toBe(true);
+    const writes = h.writes().length; await h.action('approve'); await h.action('reject');
+    expect(h.writes()).toHaveLength(writes); expect(h.panel.hasPending()).toBe(false);
+    expect(h.f.engineering.state.modelCalls).toBe(modelCalls); expect(h.f.engineering.state.creates).toEqual([]);
   });
 
   it('retains byte-identical complete command after an actually committed review loses its HTTP acknowledgement', async () => {

@@ -17,11 +17,11 @@ provider and customer activation retain their acceptance gates. See the
 
 Exact published versions:
 
-- `@pegma/support-desk-application@0.2.5`
-- `@pegma/support-desk-contracts@0.2.5`
-- `@pegma/support-desk-core@0.2.5`
-- `@pegma/support-desk-templates@0.2.5`
-- `@pegma/support-desk-ai@0.2.5` (optional coordinator)
+- `@pegma/support-desk-application@0.2.6`
+- `@pegma/support-desk-contracts@0.2.6`
+- `@pegma/support-desk-core@0.2.6`
+- `@pegma/support-desk-templates@0.2.6`
+- `@pegma/support-desk-ai@0.2.6` (optional coordinator)
 - `@pegma/authorization-admin@0.4.0` (role administration service)
 - `@pegma/authorization-core@0.4.0` (AccessContext resolution)
 - `@pegma/authorization-policy@0.4.0` (PolicyDocumentV1 schema validation)
@@ -31,11 +31,11 @@ All five Support Desk packages have completed producer publication and
 registry qualification. The optional AI package selects exact KB application
 and contracts `0.1.5`; the host selects all four KB packages at that version.
 Producer qualification and installation do not complete host or provider
-acceptance. [Verified Support Desk `0.2.5` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5),
+acceptance. [Verified Support Desk `0.2.6` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.6),
 [verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
-`@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.2.0`,
+`@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.2.1`,
 `@pegma/rate-limit@0.2.0`, `@pegma/identity@0.1.2`, `@pegma/spine@0.1.1`.
 These are direct host selections; the lockfile retains each released package's
 own dependencies, including Support Desk's Spine `0.1.2`. No override or forced
@@ -45,9 +45,13 @@ The earlier [qualified Support 0.2.2 release](https://github.com/pegma-dev/suppo
 uses signed source
 [`99cf4e67da1d2357d99fd80389a96318a6e2cc93`](https://github.com/pegma-dev/support-desk/commit/99cf4e67da1d2357d99fd80389a96318a6e2cc93).
 [Strict release verification](https://github.com/pegma-dev/support-desk/actions/runs/42907283767/job/130161276758)
-qualifies those historical producer packages. The current public `0.2.5` graph
-has passed the [normal local and CI validation checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
-Review and deployment acceptance remain pending for the changed host.
+qualifies those historical producer packages. The earlier public `0.2.5` graph
+passed the [normal local and CI validation checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
+That checkpoint does not qualify the current `0.2.6` host graph. Current host
+validation, review and deployment acceptance remain pending. The current
+[Sessions `0.2.1` selection](https://github.com/pegma-dev/sessions/releases/tag/v0.2.1)
+includes the verified producer fix for the earlier `0.2.0` default-clock
+concurrency defect under a consistent advancing clock.
 
 ## Storage namespace
 
@@ -103,8 +107,13 @@ The `Support` role maps to:
 - `support.learning.evidence.submit`
 - `support.learning.review`
 - `support.learning.withdraw`
+- `support.engineering.read`
+- `support.engineering.evidence.submit`
+- `support.engineering.review`
+- `support.engineering.withdraw`
+- `support.engineering.policy.read`
 
-`Admin` and `Knowledge` alone do not grant Support permissions. Taking over
+`Admin` and `Knowledge` alone do not grant Support queue authority. Taking over
 changes handling authority; the existing assignment action remains separate.
 
 **Bootstrap (one-time seeding).** `PEGMA_SUPPORT_BOOTSTRAP_PRINCIPALS`
@@ -259,8 +268,10 @@ Durable rate-limit policies (separate from Identity):
   request-person and takeover, including retries)
 - `pegma.admin.role.mutate` (assign / revoke, 30/h per operator)
 - `pegma.admin.principal.lookup` (directory lookups, 120/h per operator)
+- `pegma.support.engineering.read` (engineering reads, 120/h per operator)
+- `pegma.support.engineering.mutate` (engineering mutations, 30/h per operator)
 
-All four are swept by the same rotating cleanup schedule, one policy per
+All six are swept by the same rotating cleanup schedule, one policy per
 invocation.
 
 ## Site pages
@@ -275,8 +286,8 @@ invocation.
 
 ## Optional resolution learning
 
-The current source selects all five published Support Desk `0.2.5` packages
-with the four direct KB `0.1.5` packages. AI `0.2.5` also declares exact KB
+The current source selects all five published Support Desk `0.2.6` packages
+with the four direct KB `0.1.5` packages. AI `0.2.6` also declares exact KB
 `0.1.5` dependencies. The public forwarding port preserves KB error instances;
 no KB `0.1.2` alias, translation shim, second Store, override or private SDK
 import supplies this assembly. The earlier Support `0.2.1` / nested KB `0.1.2`
@@ -284,10 +295,11 @@ compatibility assembly and its failed isolated production-layout diagnostic are
 historical, not current graph or host-acceptance evidence.
 
 The staged learning review admission and Queue worker retained in this branch
-use the published, strictly verified Support Desk `0.2.5` APIs. The combined
-public graph passed normal local and CI validation; review and deployment
-acceptance remain pending. Runtime availability and feature activation retain
-their existing trusted composition and readiness controls.
+use the published, strictly verified Support Desk `0.2.6` APIs. The earlier
+`0.2.5` host validation checkpoint remains historical. Current host validation,
+review and deployment acceptance remain pending. Runtime availability and
+feature activation retain their existing trusted composition and readiness
+controls.
 
 [Learning intake and processing](../worker/src/support-learning.ts) are separate,
 default-disabled SDK boundaries. A real source verifier, current service/staff
@@ -301,9 +313,11 @@ and staff approval of the exact checked KB target remain separate. Neither
 approval nor delivery publishes a guide: ordinary KB evidence, review and
 publication gates still apply.
 
-Policy `pegma.dev-policy-5` adds four explicit learning permissions to `Support`;
-it grants neither learning processing nor KB staff access. Private proposal
-reads and new review commits also require separately current KB `draftRead` and
+Policy `pegma.dev-policy-5` introduced four explicit learning permissions to
+`Support`. Current policy `pegma.dev-policy-6` retains those grants and adds
+human engineering permissions; learning processing and KB staff access remain
+separate. Private proposal reads and new review commits also require separately
+current KB `draftRead` and
 `provenanceRead`, normally through `Knowledge` or `Admin`. Browser submissions
 and trusted direct SDK reviews enforce fresh KB and learning review/queue
 permissions before and after the actual SDK proof. HTTP requires the complete
@@ -354,7 +368,7 @@ request/maintenance batching and activation limits remain documented in
 ## Staged assistant retrieval is separate
 
 AI `0.2.2` introduced explicit `stagedRetrieval:true`, retained by the current
-`0.2.5` selection; omission remains monolithic. The preparation attempt retrieves authorized sources and records a
+`0.2.6` selection; omission remains monolithic. The preparation attempt retrieves authorized sources and records a
 bounded no-call request without reserving paid usage. Only its durably
 acknowledged finish returns `prepared`. The host must return and schedule a
 genuinely later physical invocation at or after `nextAttemptAt`, never loop or
@@ -374,9 +388,9 @@ provider or activation result.
 The separate cleanup cron (`0-58 * * * *`) runs one rotating task per
 invocation, including Support Desk queue repair, inactive projection sweep,
 each Support/Admin rate-limit policy and the separately gated learning-review
-discovery lane. Each task runs once per sixteen eligible ticks (minute 59 is
-omitted), with independent queue cursors and no
-writes for unchanged bookmarks.
+discovery lane, for 18 exclusive lanes. Each task runs once per 18 eligible
+ticks, a nominal 18-19 minutes because minute 59 is omitted, with independent
+queue cursors and no writes for unchanged bookmarks.
 Identity Mail send and reconciliation have separate invocations
 (`* * * * *` and `1-59 * * * *`); KB ready hints and their isolated rate cleanup
 use the existing `0-57 * * * *` lane. No cron is added for human controls.

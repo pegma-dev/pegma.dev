@@ -114,9 +114,10 @@ replay therefore survives source withdrawal or unavailable repository facts.
 The runtime passes its fresh staff check and original-browser callback through
 the public SDK's `verifyBeforeCommit` option for all seven human intake and
 policy mutations. The SDK looks for an exact accepted receipt before invoking
-the new-command guard; that guard supplies the final synchronous deadline and
-principal assertion at the Application transaction boundary. Current browser
-and role checks still protect every replay and response. The separate proposal
+the new-command guard. Its async check resolves current browser and human
+roles; the final synchronous fence checks abort/deadline and the original
+caller's bound principal at the Application transaction boundary. Current
+browser and role checks still protect every replay and response. The separate proposal
 review guard applies to both approval and rejection. New approval also requires
 the configured read-only routing, checks and repository proof ports. The
 independent review switch defaults OFF.
@@ -227,6 +228,12 @@ The earlier standalone source checkpoint passed its 1,142-test suite with
 1,066 Node cases, 74 Native D1 cases and two benchmark cases. Its five focused
 engineering HTTP scenarios passed the 50-binding-call and 100-parameter test
 ceilings. Those results describe the earlier standalone assembly.
+
+The current source selects the verified
+[Sessions `0.2.1` release](https://github.com/pegma-dev/sessions/releases/tag/v0.2.1).
+Its default read and expiry-sweep observations follow their awaited storage
+snapshots under a consistent advancing clock. Explicit caller instants retain
+their semantics, and future idle anchors from rollback or skew still fail closed.
 
 The combined current-parent root, controller and review changes require fresh
 format, types, full Node 22 and 24 tests, build and current-head CI and review.

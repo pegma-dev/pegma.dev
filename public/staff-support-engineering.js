@@ -43,7 +43,8 @@
     const pending = new Map();
     const enrolled = new Map();
     let epoch = 0, context = null, session = null, ticket = null, source = null, work = null, policy = null, proposal = null;
-    let busy = false, preparedPolicy = null, retryAt = 0;
+    let busy = false, preparedPolicy = null, policyEditorRevision = 0;
+    const retryAt = { read: 0, mutation: 0 };
     const controllers = new Set();
     const inputs = [];
     const buttons = [];
@@ -125,6 +126,7 @@
     function activity() { try { options.onBusyChange?.(busy); } catch { /* Host presentation is not authority. */ } }
     function notice(value) { status.textContent = value; }
     function clearPrivate() {
+      ++policyEditorRevision;
       source = null; work = null; policy = null; proposal = null; preparedPolicy = null; session = null;
       sourceText.textContent = ''; workText.textContent = ''; proposalText.textContent = ''; catalog.replaceChildren(); policyStatus.textContent = '';
       policyPanel.hidden = true; messageChoices.replaceChildren(); repository.input.replaceChildren(); repository.input.value = '';
@@ -176,7 +178,10 @@
       return value;
     }
     async function call(path, init, observation, actor, observeResult) {
-      guard(observation); const controller = new AbortController(); controllers.add(controller);
+      guard(observation);
+      const purpose = init?.method === 'POST' ? 'mutation' : 'read';
+      if (now() < retryAt[purpose]) throw Object.assign(new Error('retry_delay'), { retryPurpose: purpose });
+      const controller = new AbortController(); controllers.add(controller);
       try {
         const value = await request(path, { ...init, signal: controller.signal,
           headers: { ...(init?.headers ?? {}), 'X-Pegma-CSRF': actor.csrfToken } });
@@ -184,14 +189,17 @@
         observeResult?.(value.result);
         guard(observation);
         return value.result;
+      } catch (error) {
+        if (error?.status === 429) retryAt[purpose] = Math.max(retryAt[purpose], Number.isSafeInteger(error.retryAt) ? error.retryAt : now() + 30000);
+        throw error;
       } finally { controllers.delete(controller); }
     }
     const base = () => '/api/support/admin/tickets/' + encodeURIComponent(context.ticketId) + '/engineering';
     function failure(error, observation) {
       if (observation !== epoch) return;
       clearPrivate(); ticket = null;
-      if (error?.status === 429) retryAt = Math.max(retryAt, Number.isSafeInteger(error.retryAt) ? error.retryAt : now() + 30000);
-      notice(pending.size ? 'A command is retained. Restore current access, then explicitly recover its original packet.'
+      notice(error?.retryPurpose === 'read' ? 'Wait for the server read retry delay before refreshing current engineering state.'
+        : pending.size ? 'A command is retained. Restore current access, then explicitly recover its original packet.'
         : 'Current engineering access or state could not be confirmed. Refresh before another action.');
       if ([401, 403].includes(error?.status)) {
         try { options.onAccessLost?.({ status: error.status, owners: owners() }); } catch { /* Retain ownership. */ }
@@ -230,7 +238,7 @@
         destinationCount: value.destinationCount, reconciliationPending: value.reconciliationPending };
     }
     async function refreshSource(observation, actor, acknowledged) {
-      source = null; work = null; sourceText.textContent = ''; workText.textContent = '';
+      source = null; work = null; proposal = null; sourceText.textContent = ''; workText.textContent = ''; proposalText.textContent = '';
       try {
         const value = sourceValue(await call(base(), { method: 'GET' }, observation, actor));
         await viewer(observation, actor); source = value; sourceText.textContent = JSON.stringify(value, null, 2);
@@ -381,7 +389,7 @@
           (saved ? saved.enabled ? ' (saved enabled) ' : ' (saved disabled) ' : ' (not selected) ')); const input = node('input');
         input.type = 'checkbox'; input.dataset.engineeringRepository = entry.key;
         input.checked = value.repositories.some((saved) => saved.key === entry.key); label.append(input); catalog.append(label);
-        input.addEventListener('change', () => { preparedPolicy = null; controls(); });
+        input.addEventListener('change', policyEdited);
       }
       if (acknowledged && pending.get(acknowledged.key) === acknowledged) { pending.delete(acknowledged.key); changed(); }
     }
@@ -393,7 +401,8 @@
         if (retained && !retained.ack) notice('The original policy command remains unresolved. This read does not acknowledge it.');
       });
     }
-    enabledInput.addEventListener('change', () => { preparedPolicy = null; controls(); });
+    function policyEdited() { ++policyEditorRevision; preparedPolicy = null; controls(); }
+    enabledInput.addEventListener('change', policyEdited);
     async function preparePolicy() {
       if (!policy || owner('policy') || policy.unmappedRepositoryCount || !policy.catalog.length) return;
       const keys = [...catalog.querySelectorAll('input')].filter((item) => item.checked).map((item) => item.dataset.engineeringRepository);
@@ -401,6 +410,7 @@
       // configured catalog can contain twenty choices. The server still checks.
       if (keys.length > 8) { notice('Choose at most eight configured repositories. No policy command was sent.'); return; }
       const expectedGeneration = policy.generation; const active = enabledInput.checked === true;
+      const editorRevision = policyEditorRevision;
       return operation(async (observation) => {
         const actor = await viewer(observation, session);
         const commandId = text(nextId()); const packet = { commandId, expectedGeneration,
@@ -413,6 +423,7 @@
           !object(intent.policy) || intent.policy.enabled !== packet.enabled || !Array.isArray(intent.policy.repositories) ||
           intent.policy.repositories.length !== keys.length || new TextEncoder().encode(JSON.stringify({ intent })).byteLength > 131072) throw invalid();
         await viewer(observation, actor);
+        if (editorRevision !== policyEditorRevision) { notice('Policy choices changed. Prepare the displayed policy again before saving.'); return; }
         preparedPolicy = { actorSubject: actor.subject, body: JSON.stringify({ intent: copy(intent) }) };
         notice('Policy change prepared. Save explicitly; its opaque intent is retained but never displayed.');
       });
@@ -430,7 +441,7 @@
       return states.includes(value.state) && securityValues.includes(value.security);
     }
     async function send(retained, observation) {
-      if (now() < retryAt) { notice('Wait for the server retry delay before explicit recovery.'); return; }
+      if (retained.ack === null && now() < retryAt.mutation) { notice('Wait for the server mutation retry delay before explicit recovery.'); return; }
       if (retained.action === 'review' && !reviewEnabled()) throw Object.assign(new Error('review_disabled'), { status: 503 });
       const actor = await viewer(observation);
       if (actor.subject !== retained.actorSubject || (retained.domain === 'ticket' && retained.ticketId !== context.ticketId)) throw invalid();

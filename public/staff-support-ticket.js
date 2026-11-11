@@ -790,7 +790,7 @@ composeForm.addEventListener('submit', async (event) => {
 select('#staff-ticket-reload').addEventListener('click', () => {
   if (!onThisTicket() && (learningPending() || engineeringPending())) {
     invalidate();
-    showStatus('Return to the original ticket address before reloading. An earlier learning action may have completed.', true);
+    showStatus('Return to the original ticket address before reloading. An earlier retained action may have completed.', true);
   } else if (!onThisTicket()) window.location.reload();
   else void loadTicket();
 });

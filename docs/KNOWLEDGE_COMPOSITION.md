@@ -21,9 +21,9 @@ at signed source
 passed independent exact-byte, signature/provenance and registry-consumer
 verification. Existing Identity and Support Desk keep their
 `@pegma/rate-limit@0.2.0` dependency. The current host selects all five Support
-Desk packages at `0.2.5`, including the optional AI coordinator. The separate
+Desk packages at `0.2.6`, including the optional AI coordinator. The separate
 synthetic stage remains default-disabled. The
-[verified Support Desk `0.2.5` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5)
+[verified Support Desk `0.2.6` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.6)
 pins its optional AI dependency on KB application/contracts `0.1.5`.
 
 The learning port forwards actual KB errors without the obsolete `0.1.2`
@@ -89,6 +89,9 @@ source-alias runs remain historical diagnostics.
 PG-01's full review, CI and automatic deployment passed at that earlier checkpoint.
 
 ### Public 0.2.5 adoption checkpoint
+
+Release evidence for this historical checkpoint is the
+[verified Support Desk `0.2.5` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5).
 
 On 2026-11-11, the normal public Support `0.2.5` / D1 `0.4.7` graph passed local
 Node `22.18.0` checks, all 1,125 tests, the static build and the main-Worker
@@ -216,9 +219,11 @@ The [host policy](../worker/src/support-access.ts) keeps authority explicit:
 - `Support` retains its original six Support Desk permissions (queue read,
   staff reply, notes, assignment, management and Audit read) and adds explicit
   human takeover plus explicit learning read, evidence submission, review and
-  withdrawal under policy `pegma.dev-policy-5`.
-  Learning processing is not granted. Existing assignments are not migrated
-  or silently granted KB powers.
+  withdrawal introduced by policy `pegma.dev-policy-5`. Current policy
+  `pegma.dev-policy-6` retains them and adds human engineering read, evidence
+  submission, review, withdrawal and repository-policy read. Learning processing
+  is not granted. Existing assignments are not migrated or silently granted KB
+  powers.
 - `Knowledge` is a separately assigned role for collection reads, draft and
   evidence work, human report review, publication and withdrawal. Admin-only
   collection/governance mutation controls remain separate.
@@ -399,10 +404,13 @@ two isolated rate invocations followed by one ready-hint invocation:
   remain a latency aid, with atomic SDK jobs and physical recovery preserved.
 
 The original four other expressions remain in place. The cleanup rotation
-retains its original 15 lanes and adds one separately gated learning-review
-discovery lane, for 16 exclusive lanes. That lane emits queue hints only; a
-review phase runs in a later Queue invocation. The default root supplies no
-trusted learning bundle and keeps the review flag off. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
+retains its original 15 lanes, the separately gated learning-review discovery
+lane and two engineering limiter lanes, for 18 exclusive lanes. Each lane runs
+once per 18 eligible ticks, a nominal 18-19 minutes because minute 59 is
+omitted. The learning lane emits queue hints only; a review phase runs in a
+later Queue invocation. The default root supplies no trusted learning bundle
+and keeps the review flag off. Minutes 58 and 59 have no `RATE_LIMIT_CRON`
+invocation. Before
 merging, inventory every Worker's current cron triggers in the deployment
 account: pushes to `main` deploy these schedules regardless of the Knowledge
 flag. Deployment replaces this Worker's existing expressions with these
@@ -472,7 +480,7 @@ completions cannot overwrite a newer generation. Already committed projection
 writes are not rolled back after acknowledgement uncertainty.
 
 The existing Knowledge turn in the
-[16-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
+[18-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
 calls `repairRetrievalPage` with `limit:1` and `maxBatches:1`. Complete physical
 cycles and the SDK's existing atomic article-change jobs remain the recovery
 path for a lost hint, collection/policy changes and unfinished work. The ready

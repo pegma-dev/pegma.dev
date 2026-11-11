@@ -85,6 +85,55 @@ describe('human engineering proposal view and exact public review command', () =
     expect(await f.rows()).toEqual(rows);
   });
 
+  it('uses explicit read-only proof ports for trusted direct approval and receipt-first recovery', async () => {
+    const { f, work } = await prepared(); const ports = f.engineering.ports;
+    const runtime = createSupportEngineeringRuntime({ application: f.engineering.application, clock: f.engineering.clock,
+      staffAccess: { resolve: (id) => f.resolve(id) }, processingEnabled: () => false,
+      reviewProofs: { serviceAccess: ports.serviceAccess, routing: { resolve: ports.routing.resolve, verify: ports.routing.verify },
+        checks: { resolvePolicy: ports.checks.resolvePolicy, verify: ports.checks.verify }, github: { getMetadata: ports.github.getMetadata } } });
+    if (work.proposal === undefined) throw new Error('Expected actual prepared proposal');
+    const access = await f.resolve(f.principals.staff); if (access === null) throw new Error('Expected current staff');
+    const packet = { ...f.key(), clientCommandId: 'DIRECT-READ-ONLY-PROOFS', expectedWorkGeneration: work.workGeneration,
+      proposalHash: work.proposal.proposalHash, decision: 'approve' as const };
+    const modelCalls = f.engineering.state.modelCalls;
+    const accepted = await runtime.reviewProposal(access, packet);
+    expect(accepted.status).toBe('approved'); expect((await f.work()).approval?.reviewedBy).toBe(f.principals.staff);
+    expect(await runtime.scanCandidates({ limit: 1 })).toEqual({ outcome: 'held', reason: 'engineering_disabled' });
+    const rows = await f.rows(); f.engineering.state.installationActive = false; f.engineering.metadata.clear();
+    expect(await runtime.reviewProposal(access, structuredClone(packet))).toEqual(accepted);
+    expect(await f.rows()).toEqual(rows); expect(f.engineering.state.modelCalls).toBe(modelCalls); expect(f.engineering.state.creates).toEqual([]);
+  });
+
+  it('retains fresh-role enforcement for legacy void review callbacks', async () => {
+    const { f, packet } = await prepared(); const before = await f.rows();
+    if (!('command' in packet.intent) || typeof packet.intent.command !== 'object' || packet.intent.command === null)
+      throw new Error('Expected actual complete command');
+    const current = await f.resolve(f.principals.staff); if (current === null) throw new Error('Expected current staff');
+    const input = packet.intent.command as Parameters<typeof f.state.runtime.reviewCommand>[1];
+    await expect(f.state.runtime.reviewCommand(current, input, async () => {
+      await f.revoke('staff', SUPPORT_ROLE);
+    })).rejects.toThrow();
+    expect(await f.rows()).toEqual(before); expect((await f.work()).approval).toBeUndefined();
+  });
+
+  it('synchronously rejects a changed original caller principal after the real late authority check', async () => {
+    const f = await createSupportEngineeringHttpFixture();
+    const current = await f.resolve(f.principals.both); if (current === null) throw new Error('Expected current Admin + Support');
+    const original = { ...current }; const actual = f.engineering.application; let asserted = false;
+    const runtime = createSupportEngineeringRuntime({ application: { ...actual,
+      disableEngineeringExports: (access, packet, options) => actual.disableEngineeringExports(access, packet, {
+        ...options, verifyBeforeCommit: async () => {
+          const proof = await options?.verifyBeforeCommit?.();
+          original.principalId = 'synthetic-changed-original-caller';
+          return () => { asserted = true; return proof?.() ?? true; };
+        },
+      }),
+    }, clock: f.engineering.clock, staffAccess: { resolve: (id) => f.resolve(id) }, processingEnabled: () => false });
+    const rows = await f.policyRows();
+    await expect(runtime.disableExports(original, { clientCommandId: 'BOUND-ORIGINAL-PRINCIPAL', expectedGeneration: 1 })).rejects.toThrow();
+    expect(asserted).toBe(true); expect(await f.policyRows()).toEqual(rows);
+  });
+
   it('missing read-only proof composition holds new approval without model calls or mutations', async () => {
     const { f, packet } = await prepared(); const rows = await f.rows();
     const calls = f.engineering.state.modelCalls;

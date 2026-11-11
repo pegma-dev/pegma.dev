@@ -133,6 +133,8 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
       if (controller.signal.aborted || performance.now() - started >= staffOperationMilliseconds)
         throw new SupportEngineeringUnavailableError();
     };
+    // Live authority is resolved asynchronously before commit. This final
+    // synchronous fence binds the original caller reference and deadline.
     const assertCurrent = (): true => {
       ensure();
       if (original.principalId !== bound.principalId)
@@ -217,14 +219,29 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
   }
 
   async function reviewCommand(access: AccessContext, input: ReviewEngineeringProposalCommand,
-    beforeCommit?: () => Promise<void>) {
+    beforeCommit?: () => Promise<AccessContext | void>) {
     const packet = structuredClone(input);
+    const ceiling = structuredClone(access);
     if (beforeCommit !== undefined && typeof beforeCommit !== 'function')
       throw new TypeError('Expected an engineering browser commit guard');
-    return staff(access, supportPermissions.engineeringReview, async (current, refresh, signal) => {
+    return staff(access, supportPermissions.engineeringReview, async (current, refresh, signal, assertCurrent) => {
       const reviewing = createSupportDeskEngineering(reviewBase);
       return reviewing.reviewProposal(current, packet, { signal,
-        verifyBeforeCommit: async () => { await refresh(); await beforeCommit?.(); },
+        verifyBeforeCommit: async () => {
+          // The complete original-browser fence already fetches current roles
+          // and Identity. Trusted direct callers use the runtime resolver.
+          const observed = await beforeCommit?.();
+          const fresh = observed === undefined ? await refresh() : observed;
+          assertCurrent();
+          if (fresh.principalId !== ceiling.principalId)
+            throw new SupportDeskAuthorizationError(supportPermissions.engineeringReview);
+          const bounded: AccessContext = { principalId: ceiling.principalId, policyVersion: fresh.policyVersion,
+            roles: fresh.roles.filter((entry) => ceiling.roles.includes(entry)),
+            entitlements: fresh.entitlements.filter((entry) => ceiling.entitlements.includes(entry)),
+            permissions: fresh.permissions.filter((entry) => ceiling.permissions.includes(entry)) };
+          for (const required of [supportPermissions.engineeringReview, supportPermissions.queueRead])
+            if (!hasPermission(bounded, required)) throw new SupportDeskAuthorizationError(required);
+        },
       });
     });
   }
@@ -253,7 +270,7 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
     reviewProposal: (access: AccessContext, input: EngineeringReviewPacket) =>
       command(access, supportPermissions.engineeringReview, 'review', input.ticketId, input,
         async (current, packet, refresh, signal) => {
-          return coordinator.reviewProposal(current, packet, { signal,
+          return createSupportDeskEngineering(reviewBase).reviewProposal(current, packet, { signal,
             verifyBeforeCommit: async () => { await refresh(); },
           });
         }),

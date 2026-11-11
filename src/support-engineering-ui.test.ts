@@ -7,7 +7,7 @@ import { IDENTITY_ISSUER } from '../worker/src/identity-api';
 import { createSupportApi } from '../worker/src/support-api';
 import { engineeringTicketId } from '../worker/src/support-engineering-fixtures';
 import { createSupportEngineeringHttpFixture, type EngineeringHttpActor } from '../worker/src/support-engineering-http-fixtures';
-import { BrowserNode } from './test-support-browser';
+import { BrowserNode, browserGate } from './test-support-browser';
 
 interface Panel {
   showTicket(value: { ticketId: string; revision: number; actorSubject: string }): Promise<void>;
@@ -137,6 +137,53 @@ describe('standalone public engineering panel with actual authority adapters', (
     h.state.enabled = true; h.state.fault = undefined; await h.open(); await h.action('retry-ticket');
     expect(h.writes().at(-1)?.body).toBe(original); expect(h.panel.hasPending()).toBe(false);
     expect(JSON.stringify(h.changes)).not.toContain('commandId');
+  });
+
+  it.each(['repository', 'enabled'] as const)('discards an in-flight prepared policy after the displayed %s choice changes', async (changed) => {
+    const h = await harness(); h.state.actor = 'both'; await h.open(); await h.action('policy-read');
+    const entered = browserGate<void>(); const release = browserGate<void>();
+    h.state.fault = async (path, response) => {
+      if (path.endsWith('/policy/prepare') && response.ok) { entered.resolve(); await release.promise; }
+    };
+    const preparing = h.action('policy-prepare');
+    try {
+      await entered.promise;
+      if (changed === 'repository') {
+        const choice = h.root.all().find((item) => item.dataset.engineeringRepository);
+        if (choice === undefined) throw new Error('Actual configured policy checkbox missing');
+        choice.checked = false; choice.fire('change');
+      } else { h.field('policy-enabled').checked = false; h.field('policy-enabled').fire('change'); }
+    } finally { release.resolve(); }
+    await preparing; expect(h.node('policy-save').disabled).toBe(true);
+    const posts = h.writes().length; await h.action('policy-save'); expect(h.writes()).toHaveLength(posts);
+    expect(h.panel.hasPending()).toBe(false);
+    h.state.fault = undefined; await h.action('policy-prepare'); expect(h.node('policy-save').disabled).toBe(false);
+    await h.action('policy-save');
+    const saved = JSON.parse(h.writes().at(-1)?.body ?? '{}');
+    expect(saved.intent.policy.enabled).toBe(changed === 'repository');
+    expect(saved.intent.repositoryKeys).toHaveLength(changed === 'repository' ? 1 : 2);
+    expect(h.panel.hasPending()).toBe(false);
+  });
+
+  it('recovers an unknown mutation through its independent quota while a real read Retry-After remains active', async () => {
+    const h = await harness(); await h.open();
+    h.state.fault = async (path, response) => {
+      if (path.endsWith('/enroll') && response.ok) throw Object.assign(new Error('Synthetic committed enrollment ACK loss'), { status: 503 });
+    };
+    await h.action('enroll'); const original = h.writes().at(-1)!; const rows = await h.f.rows();
+    expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(false); h.state.fault = undefined;
+    h.state.time = Math.ceil(h.state.time / 30_000) * 30_000;
+    const limiter = createDurableLimiter(defineRateLimitPolicy({ name: 'public-engineering-independent-read-retry', limit: 1, windowMs: 30_000 }),
+      h.f.engineering.store, { clock: { now: () => new Date(h.state.time).toISOString() } });
+    Object.assign(h.f.options, { readLimiter: limiter }); await limiter.allow(h.f.principals.staff);
+    await h.panel.refresh(); expect(h.calls.at(-1)?.serverStatus).toBe(429); expect(h.calls.at(-1)?.retryAfter).toBe('30');
+    const posts = h.writes().length; await h.action('retry-ticket');
+    expect(h.writes()).toHaveLength(posts + 1); expect(h.writes().at(-1)?.body).toBe(original.body);
+    expect(h.writes().at(-1)?.serverStatus).toBe(200); expect(h.panel.pendingOwners()[0]?.acknowledged).toBe(true);
+    expect(await h.f.rows()).toEqual(rows);
+    h.state.time += 30_000; await h.action('retry-ticket');
+    expect(h.writes()).toHaveLength(posts + 1); expect(h.panel.hasPending()).toBe(false);
+    expect(await h.f.rows()).toEqual(rows);
   });
 
   it('honors actual HTTP Retry-After without a premature probe and explicitly recovers the same packet when its deadline elapses', async () => {
