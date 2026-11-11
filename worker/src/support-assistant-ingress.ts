@@ -130,7 +130,7 @@ export function createSupportAnsweringIngress(
         if (!PEGMA_SUPPORT_CATEGORY_SET.has(category)) throw new ApiError(400, 'invalid_request');
         // A changed contact admits only exact accepted recovery. Do not pre-read
         // the target or renew route/disclosure before the SDK receipt lookup.
-        const fresh = answering.enabled() && expectedRequesterEmail === email;
+        const fresh = answering.admissionEnabled() && expectedRequesterEmail === email;
         let admission: Awaited<ReturnType<SupportAnsweringRuntime['admission']>> = null;
         const result = await runtime.application.createAdmittedCustomerTicket(
           actor.access,
@@ -185,7 +185,7 @@ export function createSupportAnsweringIngress(
                   sync();
                   return () => {
                     sync();
-                    if (!answering.enabled()) throw new ApiError(409, 'admission_changed');
+                    if (!answering.admissionEnabled()) throw new ApiError(409, 'admission_changed');
                     finalAdmission?.assertCurrent(finalBrowser.access);
                     return true;
                   };

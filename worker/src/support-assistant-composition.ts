@@ -43,6 +43,10 @@ function canonical(value: unknown): string {
 /** Trusted source configuration only. No browser or environment JSON supplies these ports. */
 export interface SupportAnsweringComposition {
   readonly enabled?: () => boolean;
+  /** Independent fresh-intake switch; scheduled processing does not imply consent. */
+  readonly customerAdmissionEnabled?: () => boolean;
+  /** Installed receipt recovery needs no current model configuration or credential. */
+  readonly recoveryOnly?: boolean;
   readonly configuration?: {
     readonly disclosureVersion: typeof SUPPORT_ANSWERING_DISCLOSURE_VERSION;
     readonly turns: AssistantTurnOptions;
@@ -70,6 +74,16 @@ export function supportAnsweringEnabled(options: SupportAnsweringComposition = {
   }
 }
 
+export function supportAnsweringAdmissionEnabled(
+  options: SupportAnsweringComposition = {},
+): boolean {
+  try {
+    return supportAnsweringEnabled(options) && options.customerAdmissionEnabled?.() === true;
+  } catch {
+    return false;
+  }
+}
+
 /** Preserve the actual application cap, including a later reduction. A reduced
  * cap disables fresh staged intake without preventing accepted receipt replay. */
 export function supportAnsweringTurns(options: SupportAnsweringComposition = {}) {
@@ -86,9 +100,19 @@ export function composeSupportAnswering(
   environmentEnabled: () => boolean,
 ) {
   const supplied = options.configuration;
-  if (supplied === undefined) throw new TypeError('Answering is not configured.');
+  if (supplied === undefined) {
+    if (options.recoveryOnly !== true) throw new TypeError('Answering is not configured.');
+    return Object.freeze({
+      enabled: () => false,
+      admissionEnabled: () => false,
+      disclosureVersion: SUPPORT_ANSWERING_DISCLOSURE_VERSION,
+      admission: async (_principalId: string) => null,
+      runTick: async () => ({ outcome: 'disabled' as const, checkpointSaved: false as const }),
+    });
+  }
   const enabled = () =>
     options.configuration === supplied && environmentEnabled() && supportAnsweringEnabled(options);
+  const admissionEnabled = () => enabled() && supportAnsweringAdmissionEnabled(options);
   const bundle = createSupportAssistantConfiguration({
     ...supplied.route,
     clock: runtime.clock,
@@ -111,7 +135,7 @@ export function composeSupportAnswering(
 
   async function admission(principalId: string) {
     if (
-      !enabled() ||
+      !admissionEnabled() ||
       supplied === undefined ||
       supplied.disclosureVersion !== SUPPORT_ANSWERING_DISCLOSURE_VERSION
     )
@@ -137,7 +161,7 @@ export function composeSupportAnswering(
       current.authority.usageScopeRef !== route.usageScopeRef ||
       !hasPermission(current.authority.access, supportPermissions.create) ||
       !hasPermission(current.authority.access, supportPermissions.assistantStart) ||
-      !enabled()
+      !admissionEnabled()
     )
       return null;
     const binding = JSON.stringify({ route, authority: current.authority, pool });
@@ -162,7 +186,7 @@ export function composeSupportAnswering(
             ? null
             : { ...selected, access: projected, policyVersion: projected.policyVersion };
         if (
-          !enabled() ||
+          !admissionEnabled() ||
           !latest ||
           JSON.stringify(latest) !== JSON.stringify(route) ||
           JSON.stringify(supplied.customerPolicy) !== policy ||
@@ -181,6 +205,7 @@ export function composeSupportAnswering(
 
   return Object.freeze({
     enabled,
+    admissionEnabled,
     disclosureVersion: supplied.disclosureVersion,
     admission,
     async runTick() {

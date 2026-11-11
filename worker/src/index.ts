@@ -1,4 +1,6 @@
-import { composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
+import { composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, supportAnsweringAdmissionEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
+import { createProductionSupportAnswering, type SupportAssistantProductionEnvironment } from './support-assistant-production';
+import { createSupportAssistantStageDatabase as createSupportAssistantInvocationDatabase } from './support-assistant-stage-budget';
 import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
 import { composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
   type SupportEngineeringHumanComposition } from './support-engineering-composition';
@@ -65,12 +67,12 @@ import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 import { handleKnowledgeRequest, isKnowledgeRequest } from './knowledge-host';
 import type { createSupportLearningReviewQueue, SupportLearningReviewQueueMessage } from './support-learning-review-queue';
 
-type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED'> &
+type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON'> &
   LoggerEnv &
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
   SupportRuntimeEnv &
-  CatalogFetchEnv & {
+  CatalogFetchEnv & SupportAssistantProductionEnvironment & {
     readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
     readonly PEGMA_SUPPORT_ASSISTANT_ENABLED?: string;
     readonly SUPPORT_LEARNING_REVIEWS?: Queue<SupportLearningReviewQueueMessage>;
@@ -111,6 +113,17 @@ function createKnowledgeProjectionStore(environment: {
   });
 }
 
+/** Per physical answering invocation; preserve lazy binding reads and current
+ * flag observations instead of copying credentials or freezing flag values. */
+function answeringInvocationEnvironment(environment: AppEnv): AppEnv {
+  const guarded = createSupportAssistantInvocationDatabase(environment.IDENTITY_DB);
+  return new Proxy(environment, {
+    get(target, key) {
+      return key === 'IDENTITY_DB' ? guarded.database : Reflect.get(target, key, target);
+    },
+  });
+}
+
 function createSupportHandler(
   env: AppEnv,
   logger: ReturnType<typeof createAppLogger>,
@@ -118,7 +131,8 @@ function createSupportHandler(
   answering: SupportAnsweringComposition = {},
 ) {
   const configured = supportEngineeringHumanEnabled(engineering);
-  const identityRuntime = createProductionIdentityRuntime(env, logger, configured || answering.configuration !== undefined ? 512 : undefined);
+  const answerConfigured = answering.configuration !== undefined || answering.recoveryOnly === true;
+  const identityRuntime = createProductionIdentityRuntime(env, logger, configured || answerConfigured ? 512 : undefined);
   const intake = supportEngineeringIntakeOptions(engineering);
   const dependencies = {
     sessions: identityRuntime.sessions,
@@ -128,7 +142,7 @@ function createSupportHandler(
     ...(intake === undefined ? {} : { engineering: intake }),
     ...(answering.configuration === undefined ? {} : { assistantTurns: supportAnsweringTurns(answering) }),
   };
-  const supportRuntime = configured || answering.configuration !== undefined
+  const supportRuntime = configured || answerConfigured
     ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
     : createProductionSupportRuntime(env, dependencies);
   const api = createSupportApi({
@@ -158,7 +172,7 @@ function createSupportHandler(
     bootstrapPrincipals: parseAdminBootstrapPrincipals(env),
   });
   return { supportRuntime, api, adminApi,
-    answering: answering.configuration === undefined ? undefined : composeSupportAnswering(supportRuntime, logger, answering,
+    answering: !answerConfigured ? undefined : composeSupportAnswering(supportRuntime, logger, answering,
       () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true'),
   };
 }
@@ -171,17 +185,21 @@ export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<type
       return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     if (new URL(request.url).pathname.startsWith(SUPPORT_ANSWERING_NAMESPACE)) {
       const url = new URL(request.url); const path = url.pathname;
-      if (answering.configuration === undefined || url.search !== '' || !['/api/support/assistant/capability', '/api/support/assistant/tickets'].includes(path))
+      if ((answering.configuration === undefined && answering.recoveryOnly !== true) || url.search !== '' || !['/api/support/assistant/capability', '/api/support/assistant/tickets'].includes(path))
         return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
       const method = path.endsWith('/capability') ? 'GET' : 'POST';
       if (request.method !== method)
         return Response.json({ error: 'method_not_allowed' }, { status: 405, headers: { 'Cache-Control': 'no-store', Allow: method } });
-      if (path.endsWith('/capability') && (env.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true' || !supportAnsweringEnabled(answering)))
+      if (path.endsWith('/capability') && (env.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true' || !supportAnsweringAdmissionEnabled(answering)))
         return Response.json({ enabled: false }, { headers: { 'Cache-Control': 'no-store' } });
-      const composed = createSupportHandler(env, logger, engineering, answering);
+      // One counter spans the entire dedicated request, including every fresh
+      // Identity/Role/Support/KB read and any late unknown-outcome continuation.
+      const composed = createSupportHandler(answeringInvocationEnvironment(env), logger, engineering, answering);
       return createSupportAnsweringIngress(composed.supportRuntime, logger, composed.answering!)(request);
     }
-    return createSupportHandler(env, logger, engineering, answering).api(request);
+    // Receipt-only installation must not change ordinary human Store composition.
+    return createSupportHandler(env, logger, engineering,
+      answering.configuration === undefined ? {} : answering).api(request);
   };
 }
 
@@ -195,6 +213,9 @@ export function createWorker(options: {
   readonly engineering?: SupportEngineeringHumanComposition;
   readonly answering?: SupportAnsweringComposition;
 } = {}) {
+const answeringFor = (env: AppEnv) => options.answering === undefined
+  ? createProductionSupportAnswering(env)
+  : Promise.resolve(options.answering);
 return {
   async fetch(
     request: Request,
@@ -449,14 +470,15 @@ return {
 
     if (path.startsWith('/api/support/')) {
       try {
+        const answering = await answeringFor(env);
         if (path.startsWith(SUPPORT_ANSWERING_NAMESPACE))
-          return await createSupportRequestHandler(env, logger, options.engineering, options.answering)(request);
+          return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
         if (isSupportEngineeringRequest(path))
-          return await createSupportRequestHandler(env, logger, options.engineering, options.answering)(request);
+          return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
         const reviews = options.learningReviews;
         if (reviews !== undefined && learningReviewsEnabled(env, reviews))
-          return await reviews.create(env, logger, options.engineering, options.answering).api(request);
-        return await createSupportRequestHandler(env, logger, options.engineering, options.answering)(request);
+          return await reviews.create(env, logger, options.engineering, answering).api(request);
+        return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
       } catch (error) {
         logger.log('error', 'support.runtime_unavailable', {
           error: error instanceof Error ? error.name : 'unknown',
@@ -610,12 +632,15 @@ return {
     if (cleanup?.kind === 'learning_reviews' &&
       Math.floor((Math.floor(controller.scheduledTime / 60_000) -
         Math.floor((Math.floor(controller.scheduledTime / 60_000) + 1) / 60)) / CLEANUP_LANE_COUNT) % 2 === 0 &&
-      env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true' && supportAnsweringEnabled(options.answering)) {
-      try {
-        const composed = createSupportHandler(env, logger, options.engineering, options.answering);
-        await composed.answering?.runTick();
-      } catch { logger.log('error', 'support.answering_unavailable', { stage: 'composition' }); }
-      return;
+      env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true') {
+      const answering = await answeringFor(env);
+      if (supportAnsweringEnabled(answering)) {
+        try {
+          const composed = createSupportHandler(answeringInvocationEnvironment(env), logger, options.engineering, answering);
+          await composed.answering?.runTick();
+        } catch { logger.log('error', 'support.answering_unavailable', { stage: 'composition' }); }
+        return;
+      }
     }
 
     if (cleanup?.kind === 'learning_reviews') {
@@ -668,5 +693,5 @@ return {
 } satisfies ExportedHandler<AppEnv>;
 }
 
-// A binding/flag alone cannot supply missing trusted runtime configuration.
+// Production supplies only validated operator data and source-owned ports.
 export default createWorker();

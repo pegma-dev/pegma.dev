@@ -112,6 +112,7 @@ export async function supportAnsweringFixture(store: Store = createMemoryStore()
   };
   const composition: SupportAnsweringComposition = {
     enabled: () => state.enabled,
+    customerAdmissionEnabled: () => state.enabled,
     configuration: {
       disclosureVersion: SUPPORT_ANSWERING_DISCLOSURE_VERSION,
       turns: { maxAttempts: 2 },
