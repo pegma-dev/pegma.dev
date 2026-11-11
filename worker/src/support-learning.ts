@@ -20,6 +20,7 @@ import {
   SupportDeskAuthorizationError,
   SupportDeskConflictError,
   type SupportDeskApplication,
+  type StaffTicketView,
   type ResolutionLearningSourceResult,
   supportPermissions,
   type EnrollResolutionLearningCommand,
@@ -61,6 +62,8 @@ export type LearningReviewHumanGuard = () => void | Promise<void>;
 export type LearningInvalidationPacket = Packet<InvalidateResolutionEvidenceCommand>;
 export type LearningWithdrawalPacket = Packet<WithdrawResolutionLearningSourceCommand>;
 
+type LearningIntakeContentFence = 'resolution_unavailable' | 'solution_unavailable' | 'resolution_cycle_changed';
+
 export type LearningIntakeRecoveryResult = {
   readonly ticketId: string;
   readonly commandId: string;
@@ -68,7 +71,7 @@ export type LearningIntakeRecoveryResult = {
 } & (
   | { readonly outcome: 'accepted'; readonly result: ResolutionLearningSourceResult }
   | { readonly outcome: 'pending' }
-  | { readonly outcome: 'superseded'; readonly expectedRevision: number; readonly observedRevision: number }
+  | { readonly outcome: 'superseded'; readonly expectedRevision: number; readonly observedRevision: number; readonly fence?: LearningIntakeContentFence }
 );
 
 /** Intake is a separate SDK switch from model processing. Neither defaults ON. */
@@ -335,6 +338,8 @@ function createLearningRuntime(
   function recoverIntake<Command extends { readonly ticketId: string; readonly clientCommandId: string; readonly expectedRevision: number }>(
     access: AccessContext, operation: 'enroll' | 'evidence', input: Command,
     invoke: (current: AccessContext, packet: Omit<Command, 'clientCommandId'> & { commandId: string; correlationId: string }) => Promise<ResolutionLearningSourceResult>,
+    contentFence?: (view: StaffTicketView, packet: Omit<Command, 'clientCommandId'>,
+      current: () => Promise<AccessContext>) => Promise<LearningIntakeContentFence | undefined>,
   ): Promise<LearningIntakeRecoveryResult> {
     return command(access, supportPermissions.learningEvidenceSubmit, operation === 'enroll' ? 'enroll' : 'verified_fix', input,
       async (current, packet, _signal, boundary): Promise<LearningIntakeRecoveryResult> => {
@@ -349,15 +354,21 @@ function createLearningRuntime(
         const revision = view.ticket.revision;
         if (view.ticket.id !== packet.ticketId || !Number.isSafeInteger(revision) || revision < 1)
           throw new SupportLearningUnavailableError();
-        if (revision <= packet.expectedRevision) return { ...scope, outcome: 'pending' };
-        // Every new intake effect CAS-fences this monotonically increasing
-        // ticket revision. Recheck the exact SDK command AFTER that fence so
-        // an accepted earlier receipt still wins a concurrent stale conflict.
+        if (revision < packet.expectedRevision) return { ...scope, outcome: 'pending' };
+        const fence = revision === packet.expectedRevision
+          ? await contentFence?.(view, packet, boundary.current) : undefined;
+        boundary.ensure();
+        if (revision === packet.expectedRevision && fence === undefined) return { ...scope, outcome: 'pending' };
+        // A newer revision or an immutable prerequisite at this exact revision
+        // excludes future application. Public message/status/cycle repairs
+        // advance the ticket revision. Retry the exact command AFTER the proof
+        // so a raced accepted receipt wins before ownership is released.
         try { return { ...scope, outcome: 'accepted', result: await invoke(await boundary.current(), packet) }; }
         catch (error) { boundary.ensure(); if (!(error instanceof SupportDeskConflictError)) throw error; }
         // This proves that the old revision cannot act in the future. Earlier
         // acceptance may remain historically unknown for retained legacy data.
-        return { ...scope, outcome: 'superseded', expectedRevision: packet.expectedRevision, observedRevision: revision };
+        return { ...scope, outcome: 'superseded', expectedRevision: packet.expectedRevision, observedRevision: revision,
+          ...(fence === undefined ? {} : { fence }) };
       });
   }
 
@@ -422,7 +433,21 @@ function createLearningRuntime(
     recoverEnrollment: (access: AccessContext, input: LearningEnrollmentPacket) =>
       recoverIntake(access, 'enroll', input, (current, packet) => options.application.enrollResolutionLearning(current, packet)),
     recoverVerifiedFix: (access: AccessContext, input: LearningVerifiedFixPacket) =>
-      recoverIntake(access, 'evidence', input, (current, packet) => options.application.submitResolutionEvidence(current, packet)),
+      recoverIntake(access, 'evidence', input, (current, packet) => options.application.submitResolutionEvidence(current, packet),
+        async (view, packet, current) => {
+          if (!['resolved', 'closed'].includes(view.ticket.status) || view.ticket.resolvedAt === undefined)
+            return 'resolution_unavailable';
+          if (!view.messages.some((message) => message.id === packet.evidence.solutionMessageId && message.visibility === 'customer'))
+            return 'solution_unavailable';
+          // Resolution cycles only advance with public ticket mutations.
+          // The separate public read requires its own existing permission.
+          const access = await current();
+          if (!hasPermission(access, supportPermissions.learningRead)) return undefined;
+          const source = await options.application.readResolutionLearningSource(access, packet.ticketId);
+          if (source.ticketId !== packet.ticketId || !Number.isSafeInteger(source.resolutionCycle) || source.resolutionCycle < 1)
+            throw new SupportLearningUnavailableError();
+          return source.resolutionCycle !== packet.resolutionCycle ? 'resolution_cycle_changed' : undefined;
+        }),
     reviewProposal(access: AccessContext, input: LearningReviewPacket,
       verifyHumanBeforeCommit?: LearningReviewHumanGuard) {
       if (verifyHumanBeforeCommit !== undefined && typeof verifyHumanBeforeCommit !== 'function')

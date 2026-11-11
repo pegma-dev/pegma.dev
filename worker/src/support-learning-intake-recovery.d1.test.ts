@@ -149,16 +149,31 @@ describe('registered intake retry and reconciliation on clocked real Native D1',
     expect(await f.learning.rows()).toEqual(before); expect(f.learning.state.modelCalls).toBe(0); f.observed.assertBounds();
   });
 
-  it('keeps an unchanged-revision evidence conflict pending within the full clocked-session request budget', async () => {
-    const f = await fixture(); const ticket = await f.learning.terminal();
-    expect((await f.invoke('/enroll', JSON.stringify({ commandId: 'SETUP-PENDING-NATIVE', expectedRevision: ticket.revision }))).status).toBe(200);
-    const commandId = 'EXACT-UPPERCASE-PENDING';
-    const packet = JSON.stringify({ commandId, expectedRevision: ticket.revision, resolutionCycle: 1,
-      solutionMessageId: 'missing-visible-solution', verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' });
+  it.each(['missing', 'internal', 'unresolved', 'cycle'] as const)('fences a same-revision %s evidence prerequisite within the full clocked-session request budget', async (kind) => {
+    const f = await fixture(); let ticket = await f.learning.terminal();
+    expect((await f.invoke('/enroll', JSON.stringify({ commandId: 'SETUP-CONTENT-NATIVE', expectedRevision: ticket.revision }))).status).toBe(200);
+    if (kind === 'unresolved') {
+      await f.learning.application.reopenTicket(f.learning.actors.staff, { ...f.learning.command('native-content-reopen'), ticketId: learningTicketId });
+      ticket = (await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId)).ticket;
+    }
+    const view = await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId);
+    expect(view.ticket.revision).toBe(ticket.revision);
+    expect(view.messages.some((message) => message.id === 'learning-solution' && message.visibility === 'customer')).toBe(true);
+    expect(view.messages.some((message) => message.id === 'learning-note' && message.visibility === 'internal')).toBe(true);
+    const solutionRow = (await f.learning.rows()).find((row) => row.kind === 'message' && row.message.id === 'learning-solution');
+    if (solutionRow?.kind !== 'message') throw new Error('Expected the genuine SDK solution row');
+    expect(solutionRow.ordinal).toBeLessThanOrEqual(ticket.revision);
+    const commandId = 'EXACT-UPPERCASE-CONTENT-' + kind.toUpperCase();
+    const packet = JSON.stringify({ commandId, expectedRevision: ticket.revision, resolutionCycle: kind === 'cycle' ? 2 : 1,
+      solutionMessageId: kind === 'missing' ? 'missing-visible-solution' : kind === 'internal' ? 'learning-note' : 'learning-solution',
+      verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' });
     const before = await f.learning.rows();
-    const recovered = await f.observed.run('evidence.recovery.pending', () => f.invoke('/evidence-recovery', packet));
+    expect((await f.invoke('/evidence', packet)).status).toBe(409);
+    const recovered = await f.observed.run('evidence.recovery.content.' + kind, () => f.invoke('/evidence-recovery', packet));
     expect(recovered.status).toBe(200);
-    expect(resultObject(await responseObject(recovered))).toEqual({ outcome: 'pending', ticketId: learningTicketId, commandId, operation: 'evidence' });
+    expect(resultObject(await responseObject(recovered))).toEqual({ outcome: 'superseded', ticketId: learningTicketId,
+      commandId, operation: 'evidence', expectedRevision: ticket.revision, observedRevision: ticket.revision,
+      fence: kind === 'unresolved' ? 'resolution_unavailable' : kind === 'cycle' ? 'resolution_cycle_changed' : 'solution_unavailable' });
     expect(await f.learning.rows()).toEqual(before); expect(f.learning.state.modelCalls).toBe(0); f.observed.assertBounds();
   });
 

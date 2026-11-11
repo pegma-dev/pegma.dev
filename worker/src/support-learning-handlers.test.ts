@@ -214,14 +214,31 @@ describe('unregistered staff learning HTTP with current public host authority', 
     expect(await f.learning.rows()).toEqual(rows); expect(rows.filter((row) => row.kind === 'resolution_learning_source')).toHaveLength(1);
   });
 
-  it('keeps an unchanged-revision conflict pending and preserves its original packet', async () => {
-    const f = await fixture(); const ticket = await f.learning.terminal();
-    expect((await f.send(f.request('enroll', { commandId: 'SETUP-PENDING', expectedRevision: ticket.revision }))).status).toBe(200);
-    const packet = { commandId: 'EXACT-PENDING-EVIDENCE', expectedRevision: ticket.revision, resolutionCycle: 1,
-      solutionMessageId: 'missing-visible-message', verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' };
-    const before = await f.learning.rows(); const response = await f.send(f.request('evidence-recovery', packet));
-    expect(response.status).toBe(200); expect(result(await object(response))).toEqual({ outcome: 'pending', operation: 'evidence',
-      ticketId: learningTicketId, commandId: packet.commandId }); expect(await f.learning.rows()).toEqual(before);
+  it.each(['missing', 'internal', 'unresolved', 'cycle'] as const)('fences a same-revision %s evidence prerequisite with the complete public ticket view', async (kind) => {
+    const f = await fixture(); let ticket = await f.learning.terminal();
+    expect((await f.send(f.request('enroll', { commandId: 'SETUP-CONTENT-FENCE', expectedRevision: ticket.revision }))).status).toBe(200);
+    if (kind === 'unresolved') {
+      await f.learning.application.reopenTicket(f.learning.actors.staff, { ...f.learning.command('same-revision-reopen'), ticketId: learningTicketId });
+      ticket = (await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId)).ticket;
+    }
+    const view = await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId);
+    expect(view.ticket.revision).toBe(ticket.revision);
+    expect(view.messages.some((message) => message.id === 'learning-solution' && message.visibility === 'customer')).toBe(true);
+    expect(view.messages.some((message) => message.id === 'learning-note' && message.visibility === 'internal')).toBe(true);
+    const solutionRow = (await f.learning.rows()).find((row) => row.kind === 'message' && row.message.id === 'learning-solution');
+    if (solutionRow?.kind !== 'message') throw new Error('Expected the genuine SDK solution row');
+    expect(solutionRow.ordinal).toBeLessThanOrEqual(ticket.revision);
+    const packet = { commandId: 'EXACT-CONTENT-FENCE-' + kind.toUpperCase(), expectedRevision: ticket.revision,
+      resolutionCycle: kind === 'cycle' ? 2 : 1,
+      solutionMessageId: kind === 'missing' ? 'missing-visible-message' : kind === 'internal' ? 'learning-note' : 'learning-solution',
+      verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' };
+    const before = await f.learning.rows();
+    expect((await f.send(f.request('evidence', packet))).status).toBe(409);
+    const response = await f.send(f.request('evidence-recovery', packet));
+    expect(response.status).toBe(200); expect(result(await object(response))).toEqual({ outcome: 'superseded', operation: 'evidence',
+      ticketId: learningTicketId, commandId: packet.commandId, expectedRevision: ticket.revision, observedRevision: ticket.revision,
+      fence: kind === 'unresolved' ? 'resolution_unavailable' : kind === 'cycle' ? 'resolution_cycle_changed' : 'solution_unavailable' });
+    expect(await f.learning.rows()).toEqual(before); expect(f.learning.state.modelCalls).toBe(0);
   });
 
   it.each(['logout', 'role', 'outage'] as const)('keeps terminal recovery unavailable after %s at its real ticket observation', async (change) => {

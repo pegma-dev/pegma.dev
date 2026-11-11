@@ -415,16 +415,19 @@
           result.operation !== candidate.intake) throw invalid();
         const scoped = ['outcome', 'ticketId', 'commandId', 'operation'];
         const keys = result.outcome === 'accepted' ? [...scoped, 'result']
-          : result.outcome === 'superseded' ? [...scoped, 'expectedRevision', 'observedRevision'] : scoped;
+          : result.outcome === 'superseded' ? [...scoped, 'expectedRevision', 'observedRevision', ...(Object.hasOwn(result, 'fence') ? ['fence'] : [])] : scoped;
         if (Object.keys(result).sort().join(',') !== keys.sort().join(',')) throw invalid();
         if (result.outcome === 'pending') {
           await viewer(generation, actor); current(generation);
-          notice('The original intake action remains unresolved. Read current state, then explicitly retry the same packet.', true);
+          notice('Keep this unresolved action and retry its exact packet. If the ticket needs a reply or status change, use another staff tab, then retry here after the revision advances.', true);
           return;
         }
         if (result.outcome === 'superseded') {
-          if (result.expectedRevision !== candidate.expectedRevision || !Number.isSafeInteger(result.observedRevision) ||
-            result.observedRevision <= candidate.expectedRevision) throw invalid();
+          if (result.expectedRevision !== candidate.expectedRevision || !Number.isSafeInteger(result.observedRevision)) throw invalid();
+          if (Object.hasOwn(result, 'fence')) {
+            if (candidate.intake !== 'evidence' || result.observedRevision !== candidate.expectedRevision ||
+              !['resolution_unavailable', 'solution_unavailable', 'resolution_cycle_changed'].includes(result.fence)) throw invalid();
+          } else if (result.observedRevision <= candidate.expectedRevision) throw invalid();
           superseded = true;
         } else if (result.outcome === 'accepted') result = result.result;
         else throw invalid();

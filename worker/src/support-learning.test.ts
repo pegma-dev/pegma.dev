@@ -98,6 +98,41 @@ describe('published learning assembly', () => {
     expect(receipts).toEqual([false, false, true]);
   });
 
+  it('keeps disabled enrollment pending until the same command can be accepted after the intake configuration changes', async () => {
+    const f = await fixture({ intake: false }); const ticket = await f.terminal();
+    const packet = { ticketId: learningTicketId, clientCommandId: 'DISABLED-ENROLL-EXACT', expectedRevision: ticket.revision };
+    const before = await f.rows();
+    expect(await f.runtime.recoverEnrollment(f.actors.staff, packet)).toEqual({ outcome: 'pending', operation: 'enroll',
+      ticketId: learningTicketId, commandId: packet.clientCommandId });
+    expect(await f.rows()).toEqual(before);
+    const application = createSupportDeskApplication({ store: f.store, clock: f.clock, resolutionLearning: { enabled: true } });
+    const runtime = createSupportLearningRuntime({ application, knowledge: f.knowledge, sources: f.sources, clock: f.clock,
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    expect(await runtime.recoverEnrollment(f.actors.staff, packet)).toMatchObject({ outcome: 'accepted',
+      commandId: packet.clientCommandId, result: { ticketId: learningTicketId, state: 'unverified' } });
+    const rows = await f.rows();
+    expect(await runtime.recoverEnrollment(f.actors.staff, packet)).toMatchObject({ outcome: 'accepted' });
+    expect(await f.rows()).toEqual(rows);
+  });
+
+  it('performs a second actual SDK exact retry after a complete same-revision solution fence', async () => {
+    const f = await fixture(); const ticket = await f.terminal();
+    await f.runtime.enroll(f.actors.staff, { ticketId: learningTicketId, clientCommandId: 'CONTENT-RETRY-SETUP', expectedRevision: ticket.revision });
+    let attempts = 0;
+    const application = { ...f.application, async submitResolutionEvidence(...args: Parameters<typeof f.application.submitResolutionEvidence>) {
+      attempts += 1; return f.application.submitResolutionEvidence(...args);
+    } };
+    const runtime = createSupportLearningRuntime({ application, knowledge: f.knowledge, sources: f.sources, clock: f.clock,
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.rows();
+    expect(await runtime.recoverVerifiedFix(f.actors.staff, { ticketId: learningTicketId, clientCommandId: 'CONTENT-RETRY-EXACT',
+      expectedRevision: ticket.revision, resolutionCycle: 1, evidence: { kind: 'staff_verified_fix',
+        solutionMessageId: 'learning-note', verificationReference: 'SYNTHETIC_STAFF_VERIFICATION' } })).toEqual({ outcome: 'superseded',
+      operation: 'evidence', ticketId: learningTicketId, commandId: 'CONTENT-RETRY-EXACT', expectedRevision: ticket.revision,
+      observedRevision: ticket.revision, fence: 'solution_unavailable' });
+    expect(attempts).toBe(2); expect(await f.rows()).toEqual(before); expect(f.state.modelCalls).toBe(0);
+  });
+
   it('preserves exact client bytes and derives a stable actor/operation/ticket correlation', async () => {
     const input = { principalId: 'staff-one', ticketId: 'ticket-one', operation: 'enroll' as const,
       clientCommandId: 'A1B2C3D4-1234-4ABC-8DEF-ABCDEF123456' };

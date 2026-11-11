@@ -345,6 +345,34 @@ describe('registered public staff ticket and learning panel with real auth/SDK r
   });
 
 
+  it.each(['missing', 'internal'] as const)('reassesses a same-revision %s solution and restores the actual page without losing the original packet', async (kind) => {
+    const f = await backend(); const ticket = await f.learning.terminal();
+    const page = await browser(f); await page.ready();
+    page.action('enroll'); await page.wait(() => !page.pending() && page.writes().length === 1);
+    await page.reload(); await page.ready();
+    page.field('solution').value = kind === 'missing' ? 'missing-visible-solution' : 'learning-note';
+    page.field('verification').value = 'SYNTHETIC_STAFF_VERIFICATION'; page.action('evidence');
+    await page.wait(() => page.writes().some((call) => call.path.endsWith('/learning/evidence') && call.status === 409));
+    await page.idle(); expect(page.pending()).toBe(true); expect(page.node('action-reopen').disabled).toBe(true);
+    const original = page.writes().find((call) => call.path.endsWith('/learning/evidence'))!;
+    const before = await f.learning.rows();
+    await page.reload(); await page.ready('unresolved'); page.action('retry');
+    await page.wait(() => !page.pending()); await page.idle();
+    const recovery = page.writes().find((call) => call.path.endsWith('/learning/evidence-recovery'))!;
+    expect(recovery.body).toBe(original.body); expect(recovery.serverStatus).toBe(200);
+    expect(page.node('staff-learning-panel').textContent).toContain('fenced from future application');
+    expect(page.node('staff-learning-panel').textContent).toContain('earlier outcome remains unknown');
+    expect(page.node('action-reopen').disabled).toBe(false); expect(await f.learning.rows()).toEqual(before);
+    await page.reload(); await page.ready(); page.field('solution').value = 'learning-solution';
+    page.field('verification').value = 'SYNTHETIC_STAFF_VERIFICATION'; page.action('evidence');
+    await page.wait(() => !page.pending() && page.writes().some((call) => call.path.endsWith('/learning/evidence') && call.status === 200));
+    const fresh = page.writes().filter((call) => call.path.endsWith('/learning/evidence')).at(-1)!;
+    expect(JSON.parse(fresh.body ?? '{}').expectedRevision).toBe(ticket.revision);
+    expect(JSON.parse(fresh.body ?? '{}').commandId).not.toBe(JSON.parse(original.body ?? '{}').commandId);
+    expect((await f.learning.rows()).filter((row) => row.kind === 'resolution_learning_work')).toHaveLength(1);
+    expect(f.learning.state.modelCalls).toBe(0);
+  });
+
   it('retains a genuinely accepted review when its original session is destroyed before the client closing fence', async () => {
     const f = await backend(); await f.learning.enrollAndVerify(); await f.learning.delivered();
     const page = await browser(f); await page.ready();

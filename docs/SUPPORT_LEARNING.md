@@ -177,15 +177,26 @@ closed variant:
 | --- | --- |
 | `accepted` | `result` contains the actual SDK source result for that exact command |
 | `pending` | The original command remains unresolved |
-| `superseded` | `expectedRevision` and strictly newer `observedRevision` prove that the old-revision command cannot apply in the future |
+| `superseded`, newer revision | `expectedRevision` and strictly newer `observedRevision` prove that the old-revision command cannot apply in the future. This variant has no `fence` field |
+| `superseded`, same-revision evidence | Equal `expectedRevision` and `observedRevision`, with required `fence` set to `solution_unavailable`, `resolution_unavailable` or `resolution_cycle_changed`, prove that the original evidence command cannot apply in the future |
 
 A superseded result leaves the earlier historical outcome unknown. The panel
 requires its closing same-actor/session/epoch checks before releasing that
 retained owner and directs the operator to read current state before another
 action. Generic `409`/`503` responses, mutable-read failures and other errors
-retain ownership. The server attempts exact SDK recovery before observing a
-newer ticket revision and retries that exact command again before reporting
-superseded.
+retain ownership. The server attempts exact SDK recovery before observing the
+current ticket and retries that exact command again after the proof before
+reporting superseded. For same-revision evidence, it verifies the current
+resolution status and customer-visible solution message, or separately reads
+the current source cycle with the existing learning-read permission. Repairs
+to these prerequisites advance the ticket revision. Enrollment has no
+same-revision content-fence result.
+
+A pending result keeps the original packet. If the ticket needs an ordinary
+reply or status change, an authorized operator can use another staff tab and
+then retry the exact original packet here after the revision advances. Reads,
+generic conflicts and an unrecognized same-revision fence do not release the
+retained owner.
 
 ### Opt-in staged review HTTP
 

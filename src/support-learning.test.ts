@@ -141,6 +141,26 @@ describe('optional public staff learning panel', () => {
     expect(f.lost.at(-1)).toEqual({ status: 401, hasPending: true }); expect(f.writes()[1]?.body).toBe(original.body);
   });
 
+  it.each(['fence', 'operation', 'revision', 'session'] as const)('keeps the original owner after an invalid %s same-revision fence', async (kind) => {
+    const f = fixture(); await f.panel.showTicket(ticket);
+    f.node('solution', true).value = 'missing-visible-solution'; f.node('verification', true).value = 'SYNTHETIC_VERIFICATION';
+    f.state.handler = async (call) => call.method === 'POST' ? Promise.reject(failure(409)) : f.response(call);
+    await f.action(kind === 'operation' ? 'enroll' : 'evidence'); const original = f.writes()[0]!;
+    await f.panel.refresh(); const packet = JSON.parse(original.body ?? '{}');
+    f.state.handler = async (call) => {
+      if (call.method !== 'POST') return f.response(call);
+      const value = f.envelope({ outcome: 'superseded', ticketId: ticket.ticketId, commandId: packet.commandId,
+        operation: kind === 'operation' ? 'enroll' : 'evidence', expectedRevision: packet.expectedRevision,
+        observedRevision: packet.expectedRevision + (kind === 'revision' ? 1 : 0),
+        fence: kind === 'fence' ? 'unverified_guess' : 'solution_unavailable' });
+      if (kind === 'session') f.state.identity = { ...f.state.identity, csrfToken: 'a-different-current-session' };
+      return value;
+    };
+    await f.action('retry'); expect(f.panel.hasPending()).toBe(true); expect(f.ownership).toEqual([true]);
+    expect(f.writes()[1]?.body).toBe(original.body); expect(f.commandId).toHaveBeenCalledOnce();
+    if (kind === 'session') expect(f.lost.at(-1)).toEqual({ status: 401, hasPending: true });
+  });
+
   it('keeps pending recovery owned and performs no automatic mutating retry', async () => {
     const f = fixture(); await f.panel.showTicket(ticket);
     f.state.handler = async (call) => call.method === 'POST' ? Promise.reject(failure(409)) : f.response(call);
