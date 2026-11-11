@@ -1,0 +1,8 @@
+{
+  "extends": "../worker/tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "../worker/worker-configuration.d.ts"]
+  },
+  "include": ["./seed-support-assistant-stage.mts"],
+  "exclude": []
+}

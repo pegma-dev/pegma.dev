@@ -34,6 +34,8 @@ interface Checkpoint {
   readonly id: string;
   readonly cursor: string | null;
   readonly generation: number;
+  /** A scheduling hint only. Every resumed turn still uses current SDK guards. */
+  readonly notBefore?: string;
 }
 
 function bounded(value: unknown, maximum = 200): value is string {
@@ -54,7 +56,11 @@ function checkpoint(value: Checkpoint | null): Checkpoint {
     value.id !== CHECKPOINT_KEY.id ||
     !validCursor(value.cursor) ||
     !Number.isSafeInteger(value.generation) ||
-    value.generation < 1
+    value.generation < 1 ||
+    (value.notBefore !== undefined &&
+      (!bounded(value.notBefore, 40) ||
+        !Number.isFinite(Date.parse(value.notBefore)) ||
+        new Date(value.notBefore).toISOString() !== value.notBefore))
   )
     throw new TypeError('Invalid Support assistant checkpoint.');
   return value;
@@ -74,12 +80,15 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
     },
     decode(value) {
       if (
-        Object.keys(value).length !== 4 ||
+        Object.keys(value).some(
+          (key) => !['partition', 'id', 'cursor', 'generation', 'notBefore'].includes(key),
+        ) ||
         !['partition', 'id', 'cursor', 'generation'].every((key) => Object.hasOwn(value, key)) ||
         typeof value.partition !== 'string' ||
         typeof value.id !== 'string' ||
         typeof value.cursor !== 'string' ||
-        typeof value.generation !== 'number'
+        typeof value.generation !== 'number' ||
+        (Object.hasOwn(value, 'notBefore') && typeof value.notBefore !== 'string')
       )
         throw new TypeError('Invalid Support assistant checkpoint fields.');
       const cursor =
@@ -94,6 +103,7 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
         id: value.id,
         cursor,
         generation: value.generation,
+        ...(typeof value.notBefore === 'string' ? { notBefore: value.notBefore } : {}),
       });
     },
   },
@@ -212,6 +222,11 @@ export function createSupportAssistantCustomerAuthority(
 }
 
 export type SupportAssistantTick =
+  | {
+      readonly outcome: 'deferred';
+      readonly nextAttemptAt: string;
+      readonly checkpointSaved: false;
+    }
   | (Extract<AssistantProcessResult, { readonly outcome: 'prepared' }> & {
       readonly physicalRows: number;
       readonly candidates: number;
@@ -317,6 +332,44 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
         const prior = checkpoint(priorVersion?.value ?? null);
         if (prior.generation === Number.MAX_SAFE_INTEGER)
           return { outcome: 'unavailable', checkpointSaved: false };
+        if (
+          prior.notBefore !== undefined &&
+          Date.parse(prior.notBefore) > Date.parse(options.clock.now())
+        )
+          return {
+            outcome: 'deferred',
+            nextAttemptAt: prior.notBefore,
+            checkpointSaved: false,
+          };
+        let owned: Checkpoint | undefined;
+        async function saveProgress(cursor: string | null, notBefore?: string): Promise<boolean> {
+          const owner = owned;
+          const next: Checkpoint = {
+            ...CHECKPOINT_KEY,
+            generation: (owner ?? prior).generation + 1,
+            cursor,
+            ...(notBefore === undefined ? {} : { notBefore }),
+          };
+          if (!current()) return false;
+          if (owner === undefined) {
+            if (priorVersion === null) return (await collection.insertIfAbsent(next)).inserted;
+            return collection.putIfUnchanged(next, priorVersion.version);
+          }
+          const saved = await collection.update(
+            CHECKPOINT_KEY,
+            (value) => {
+              const actual = checkpoint(value);
+              return current() &&
+                actual.generation === owner.generation &&
+                actual.cursor === owner.cursor &&
+                actual.notBefore === owner.notBefore
+                ? { action: 'write', value: next }
+                : { action: 'keep' };
+            },
+            { maxAttempts: 1 },
+          );
+          return saved.written;
+        }
         const assistant = createSupportDeskAssistant({
           application: options.application,
           knowledge: {
@@ -358,20 +411,43 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
           Extract<AssistantProcessResult, { readonly outcome: 'prepared' }> | undefined;
         const candidate = page.candidates[0];
         if (candidate !== undefined) {
-          if (remaining() <= COMMIT_RESERVE_MILLISECONDS)
+          if (
+            remaining() <= COMMIT_RESERVE_MILLISECONDS ||
+            prior.generation >= Number.MAX_SAFE_INTEGER - 1
+          )
             return { outcome: 'unavailable', checkpointSaved: false };
+          const leaseMilliseconds = 30_000;
+          // A claim can begin anywhere inside this tick. Cover its entire SDK
+          // lease if the invocation stops before the prepared due hint is saved.
+          const notBefore = new Date(
+            Date.parse(options.clock.now()) + MAX_TICK_MILLISECONDS + leaseMilliseconds,
+          ).toISOString();
+          if (!(await within(() => saveProgress(prior.cursor, notBefore))))
+            return { outcome: 'unavailable', checkpointSaved: false };
+          owned = {
+            ...CHECKPOINT_KEY,
+            cursor: prior.cursor,
+            generation: prior.generation + 1,
+            notBefore,
+          };
           const result = await within(() =>
             assistant.processTurn(
               {
                 ...candidate,
                 workerId: SUPPORT_ASSISTANT_WORKER_ID,
-                leaseMilliseconds: 30_000,
+                leaseMilliseconds,
               },
               { signal: controller.signal },
             ),
           );
           turn = result.outcome;
           if (result.outcome === 'prepared') preparation = result;
+          if (turn === 'not_claimed')
+            return {
+              outcome: 'deferred',
+              nextAttemptAt: notBefore,
+              checkpointSaved: false,
+            };
           if (turn === 'pending')
             return {
               outcome: 'scanned',
@@ -387,23 +463,17 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
         // Keep the original cursor after the final current-route fence. A later
         // physical tick revisits this work at/after the SDK's nextAttemptAt.
         // Never call processTurn again here or resume with waitUntil.
-        if (preparation !== undefined)
+        if (preparation !== undefined) {
+          if (!(await within(() => saveProgress(prior.cursor, preparation.nextAttemptAt))))
+            return { outcome: 'unavailable', checkpointSaved: false };
           return {
             ...preparation,
             physicalRows: page.physicalRows,
             candidates: page.candidates.length,
             checkpointSaved: false,
           };
-        const next = {
-          ...CHECKPOINT_KEY,
-          generation: prior.generation + 1,
-          cursor: page.nextCursor,
-        };
-        const saved = await within(async () => {
-          if (!current()) return false;
-          if (priorVersion === null) return (await collection.insertIfAbsent(next)).inserted;
-          return collection.putIfUnchanged(next, priorVersion.version);
-        });
+        }
+        const saved = await within(() => saveProgress(page.nextCursor));
         return {
           outcome: 'scanned',
           physicalRows: page.physicalRows,

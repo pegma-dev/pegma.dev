@@ -76,10 +76,7 @@ export interface PlanCompositionResult {
   }[];
 }
 
-function tagOverlap(
-  a: readonly CapabilityTag[],
-  b: readonly CapabilityTag[],
-): number {
+function tagOverlap(a: readonly CapabilityTag[], b: readonly CapabilityTag[]): number {
   if (a.length === 0 || b.length === 0) return 0;
   const set = new Set(b);
   let n = 0;
@@ -136,11 +133,7 @@ function meaningfulCoverage(
   const reqCore = coreTags(requested);
   if (itemCore.length === 0) {
     // Ambient-only items (logger-adapters, static scaffold, spine, …).
-    const hostAmbient = new Set<CapabilityTag>([
-      'cloudflare',
-      'azure',
-      'static_host',
-    ]);
+    const hostAmbient = new Set<CapabilityTag>(['cloudflare', 'azure', 'static_host']);
     const requestedNonHostAmbient = requested.filter(
       (t) => AMBIENT_TAGS.has(t) && !hostAmbient.has(t),
     );
@@ -149,8 +142,7 @@ function meaningfulCoverage(
       // capability was explicitly requested (e.g. logging + accounts).
       // Host tags alone (cloudflare) must not select the static scaffold.
       return (
-        tagOverlap(itemTags, requestedNonHostAmbient) > 0 &&
-        tagOverlap(itemTags, requested) > 0
+        tagOverlap(itemTags, requestedNonHostAmbient) > 0 && tagOverlap(itemTags, requested) > 0
       );
     }
     // Ambient-only request: any overlapping ambient tag is enough.
@@ -190,39 +182,27 @@ function toRecipeListItem(r: CatalogRecipe): RecipeListItem {
     packages: r.packages,
     fixtureStatus: r.fixture.status,
     capabilityTags: r.capabilityTags,
-    ...(r.backlogPriority !== undefined
-      ? { backlogPriority: r.backlogPriority }
-      : {}),
+    ...(r.backlogPriority !== undefined ? { backlogPriority: r.backlogPriority } : {}),
   };
 }
 
 /** list_components — id, summary, status, packages (progressive disclosure). */
-export function listComponents(
-  catalog: CompositionCatalog,
-): readonly ComponentListItem[] {
+export function listComponents(catalog: CompositionCatalog): readonly ComponentListItem[] {
   return catalog.components.map(toComponentListItem);
 }
 
 /** get_component — full catalog entry or null when unknown. */
-export function getComponent(
-  catalog: CompositionCatalog,
-  id: string,
-): CatalogComponent | null {
+export function getComponent(catalog: CompositionCatalog, id: string): CatalogComponent | null {
   return catalog.components.find((c) => c.id === id) ?? null;
 }
 
 /** list_recipes — id, intent, package set. */
-export function listRecipes(
-  catalog: CompositionCatalog,
-): readonly RecipeListItem[] {
+export function listRecipes(catalog: CompositionCatalog): readonly RecipeListItem[] {
   return catalog.recipes.map(toRecipeListItem);
 }
 
 /** get_recipe — full recipe metadata + fixture citation. */
-export function getRecipe(
-  catalog: CompositionCatalog,
-  id: string,
-): CatalogRecipe | null {
+export function getRecipe(catalog: CompositionCatalog, id: string): CatalogRecipe | null {
   return catalog.recipes.find((r) => r.id === id) ?? null;
 }
 
@@ -260,8 +240,7 @@ export function planComposition(
   }
 
   // Static-only intent: prefer not recommending accounts/storage stack.
-  const onlyStatic =
-    requestedTags.length === 1 && requestedTags[0] === 'static_host';
+  const onlyStatic = requestedTags.length === 1 && requestedTags[0] === 'static_host';
 
   type ScoredComponent = {
     component: CatalogComponent;
@@ -291,10 +270,7 @@ export function planComposition(
     }
 
     // Soft boost when the component has an adapter for the requested host.
-    if (
-      input.host &&
-      c.adapters.some((a) => a.host === input.host)
-    ) {
+    if (input.host && c.adapters.some((a) => a.host === input.host)) {
       score += 0.25;
     }
 
@@ -364,7 +340,16 @@ export function planComposition(
       }
       const missingReq = r.requiresPublished.filter((id) => {
         const comp = catalog.components.find((c) => c.id === id);
-        return !comp || !isPublishUsable(comp);
+        if (!comp) return true;
+        if (isPublishUsable(comp)) return false;
+        // Unrelated optional packages must not veto a recipe's exact package set.
+        // The package/pin check below still validates every named package.
+        return (
+          comp.publishUsability !== 'partial' ||
+          !r.packages.some((spec) =>
+            comp.packages.some((pkg) => pkg.name === parsePackageSpecifier(spec).name),
+          )
+        );
       });
       if (missingReq.length > 0) {
         skipped.push({
@@ -438,9 +423,7 @@ export function planComposition(
   }
 
   // Close over required deps for either the primary recipe or tag-matched roots.
-  const componentById = new Map(
-    catalog.components.map((c) => [c.id, c] as const),
-  );
+  const componentById = new Map(catalog.components.map((c) => [c.id, c] as const));
   const closed = new Map<string, CatalogComponent>();
   const queue: string[] = [];
 
@@ -462,18 +445,14 @@ export function planComposition(
     for (const reqId of primaryRecipe.requiresPublished) {
       const depComp = componentById.get(reqId);
       if (!depComp) {
-        notes.push(
-          `missing requiresPublished component ${reqId} on recipe ${primaryRecipe.id}`,
-        );
+        notes.push(`missing requiresPublished component ${reqId} on recipe ${primaryRecipe.id}`);
         continue;
       }
       admitComponent(depComp, `required by recipe ${primaryRecipe.id}`);
     }
     for (const spec of primaryRecipe.packages) {
       const { name } = parsePackageSpecifier(spec);
-      const owner = catalog.components.find((c) =>
-        c.packages.some((p) => p.name === name),
-      );
+      const owner = catalog.components.find((c) => c.packages.some((p) => p.name === name));
       if (!owner) continue;
       admitComponent(owner, `package owner for recipe ${primaryRecipe.id}`);
     }
@@ -494,18 +473,14 @@ export function planComposition(
       if (closed.has(dep.componentId)) continue;
       const depComp = componentById.get(dep.componentId);
       if (!depComp) {
-        notes.push(
-          `missing required dependency ${dep.componentId} referenced by ${id}`,
-        );
+        notes.push(`missing required dependency ${dep.componentId} referenced by ${id}`);
         continue;
       }
       admitComponent(depComp, `required by ${id}`);
     }
   }
 
-  const selectedComponents = [...closed.values()].sort((a, b) =>
-    a.id.localeCompare(b.id),
-  );
+  const selectedComponents = [...closed.values()].sort((a, b) => a.id.localeCompare(b.id));
 
   /**
    * When host is set, emit core packages + adapters for that host (and memory).
@@ -588,9 +563,7 @@ export function planComposition(
     const recipeOwners = new Set<string>();
     for (const spec of primaryRecipe.packages) {
       const { name, version: pinned } = parsePackageSpecifier(spec);
-      const owner = catalog.components.find((c) =>
-        c.packages.some((p) => p.name === name),
-      );
+      const owner = catalog.components.find((c) => c.packages.some((p) => p.name === name));
       if (!owner) continue;
       const pkg = owner.packages.find((p) => p.name === name);
       if (!pkg) continue;

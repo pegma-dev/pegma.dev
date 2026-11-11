@@ -30,8 +30,7 @@ checks at signed source
 [`6dae20df8dace50ad961d9c5fe8d28c90bf4918f`](https://github.com/pegma-dev/knowledge-base/commit/6dae20df8dace50ad961d9c5fe8d28c90bf4918f).
 [Verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
 
-The earlier KB `0.1.4` adoption included the shared report factory and governed
-authoring-context/report-query APIs. The
+The historical
 [verified `0.1.4` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.4)
 at signed source
 [`541e8c93fe1b15bee9345e59b36325f422f97c50`](https://github.com/pegma-dev/knowledge-base/commit/541e8c93fe1b15bee9345e59b36325f422f97c50)

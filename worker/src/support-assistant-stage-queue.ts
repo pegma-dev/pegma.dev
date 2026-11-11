@@ -23,13 +23,16 @@ const MAX_PREPARED_DELAY_SECONDS = 60;
 type StageRuntime = Pick<ReturnType<typeof createSupportAssistantRuntime>, 'runTick'>;
 
 function retryDelay(result: SupportAssistantTick, now: number): number | null {
-  if (result.outcome === 'prepared') {
+  if (result.outcome === 'prepared' || result.outcome === 'deferred') {
     const due = Date.parse(result.nextAttemptAt);
     const seconds = Math.max(1, Math.ceil((due - now) / 1000));
     return Number.isSafeInteger(seconds) && seconds <= MAX_PREPARED_DELAY_SECONDS ? seconds : null;
   }
+  if (result.outcome === 'unavailable') return SCAN_RETRY_SECONDS;
+  if (result.outcome === 'scanned' && !result.checkpointSaved && result.turn !== 'pending')
+    return SCAN_RETRY_SECONDS;
   // Let one opaque message advance a bounded number of physical scan pages.
-  // Pending/ambiguous work deliberately stops for a manual stage redrive.
+  // Explicit pending/ambiguous SDK work still stops for a manual stage redrive.
   return result.outcome === 'scanned' &&
     result.turn === 'none' &&
     result.physicalRows === 1 &&
