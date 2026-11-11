@@ -1,5 +1,6 @@
 import type { Clock } from '@pegma/spine';
 import type {
+  EngineeringDispatchResultVerifier,
   EngineeringRepositoryMetadataPort,
   EngineeringRepositoryObservation,
 } from '@pegma/support-desk-application';
@@ -8,6 +9,10 @@ import type {
   EngineeringGitHubMetadata,
   EngineeringGitHubPort,
 } from '@pegma/support-desk-ai';
+import {
+  createSupportEngineeringIssueOperations,
+  type SupportEngineeringRepositorySession,
+} from './support-engineering-github';
 
 /** Trusted deployment configuration, copied at construction; never request input. */
 export interface SupportEngineeringRepository {
@@ -35,6 +40,8 @@ export interface SupportEngineeringRepositoryOptions {
   readonly clock: Clock;
   /** Omission, false and exceptions all keep this capability OFF. */
   readonly enabled?: () => boolean;
+  /** Separate OFF-by-default write gate. Read-only reconciliation stays available. */
+  readonly issueCreationEnabled?: () => boolean;
   readonly repositories?: readonly SupportEngineeringRepository[];
   readonly authentication?: {
     resolve(
@@ -198,7 +205,8 @@ async function json(response: Response, signal: AbortSignal): Promise<unknown> {
 }
 
 /**
- * Two fixed read-only requests, no retries/cache, at most 64 KiB per response.
+ * Two fixed metadata reads precede each operation. No retries/cache; every
+ * response is bounded to 64 KiB and the entire operation to ten seconds.
  * App-JWT installation discovery proves membership even for public repositories;
  * a public repository GET with an installation token alone cannot prove that.
  * Neither credentials nor unprojected GitHub response fields escape this port.
@@ -207,7 +215,8 @@ export function createSupportEngineeringRepositoryPorts(
   options: SupportEngineeringRepositoryOptions,
 ): {
   readonly repositoryMetadata: EngineeringRepositoryMetadataPort;
-  readonly github: Pick<EngineeringGitHubPort, 'getMetadata'>;
+  readonly github: EngineeringGitHubPort;
+  readonly dispatchResults: EngineeringDispatchResultVerifier;
 } {
   const repositories = catalog(options.repositories ?? []);
   const authenticate = options.authentication;
@@ -228,11 +237,12 @@ export function createSupportEngineeringRepositoryPorts(
     }
   };
 
-  async function observe(
+  async function withinRepository<Value>(
     repositoryId: string,
     parent: AbortSignal,
+    use: (session: SupportEngineeringRepositorySession) => Promise<Value>,
     context?: EngineeringExternalContext,
-  ): Promise<EngineeringGitHubMetadata | null> {
+  ): Promise<{ readonly value: Value; readonly validUntil: string } | null> {
     const configured = repositories.get(repositoryId);
     const start = now();
     if (
@@ -248,6 +258,7 @@ export function createSupportEngineeringRepositoryPorts(
       context === undefined ? start + MAX_DURATION : instant(context.deadline);
     if (requestedDeadline === null || requestedDeadline <= start) return null;
     let expires = Math.min(start + MAX_DURATION, requestedDeadline);
+    let authorityExpires = Infinity;
     const monotonicStart = performance.now();
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -312,6 +323,7 @@ export function createSupportEngineeringRepositoryPorts(
         appJwt: value.appJwt,
         installationToken: value.installationToken,
       });
+      authorityExpires = Math.min(authorityExpires, until);
       expires = Math.min(expires, until);
       schedule();
       return snapshot;
@@ -328,10 +340,15 @@ export function createSupportEngineeringRepositoryPorts(
       )
         throw new Error('Unavailable metadata');
     }
-    async function get(url: string, token: string): Promise<unknown> {
+    async function request(
+      url: string,
+      token: string,
+      method: 'GET' | 'POST' = 'GET',
+      body?: string,
+    ): Promise<unknown> {
       current();
       const response = await transport(url, {
-        method: 'GET',
+        method,
         redirect: 'error',
         signal: controller.signal,
         headers: {
@@ -339,11 +356,13 @@ export function createSupportEngineeringRepositoryPorts(
           Authorization: 'Bearer ' + token,
           'X-GitHub-Api-Version': API_VERSION,
           'User-Agent': 'Pegma-support-engineering',
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         },
+        ...(body === undefined ? {} : { body }),
       });
       current();
       if (
-        response.status !== 200 ||
+        response.status !== (method === 'POST' ? 201 : 200) ||
         response.redirected ||
         (response.url !== '' && response.url !== url)
       )
@@ -352,7 +371,10 @@ export function createSupportEngineeringRepositoryPorts(
       current();
       return value;
     }
-    async function run(): Promise<EngineeringGitHubMetadata> {
+    async function run(): Promise<{
+      readonly value: Value;
+      readonly validUntil: string;
+    }> {
       const first = await authority();
       const path =
         API +
@@ -360,7 +382,7 @@ export function createSupportEngineeringRepositoryPorts(
         encodeURIComponent(configured!.owner) +
         '/' +
         encodeURIComponent(configured!.name);
-      const installation = await get(path + '/installation', first.appJwt);
+      const installation = await request(path + '/installation', first.appJwt);
       if (
         !record(installation) ||
         remoteId(installation.id) !== configured!.installationId ||
@@ -394,7 +416,7 @@ export function createSupportEngineeringRepositoryPorts(
         throw new Error('Unavailable metadata');
       const middle = await authority();
       sameAuthority(first, middle);
-      const repository = await get(path, middle.installationToken);
+      const repository = await request(path, middle.installationToken);
       if (
         !record(repository) ||
         remoteId(repository.id) !== configured!.repositoryId ||
@@ -441,11 +463,6 @@ export function createSupportEngineeringRepositoryPorts(
         installationBinding,
       ]);
       current();
-      // The final awaited action rereads current trusted authority. Token rotation
-      // is permitted only within the same authority binding/version.
-      const last = await authority();
-      sameAuthority(first, last);
-      current();
       const observation: EngineeringRepositoryObservation = Object.freeze({
         repositoryId: configured!.repositoryId,
         owner: configured!.owner,
@@ -454,20 +471,64 @@ export function createSupportEngineeringRepositoryPorts(
         installationBinding,
         metadataVersion,
       });
-      return Object.freeze({
+      const issuePermission = installation.permissions.issues;
+      const issuesEnabled = repository.has_issues;
+      const appSlug =
+        typeof installation.app_slug === 'string' &&
+        /^[a-z0-9][a-z0-9-]{0,99}$/u.test(installation.app_slug)
+          ? installation.app_slug
+          : null;
+      async function issueRequest(url: string, body?: string) {
+        if (
+          issuePermission !== 'write' &&
+          (body !== undefined || issuePermission !== 'read')
+        )
+          throw new Error('Unavailable metadata');
+        const writeCurrent = () => {
+          if (body === undefined) return;
+          if (
+            issuesEnabled !== true ||
+            options.issueCreationEnabled?.() !== true
+          )
+            throw new Error('Unavailable metadata');
+        };
+        writeCurrent();
+        const latest = await authority();
+        sameAuthority(first, latest);
+        current();
+        writeCurrent();
+        return request(
+          url,
+          latest.installationToken,
+          body === undefined ? 'GET' : 'POST',
+          body,
+        );
+      }
+      const value = await use({
         repository: observation,
-        authority: Object.freeze({
-          active: true as const,
-          binding: installationBinding,
-          validUntil: new Date(
-            Math.min(
-              Date.parse(first.validUntil),
-              Date.parse(middle.validUntil),
-              Date.parse(last.validUntil),
-            ),
-          ).toISOString(),
-        }),
+        appId: configured!.appId,
+        appSlug,
+        path,
+        current,
+        search: (query, limit) =>
+          issueRequest(
+            API +
+              '/search/issues?' +
+              new URLSearchParams({
+                q: query,
+                per_page: String(limit),
+                page: '1',
+              }),
+          ),
+        issue: (number) => issueRequest(path + '/issues/' + number),
+        create: (body) => issueRequest(path + '/issues', body),
       });
+      // Last await rereads trusted authority, including after an uncertain POST.
+      // A withheld acknowledgement is unknown; this port never retries a write.
+      const last = await authority();
+      sameAuthority(first, last);
+      current();
+      return { value, validUntil: new Date(authorityExpires).toISOString() };
     }
     try {
       return await Promise.race([run(), stopped]);
@@ -479,6 +540,33 @@ export function createSupportEngineeringRepositoryPorts(
       controller.abort();
     }
   }
+  const observe = async (
+    repositoryId: string,
+    signal: AbortSignal,
+    context?: EngineeringExternalContext,
+  ): Promise<EngineeringGitHubMetadata | null> => {
+    const observed = await withinRepository(
+      repositoryId,
+      signal,
+      async (session) => session.repository,
+      context,
+    );
+    return observed === null
+      ? null
+      : Object.freeze({
+          repository: observed.value,
+          authority: Object.freeze({
+            active: true as const,
+            binding: observed.value.installationBinding,
+            validUntil: observed.validUntil,
+          }),
+        });
+  };
+  const issues = createSupportEngineeringIssueOperations(
+    (repositoryId, context, use) =>
+      withinRepository(repositoryId, context.signal, use, context),
+    options.clock,
+  );
   return Object.freeze({
     repositoryMetadata: Object.freeze({
       resolve: (repositoryId: string, signal: AbortSignal) =>
@@ -491,6 +579,8 @@ export function createSupportEngineeringRepositoryPorts(
         repositoryId: string,
         context: EngineeringExternalContext,
       ) => observe(repositoryId, context.signal, context),
+      ...issues.github,
     }),
+    dispatchResults: issues.dispatchResults,
   });
 }

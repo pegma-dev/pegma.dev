@@ -456,23 +456,47 @@ enabled callback and dependency bundle gate the router and staff-detail hints.
 Human review has an additional strict current flag. The default Worker passes
 no engineering configuration, leaving intake, review and processing OFF.
 
-The optional [repository metadata adapter](../worker/src/support-engineering-repository.ts)
-supplies the existing Application `repositoryMetadata` and human review
-`github.getMetadata` ports. Its immutable allowlist identifies each repository,
-GitHub App and installation. A trusted host issuer must supply current,
-expiring App-JWT and installation-token authority; no credential issuer or live
-repository is configured by default. Each observation makes two read-only
-GitHub requests: [repository installation discovery](https://docs.github.com/en/rest/apps/apps#get-a-repository-installation-for-the-authenticated-app)
-with the App JWT, then [repository metadata](https://docs.github.com/en/rest/repos/repos#get-a-repository)
-with the installation token. Public repository visibility alone does not prove
-installation membership. Exact identity, visibility, active installation and
-current host authority must agree. One deadline bounds authentication and both
-streamed responses to ten seconds or the earlier caller deadline or credential
-expiry, with at most 64 KiB per response and no retries or cached observations.
-The [composition regression](../worker/src/support-engineering-repository.test.ts)
-uses actual SDK policy and human approval with fictional external responses.
-This read capability adds no issue writes, model calls, processor or scheduler,
-and does not enable the default Worker or qualify a live GitHub installation.
+The optional [GitHub repository adapter](../worker/src/support-engineering-repository.ts)
+supplies Application `repositoryMetadata`, the AI `github` ports and Application
+`dispatchResults`. Its immutable allowlist identifies each repository, GitHub
+App and installation. A trusted host issuer must supply current, expiring
+App-JWT and installation-token authority. No issuer or live repository is
+configured by default. Each operation starts with read-only
+[installation discovery](https://docs.github.com/en/rest/apps/apps#get-a-repository-installation-for-the-authenticated-app)
+and [repository metadata](https://docs.github.com/en/rest/repos/repos#get-a-repository).
+Public visibility alone does not prove installation membership. Exact repository
+identity, visibility, installation and current host authority must agree.
+
+The existing runtime accepts `adapter.github` through its `ports` option; pass
+`adapter.repositoryMetadata` and `adapter.dispatchResults` to the existing
+Application engineering options. Creation also requires a separate current
+`issueCreationEnabled` callback, false when omitted. It sends the exact
+SDK-approved title, body and labels in one [issue POST](https://docs.github.com/en/rest/issues/issues#create-an-issue),
+after the SDK has durably started dispatch. It appends no private correlation
+fields or extra marker and never retries a POST. Linking an existing issue is
+only a private Support association, with no GitHub comment or edit.
+
+[Duplicate search](https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests)
+uses trusted ordinary search terms scoped to the configured repository and
+issues, returning at most five candidates from one page. This bounded window
+is not an exhaustive duplicate guarantee. Reconciliation requires a unique
+exact SDK marker, direct issue readback and the expected GitHub App creator;
+link reconciliation instead checks the exact existing issue ID and number.
+Missing, incomplete, ambiguous or unavailable evidence stays unknown. The
+Application verifier independently rereads that evidence and binds its result
+to the SDK's retained dispatch identity. The marker does not attest the private
+request hash. Reconciliation remains read-only after creation is disabled or
+the local proposal body is withdrawn.
+
+One total deadline bounds authentication and all requests to ten seconds or the
+earlier caller deadline or credential expiry. An operation makes at most four
+GitHub requests, with at most 64 KiB per response, a 24 KiB issue payload, no
+pagination, retries or cached observations. The [metadata composition tests](../worker/src/support-engineering-repository.test.ts)
+and [issue transport tests](../worker/src/support-engineering-github.test.ts)
+use actual SDK policy, approval, dispatch and reconciliation over MemoryStore
+with fictional external responses. This optional capability adds no processor,
+scheduler or HTTP dispatch route, leaves the default Worker OFF, and does not
+qualify a live installation or production export policy.
 
 A configured staged-learning factory receives the same optional composition
 as its third `create` argument. It composes `composeSupportEngineeringHuman`
