@@ -16,12 +16,49 @@ Workers Logs is enabled in `wrangler.jsonc` via:
 ```jsonc
 "observability": {
   "enabled": true,
+  "redact_query_string": true,
   "logs": { "enabled": true, "persist": true }
 }
 ```
 
 Redeploy with `pnpm run worker:deploy`. Query logs in the dashboard under
 Workers → `pegma-dev-api` → Observability, or `pnpm run worker:tail`.
+
+The root query-redaction field uses the pinned Wrangler `4.128.0` parser.
+`pnpm run check` includes `check:worker`, a dry run of this main configuration,
+as well as the separate assistant-stage check. The normal Node test suite
+reads this file through Wrangler's exported `unstable_readConfig` API and
+requires the normalized root redaction value to be `true`. A misspelled or
+mis-nested field therefore cannot pass on a CLI warning alone.
+
+Cloudflare's [Worker settings API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/script_and_version_settings/methods/edit/)
+documents request-URL query redaction for logs and traces. This configuration
+enables logs and leaves traces disabled. The documented platform scope is
+separate from deployed telemetry qualification; source parsing and bundling
+do not establish that live records redact a synthetic query sentinel. The
+[Knowledge privacy boundary](../docs/KNOWLEDGE_COMPOSITION.md#configuration-and-activation)
+keeps that acceptance work explicit.
+
+### Toolchain compatibility
+
+The [published Wrangler `4.128.0` package](https://registry.npmjs.org/wrangler/4.128.0)
+selects exact `miniflare@5.20260831.0-alpha` and `workerd@1.20260831.1`
+dependencies. The prerelease Miniflare is the upstream release's pairing,
+without a host override. This pin supports the new configuration field; it
+does not establish compatibility with every local-development runtime feature.
+
+The existing `@cloudflare/vitest-pool-workers@0.18.8` graph retains its own
+Wrangler `4.114.0` and Miniflare `4.20260722.0`. Its parser warns about the new
+field, while the main dry run and normalized-config regression use direct
+Wrangler `4.128.0`. The frozen graph also retains the optional workers-types
+peer mismatch: direct Wrangler requests `^5.20260831.1` and resolves
+`5.20260729.1`. This is an explicit scoped compatibility decision, with the
+current type and runtime gates retained.
+
+`worker-configuration.d.ts` retains its existing Wrangler `4.114.0` generation
+and `workerd@1.20260722.1` runtime declarations. This observability-only change
+does not alter binding definitions or regenerate those bytes. New runtime API
+use or binding changes need their own type-generation and compatibility work.
 
 ## Datadog arm
 
@@ -41,7 +78,7 @@ no Worker authority). Do not substitute a broad personal OAuth token into
 GitHub. `pnpm run worker:deploy` from an authenticated operator session remains
 the break-glass path.
 
-Wrangler 4.114 applies configured queue producers and consumers during deployment.
+Wrangler 4.128 applies configured queue producers and consumers during deployment.
 The learning flag controls runtime handling. Queue lookup and consumer
 creation/update accept the existing Workers Scripts write grant. Cloudflare's
 permission reference describes the Scripts Edit permission as write access.

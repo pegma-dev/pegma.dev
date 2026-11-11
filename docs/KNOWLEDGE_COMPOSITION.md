@@ -126,6 +126,24 @@ The two exact discovery routes belong to Worker ingress. Logical collections
 use the existing generic Storage Core schema with
 `createSchemaIfMissing:false`; no new SQL migration is added by this slice.
 
+The main Worker pins [Wrangler `4.128.0`](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.128.0)
+and sets root `observability.redact_query_string:true`. Cloudflare's
+[Worker settings API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/script_and_version_settings/methods/edit/)
+documents removal of request-URL query strings from logs and traces. The main
+configuration enables logs and leaves traces disabled, so this is the platform's
+documented scope rather than a trace-redaction acceptance result. The normal
+check dry-runs the main config with direct Wrangler `4.128.0`, and the Node
+config regression requires its normalized root redaction flag to be `true`.
+The [Worker toolchain notes](../worker/README.md#toolchain-compatibility)
+record the retained older type generation and test-pool parser, optional
+workers-types mismatch and upstream Miniflare pairing.
+
+This setting does not establish redaction of arbitrary application messages,
+exception strings, or Live Tail output. Keep application diagnostics
+content-free and qualify the deployed configuration with synthetic query
+sentinels before private OAuth acceptance. Source configuration, tests and a
+dry run alone do not prove deployed redaction.
+
 Keep test collections closed during controlled staff acceptance. The disabled
 candidate is not advertised through new global navigation or Account links.
 Expose those entry points only after activation requirements pass. Actual
