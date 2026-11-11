@@ -66,6 +66,10 @@ import {
   type SupportHumanCoordinates,
 } from './support-human-auth';
 import {
+  createSupportLearningBrowserHandlers,
+  type SupportLearningRuntimeOptions,
+} from './support-learning';
+import {
   SUPPORT_BROWSER_COMMAND_HEADER,
   supportBrowserCommand,
   supportBrowserCommandMode,
@@ -129,8 +133,12 @@ interface SupportApiOptions {
   readonly bootstrapPrincipals?: ReadonlySet<string>;
   /** Trusted optional composition: construct createSupportLearningHandlers in the host. */
   readonly learningHandler?: (request: Request) => Promise<Response | null>;
+  /** Trusted runtime ports; the API owns actual browser/staff resolution. */
+  readonly learningRuntime?: Omit<SupportLearningRuntimeOptions, 'staffAccess'>;
   /** Current server flag. Only strict true plus a handler enables this surface. */
   readonly learningEnabled?: () => boolean;
+  /** Additive trusted staged-review capability; it never enables learning itself. */
+  readonly learningStagedReviewsEnabled?: () => boolean;
 }
 
 async function requireAuthentication(
@@ -745,9 +753,28 @@ async function stableBrowserMutation(
 export function createSupportApi(
   options: SupportApiOptions,
 ): (request: Request) => Promise<Response> {
+  if (options.learningHandler !== undefined && options.learningRuntime !== undefined)
+    throw new TypeError('Choose one trusted Support learning composition');
+  const learningHandler = options.learningHandler ?? (
+    options.learningRuntime !== undefined && options.roleStore !== undefined
+      ? createSupportLearningBrowserHandlers({
+          identity: options.identity, sessions: options.sessions,
+          identityLinkFromClaims: options.identityLinkFromClaims,
+          logger: options.logger, roleStore: options.roleStore,
+          ...(options.learningEnabled === undefined ? {} : { enabled: options.learningEnabled }),
+          limiter: options.replyLimiter,
+          learning: options.learningRuntime,
+        })
+      : undefined
+  );
   const learningReady = (): boolean => {
-    if (typeof options.learningHandler !== 'function' || typeof options.learningEnabled !== 'function') return false;
+    if (typeof learningHandler !== 'function' || typeof options.learningEnabled !== 'function') return false;
     try { return options.learningEnabled() === true; } catch { return false; }
+  };
+  const stagedReviewsReady = (): boolean => {
+    if (!learningReady() || options.learningRuntime?.stagedReviews === undefined) return false;
+    try { return options.learningStagedReviewsEnabled?.() === true &&
+      options.learningRuntime.stagedReviews.enabled() === true; } catch { return false; }
   };
   return async (request) => {
     const url = new URL(request.url);
@@ -756,7 +783,7 @@ export function createSupportApi(
       if (LEARNING_NAMESPACE.test(path)) {
         if (!learningReady()) throw new ApiError(404, 'not_found');
         let response: Response | null;
-        try { response = await options.learningHandler!(request); }
+        try { response = await learningHandler!(request); }
         catch { throw new ApiError(503, 'support_learning_unavailable'); }
         // A flag change may withhold an ACK; the browser retains its exact packet.
         if (!learningReady() || response === null) throw new ApiError(404, 'not_found');
@@ -941,6 +968,14 @@ export function createSupportApi(
               ...staffTicketView(view),
               csrfToken: final.authenticated.csrfToken,
               learningEnabled: learningReady() && hasPermission(final.access, supportPermissions.learningRead),
+              learningReviewRecoveryEnabled: learningReady() &&
+                hasPermission(final.access, supportPermissions.learningReview) &&
+                hasPermission(final.access, supportPermissions.queueRead),
+              ...(options.learningStagedReviewsEnabled === undefined ? {} : {
+                learningStagedReviewEnabled: stagedReviewsReady() &&
+                  hasPermission(final.access, supportPermissions.learningReview) &&
+                  hasPermission(final.access, supportPermissions.queueRead),
+              }),
             });
           } catch (error) {
             // A raced loss of current access wins over an earlier failed read.

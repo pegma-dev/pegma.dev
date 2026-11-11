@@ -9,14 +9,22 @@ import { BrowserNode, browserGate } from './test-support-browser';
 interface Call { path: string; method: string; body?: string; headers: Headers; signal?: AbortSignal | null }
 interface Ticket { ticketId: string; revision: number; actorSubject: string; status?: string; resolvedAt?: string }
 interface Panel {
-  showTicket(ticket: Ticket): Promise<void>;
+  showTicket(ticket: Ticket, mode?: { recoveryOnly?: boolean }): Promise<void>;
   refresh(): Promise<void>;
   suspend(): void;
   hasPending(): boolean;
+  hasPendingReview(): boolean;
 }
 const ticket = { ticketId: 'ticket-example', revision: 7, actorSubject: 'synthetic-staff-A',
   status: 'resolved', resolvedAt: '2026-11-09T12:00:00.000Z' };
 const hash = 'a'.repeat(64);
+function intentFor() {
+  return { reviewerId: ticket.actorSubject, ticketId: ticket.ticketId, sourceGeneration: 4, expectedWorkGeneration: 8,
+    target: { articleId: 'fictional-guide', collectionId: 'fictional-collection', articleRevision: 1,
+      contentHash: hash, sourceSnapshotGeneration: 1, sourceSnapshotHash: hash, orderedReferencesHash: hash },
+    policy: { version: 'fixture-checks', binding: 'fixture-check-binding',
+      verifiedAt: '2026-11-10T12:00:00.000Z', validUntil: '2026-11-10T13:00:00.000Z' } };
+}
 function failure(status: number, extra = {}) {
   return Object.assign(new Error('request_failed'), { status, ...extra });
 }
@@ -41,12 +49,22 @@ function fixture() {
     handler: undefined as ((call: Call) => Promise<unknown>) | undefined,
   };
   const envelope = (result: unknown) => ({ result, csrfToken: state.identity.csrfToken });
+  const intent = (id: string) => ({ reviewerId: state.identity.subject, ticketId: id,
+    sourceGeneration: state.sourceGeneration, expectedWorkGeneration: state.workGeneration,
+    target: { articleId: 'fictional-guide', collectionId: 'fictional-collection', articleRevision: 1,
+      contentHash: state.reviewHash, sourceSnapshotGeneration: 1, sourceSnapshotHash: hash, orderedReferencesHash: hash },
+    policy: { version: 'fixture-checks', binding: 'fixture-check-binding',
+      verifiedAt: '2026-11-10T12:00:00.000Z', validUntil: '2026-11-10T13:00:00.000Z' } });
   function response(call: Call) {
     const id = decodeURIComponent(/\/tickets\/([^/]+)\/learning/u.exec(call.path)?.[1] ?? '');
-    if (call.method === 'POST') return envelope({ ticketId: id, sourceGeneration: state.sourceGeneration, resolutionCycle: 2, state: state.sourceState });
+    if (call.method === 'POST') {
+      const packet = JSON.parse(call.body ?? '{}');
+      if (call.path.endsWith('/review-cancel')) return envelope({ outcome: 'cancelled', ticketId: id, commandId: packet.commandId });
+      const accepted = { ticketId: id, sourceGeneration: packet.intent?.sourceGeneration ?? state.sourceGeneration, resolutionCycle: 2, state: state.sourceState };
+      return envelope(packet.intent ? { outcome: 'accepted', result: accepted } : accepted);
+    }
     if (call.path.includes('/proposal?')) return envelope({
-      ticketId: id, sourceGeneration: state.sourceGeneration,
-      expectedWorkGeneration: state.workGeneration, reviewBindingHash: state.reviewHash,
+      ticketId: id, intent: intent(id),
       draft: { generation: 3, revision: {
         articleId: 'fictional-guide', collectionId: 'fictional-collection',
         title: '<img src=x onerror="PRIVATE_TITLE">', summary: 'Checked private draft.',
@@ -88,6 +106,22 @@ function fixture() {
 }
 
 describe('optional public staff learning panel', () => {
+  it('retains a null receipt and makes cancellation retry sticky after its ACK is lost', async () => {
+    const f = fixture(); await f.proposal();
+    f.state.handler = async (call) => { if (call.method === 'POST') throw failure(503); return f.response(call); };
+    await f.action('approve'); const original = f.writes()[0]!;
+    await f.panel.showTicket(ticket, { recoveryOnly: true });
+    f.state.handler = async (call) => call.path.endsWith('/review-receipt') ? f.envelope(null)
+      : call.path.endsWith('/review-cancel') ? Promise.reject(failure(503)) : f.response(call);
+    await f.action('check-review'); expect(f.panel.hasPending()).toBe(true);
+    await f.action('cancel-review'); expect(f.panel.hasPending()).toBe(true);
+    f.state.handler = undefined;
+    await f.action('retry');
+    expect(f.writes().map((call) => call.path.split('/').at(-1))).toEqual(['review', 'review-receipt', 'review-cancel', 'review-cancel']);
+    expect(f.writes().every((call) => call.body === original.body)).toBe(true);
+    expect(f.panel.hasPending()).toBe(false); expect(f.commandId).toHaveBeenCalledOnce();
+  });
+
   it('registers no request until a current staff view is supplied and separates every private read', async () => {
     const f = fixture();
     expect(f.calls).toEqual([]);
@@ -166,7 +200,7 @@ describe('optional public staff learning panel', () => {
     expect(f.writes()).toEqual([]);
   });
   it.each(['enroll', 'evidence', 'approve', 'reject', 'withdraw', 'invalidate'] as const)(
-    'sends only the actual closed %s packet and never a client target or proof authority', async (action) => {
+    'sends the closed %s packet with an exact echoed intent and no added authority', async (action) => {
       const f = fixture();
       await f.proposal();
       f.node('solution', true).value = 'public-solution-message';
@@ -182,8 +216,7 @@ describe('optional public staff learning panel', () => {
         expectedRevision: 7, resolutionCycle: 2, solutionMessageId: 'public-solution-message',
         verificationReference: 'staff-verification-reference' });
       if (action === 'approve' || action === 'reject') expect(packet).toEqual({
-        commandId: packet.commandId, sourceGeneration: 4, expectedWorkGeneration: 8,
-        reviewBindingHash: hash, decision: action, reason: 'Reviewed the shown proposal.' });
+        commandId: packet.commandId, intent: intentFor(), decision: action, reason: 'Reviewed the shown proposal.' });
       if (action === 'withdraw') expect(packet).toEqual({ commandId: packet.commandId, reason: 'privacy_withdrawal' });
       if (action === 'invalidate') expect(packet).toEqual({ commandId: packet.commandId, reason: 'evidence_revoked' });
       for (const forbidden of ['target', 'provenance', 'actor', 'policyVersion', 'product', 'evidence', 'correlationId'])
@@ -341,8 +374,8 @@ describe('optional public staff learning panel', () => {
     expect(f.node('approve').disabled).toBe(true);
     await f.action('retry');
     expect(f.writes()[1]?.body).toBe(first.body);
-    expect(JSON.parse(f.writes()[1]?.body ?? '{}').reviewBindingHash).toBe(hash);
-    expect(JSON.parse(f.writes()[1]?.body ?? '{}').expectedWorkGeneration).toBe(8);
+    expect(JSON.parse(f.writes()[1]?.body ?? '{}').intent.target.contentHash).toBe(hash);
+    expect(JSON.parse(f.writes()[1]?.body ?? '{}').intent.expectedWorkGeneration).toBe(8);
     expect(f.commandId).toHaveBeenCalledOnce();
   });
 
@@ -427,8 +460,8 @@ describe('optional public staff learning panel', () => {
         const response = f.response(call) as { result: Record<string, unknown>; csrfToken: string };
         if (call.path.includes('/proposal?')) {
           if (kind === 'ticket') response.result.ticketId = 'another-ticket';
-          if (kind === 'generation') response.result.sourceGeneration = 99;
-          if (kind === 'hash') response.result.reviewBindingHash = 'forged';
+          if (kind === 'generation') (response.result.intent as Record<string, unknown>).sourceGeneration = 99;
+          if (kind === 'hash') ((response.result.intent as Record<string, unknown>).target as Record<string, unknown>).contentHash = 'forged';
           if (kind === 'draft') response.result.draft = { revision: { title: 'Incomplete' } };
         }
         return response;

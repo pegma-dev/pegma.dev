@@ -4,15 +4,13 @@ import {
   KnowledgeBaseAuthorizationError,
   RepositoryConflictError,
 } from '@pegma/knowledge-base-application';
-import {
-  KnowledgeBaseNotFoundError as LegacyNotFoundError,
-  RepositoryConflictError as LegacyConflictError,
-} from '@pegma/knowledge-base-ai-compat';
 import { SupportDeskAuthorizationError, supportPermissions } from '@pegma/support-desk-application';
+import { learningTargetBinding } from '@pegma/support-desk-ai';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createSupportLearningRuntime,
+  SupportLearningUnavailableError,
   supportLearningApplicationOptions,
 } from './support-learning';
 import {
@@ -27,6 +25,12 @@ import {
 
 function fixture(options?: Parameters<typeof createSupportLearningFixture>[1]) {
   return createSupportLearningFixture(createMemoryStore(), options);
+}
+
+function barrier() {
+  let release = () => {};
+  const reached = new Promise<void>((resolve) => { release = resolve; });
+  return { reached, release };
 }
 
 describe('published learning assembly', () => {
@@ -75,6 +79,146 @@ describe('published learning assembly', () => {
       workerId: 'synthetic-worker', leaseMilliseconds: 30_000 })).toEqual({ outcome: 'held', reason: 'learning_unavailable' });
     expect(await f.rows()).toEqual(before);
     expect(f.state.modelCalls).toBe(0);
+  });
+
+  it('distinguishes a readiness callback outage from deliberately disabled processing without exposing its cause', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, ports: f.ports,
+      processingEnabled() { throw new Error(learningCanary); },
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const source = await runtime.readSource(f.actors.staff, learningTicketId);
+    const before = await f.rows();
+    const result = await runtime.processWork({ ticketId: learningTicketId,
+      sourceGeneration: source.sourceGeneration, workerId: 'synthetic-worker', leaseMilliseconds: 30_000 });
+    expect(result).toEqual({ outcome: 'held', reason: 'learning_readiness_unavailable' });
+    expect(await runtime.scanCandidates({ limit: 8 })).toEqual(result);
+    expect(JSON.stringify(result)).not.toContain(learningCanary);
+    expect(await f.rows()).toEqual(before);
+    expect(f.state.modelCalls).toBe(0);
+  });
+
+  it('reports an opaque staff authority outage separately from a deadline', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock,
+      staffAccess: { async resolve() { throw new Error(learningCanary); } } });
+    const failure: unknown = await runtime.readSource(f.actors.staff, learningTicketId).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(SupportLearningUnavailableError);
+    expect(failure).toMatchObject({ code: 'support_learning_unavailable', reason: 'staff_authority_unavailable',
+      message: 'Support learning is unavailable' });
+    expect(failure).not.toHaveProperty('cause');
+    expect(JSON.stringify(failure)).not.toContain(learningCanary);
+  });
+
+  it.each([0, -1, 25_001, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects invalid server staff boundary %s', async (staffOperationMilliseconds) => {
+      const f = await fixture();
+      expect(() => createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+        sources: f.sources, clock: f.clock, staffOperationMilliseconds,
+        staffAccess: { resolve: (id) => f.resolve(id) } })).toThrow('Invalid staff operation boundary');
+    },
+  );
+
+  it('bounds a deferred actual application read and aborts the same authority signal', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const entered = barrier(); const wait = barrier(); const returned = barrier();
+    let signal: AbortSignal | undefined; let reads = 0;
+    const runtime = createSupportLearningRuntime({
+      application: { ...f.application, async readResolutionLearningSource(...args) {
+        reads += 1; const result = await f.application.readResolutionLearningSource(...args);
+        entered.release(); await wait.reached; returned.release(); return result;
+      } },
+      knowledge: f.knowledge, sources: f.sources, clock: f.clock, staffOperationMilliseconds: 1000,
+      staffAccess: { async resolve(id, currentSignal) { signal = currentSignal; return f.resolve(id); } },
+    });
+    const before = await f.rows();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      let settled = false;
+      const result = runtime.readSource(f.actors.staff, learningTicketId)
+        .catch((error: unknown) => error).finally(() => { settled = true; });
+      await entered.reached;
+      await vi.advanceTimersByTimeAsync(999); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toMatchObject({ code: 'support_learning_unavailable', reason: 'staff_deadline' });
+      expect(signal?.aborted).toBe(true); expect(reads).toBe(1);
+      wait.release(); await returned.reached;
+      expect(await f.rows()).toEqual(before);
+    } finally { wait.release(); vi.useRealTimers(); }
+  });
+
+  it.each(['initial', 'final'] as const)('classifies an %s authority deadline without treating it as revocation or an outage', async (phase) => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const entered = barrier(); const wait = barrier();
+    let authorityCalls = 0; let signal: AbortSignal | undefined;
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, staffOperationMilliseconds: 1000,
+      staffAccess: { async resolve(id, currentSignal) {
+        const access = await f.resolve(id); authorityCalls += 1; signal = currentSignal;
+        if (authorityCalls === (phase === 'initial' ? 1 : 2)) {
+          entered.release(); await wait.reached;
+        }
+        return access;
+      } },
+    });
+    const before = await f.rows();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const result = runtime.readSource(f.actors.staff, learningTicketId).catch((error: unknown) => error);
+      await entered.reached; await vi.advanceTimersByTimeAsync(1000);
+      expect(await result).toMatchObject({ reason: 'staff_deadline' });
+      expect(signal?.aborted).toBe(true);
+      expect(await f.rows()).toEqual(before);
+    } finally { wait.release(); vi.useRealTimers(); }
+  });
+
+  it('uses one staff deadline and preserves a late actual enrollment for exact historical receipt replay', async () => {
+    const f = await fixture(); const ticket = await f.terminal();
+    const authorityEntered = barrier(); const authorityWait = barrier();
+    const entered = barrier(); const wait = barrier(); const committed = barrier();
+    let calls = 0; let authorityCalls = 0;
+    const runtime = createSupportLearningRuntime({
+      application: { ...f.application, async enrollResolutionLearning(...args) {
+        calls += 1; entered.release(); await wait.reached;
+        const result = await f.application.enrollResolutionLearning(...args);
+        committed.release(); return result;
+      } },
+      knowledge: f.knowledge, sources: f.sources, clock: f.clock, staffOperationMilliseconds: 1000,
+      staffAccess: { async resolve(id) {
+        const access = await f.resolve(id);
+        if (++authorityCalls === 1) { authorityEntered.release(); await authorityWait.reached; }
+        return access;
+      } },
+    });
+    const packet = Object.freeze({ ticketId: learningTicketId, clientCommandId: 'deadline-enroll-exact',
+      expectedRevision: ticket.revision });
+    const before = await f.rows();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      let settled = false;
+      const result = runtime.enroll(f.actors.staff, packet)
+        .catch((error: unknown) => error).finally(() => { settled = true; });
+      await authorityEntered.reached;
+      await vi.advanceTimersByTimeAsync(600); authorityWait.release(); await entered.reached;
+      await vi.advanceTimersByTimeAsync(399); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toMatchObject({ reason: 'staff_deadline' });
+      expect(calls).toBe(1); expect(authorityCalls).toBe(1);
+      expect(await f.rows()).toEqual(before);
+      wait.release(); await committed.reached;
+      const accepted = await f.application.readResolutionLearningSource(f.actors.staff, learningTicketId);
+      expect(accepted.sourceGeneration).toBe(0);
+      const acceptedRows = await f.rows();
+      expect(acceptedRows.filter((row) => row.kind === 'resolution_learning_receipt')).toHaveLength(1);
+      await f.application.reopenTicket(f.actors.staff, { ...f.command('after-timeout-reopen'), ticketId: learningTicketId });
+      const current = await f.application.readResolutionLearningSource(f.actors.staff, learningTicketId);
+      expect(current.sourceGeneration).toBeGreaterThan(accepted.sourceGeneration);
+      const history = await f.rows();
+      expect((await runtime.enroll(f.actors.staff, structuredClone(packet))).sourceGeneration).toBe(0);
+      expect(calls).toBe(2); expect(await f.rows()).toEqual(history);
+      expect(await f.application.readResolutionLearningSource(f.actors.staff, learningTicketId)).toEqual(current);
+    } finally { authorityWait.release(); wait.release(); vi.useRealTimers(); }
   });
 
   it.each(['missing', 'expired'] as const)('holds %s trusted product evidence instead of creating generation work', async (mode) => {
@@ -243,6 +387,72 @@ describe('published learning assembly', () => {
     expect(await f.rows()).toEqual(before);
   });
 
+  it('makes missing independent checks explicitly unavailable for a real review while leaving private reads enabled', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const { source, work, articleId } = await f.delivered();
+    const draft = await f.knowledge.getDraft(f.actors.staff, { articleId });
+    const provenance = await f.knowledge.getProvenance(f.actors.staff, { articleId });
+    const policy = await f.ports.checks.resolvePolicy(undefined, new AbortController().signal);
+    if (policy.outcome !== 'ready') throw new Error('Synthetic checks unavailable');
+    const packet = { ticketId: learningTicketId, clientCommandId: 'missing-checks-exact-review',
+      sourceGeneration: source.sourceGeneration, expectedWorkGeneration: work.workGeneration,
+      target: await learningTargetBinding(draft.revision, provenance.snapshot),
+      decision: 'approve' as const, policyVersion: policy.policy.version };
+    const { checks, ...ports } = f.ports; expect(checks).toBeDefined();
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, ports, processingEnabled: () => false,
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.rows();
+    expect(await runtime.readSource(f.actors.staff, learningTicketId)).toEqual(source);
+    await expect(runtime.reviewProposal(f.actors.staff, packet)).rejects.toMatchObject({
+      code: 'support_learning_unavailable', reason: 'review_checks_unavailable',
+    });
+    expect(await f.rows()).toEqual(before);
+    // The same exact live target succeeds through the actual independent checks.
+    expect((await f.runtime.reviewProposal(f.actors.staff, packet)).sourceGeneration).toBe(source.sourceGeneration);
+    expect((await f.rows()).filter((row) => row.kind === 'resolution_learning_review')).toHaveLength(1);
+  });
+
+  it('propagates the staff deadline to SDK review guards and never approves after a delayed actual target read', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const { source, work, articleId } = await f.delivered();
+    const draft = await f.knowledge.getDraft(f.actors.staff, { articleId });
+    const provenance = await f.knowledge.getProvenance(f.actors.staff, { articleId });
+    const policy = await f.ports.checks.resolvePolicy(undefined, new AbortController().signal);
+    if (policy.outcome !== 'ready') throw new Error('Synthetic checks unavailable');
+    const packet = { ticketId: learningTicketId, clientCommandId: 'deadline-review-exact',
+      sourceGeneration: source.sourceGeneration, expectedWorkGeneration: work.workGeneration,
+      target: await learningTargetBinding(draft.revision, provenance.snapshot),
+      decision: 'approve' as const, policyVersion: policy.policy.version };
+    const entered = barrier(); const wait = barrier(); const returned = barrier();
+    let reviewCalls = 0; let policySignal: AbortSignal | undefined;
+    const runtime = createSupportLearningRuntime({
+      application: { ...f.application, async reviewResolutionLearningProposal(...args) {
+        reviewCalls += 1; return f.application.reviewResolutionLearningProposal(...args);
+      } },
+      knowledge: { ...f.knowledge, async getDraft(...args) {
+        const result = await f.knowledge.getDraft(...args);
+        entered.release(); await wait.reached; returned.release(); return result;
+      } },
+      sources: f.sources, clock: f.clock, staffOperationMilliseconds: 1000,
+      ports: { ...f.ports, checks: { ...f.ports.checks, async resolvePolicy(...args) {
+        policySignal = args[1]; return f.ports.checks.resolvePolicy(...args);
+      } } },
+      staffAccess: { resolve: (id) => f.resolve(id) },
+    });
+    const before = await f.rows();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const result = runtime.reviewProposal(f.actors.staff, packet).catch((error: unknown) => error);
+      await entered.reached; await vi.advanceTimersByTimeAsync(1000);
+      expect(await result).toMatchObject({ reason: 'staff_deadline' });
+      expect(policySignal?.aborted).toBe(true);
+      wait.release(); await returned.reached; await vi.advanceTimersByTimeAsync(0);
+      expect(reviewCalls).toBe(0); expect(await f.rows()).toEqual(before);
+      expect(f.state.modelCalls).toBe(1);
+    } finally { wait.release(); vi.useRealTimers(); }
+  });
+
   it('reopening the source denies an already published guide without trusting its old review', async () => {
     const f = await fixture(); await f.enrollAndVerify(); const result = await f.delivered();
     await f.review(result.articleId); await f.evidenceAndPublish(result.articleId);
@@ -284,11 +494,11 @@ describe('published learning assembly', () => {
     expect(f.state.modelCalls).toBe(1);
   });
 
-  it('translates a genuine missing direct-KB draft into the nested012 instance and actual coordinator target_unavailable', async () => {
+  it('preserves actual aligned KB015 missing-draft identity and public coordinator target_unavailable', async () => {
     const f = await fixture();
     const port = createSupportLearningKnowledgePort(f.knowledge);
     await expect(f.knowledge.getDraft(f.actors.admin, { articleId: 'missing-guide' })).rejects.toBeInstanceOf(KnowledgeBaseNotFoundError);
-    await expect(port.getDraft(f.actors.admin, { articleId: 'missing-guide' })).rejects.toBeInstanceOf(LegacyNotFoundError);
+    await expect(port.getDraft(f.actors.admin, { articleId: 'missing-guide' })).rejects.toBeInstanceOf(KnowledgeBaseNotFoundError);
     await f.enrollAndVerify(); expect((await f.process()).outcome).toBe('candidate');
     f.state.explicitDraftIds = ['missing-guide'];
     expect(await f.process()).toMatchObject({ outcome: 'held', reason: 'target_unavailable' });
@@ -333,7 +543,7 @@ describe('published learning assembly', () => {
     } });
     await expect(createSupportLearningKnowledgePort({ ...f.knowledge, async getDraft(...args) {
       await f.knowledge.getDraft(...args); throw conflict;
-    } }).getDraft(f.actors.admin, { articleId })).rejects.toBeInstanceOf(LegacyConflictError);
+    } }).getDraft(f.actors.admin, { articleId })).rejects.toBeInstanceOf(RepositoryConflictError);
     await f.runtime.withdraw(f.actors.staff, { ticketId: learningTicketId,
       clientCommandId: 'withdraw-before-conflict', reason: 'privacy_withdrawal' });
     expect((await f.runtime.reconcileSource(learningTicketId)).outcome).toBe('reconciled');

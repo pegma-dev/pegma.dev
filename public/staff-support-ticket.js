@@ -63,6 +63,10 @@ function cancelRequests() {
   requests.clear();
 }
 function beginOperation() {
+  // Retain unknown intent, but retire every old panel context before an
+  // ordinary mutation or current-ticket reload can await anything.
+  learning?.suspend();
+  if (learningRoot !== null) learningRoot.hidden = true;
   suspended = false;
   const operation = { generation: ++readGeneration };
   cancelRequests();
@@ -312,7 +316,9 @@ function validateView(view) {
     view.csrfToken !== viewer?.csrfToken
   )
     throw Object.assign(new Error('invalid_response'), { status: 502 });
-  if (view.learningEnabled !== undefined && typeof view.learningEnabled !== 'boolean')
+  if ((view.learningReviewRecoveryEnabled !== undefined && typeof view.learningReviewRecoveryEnabled !== 'boolean') ||
+    (view.learningEnabled !== undefined && typeof view.learningEnabled !== 'boolean') ||
+    (view.learningStagedReviewEnabled !== undefined && typeof view.learningStagedReviewEnabled !== 'boolean'))
     throw Object.assign(new Error('invalid_response'), { status: 502 });
   effectiveHandling(view.ticket);
   return view;
@@ -382,7 +388,6 @@ function renderTicket(view) {
   signedOut.hidden = true;
   forbidden.hidden = true;
   detail.hidden = false;
-  syncLearning(view);
   updateControls();
 }
 function failure(error, action, generation) {
@@ -529,6 +534,8 @@ async function loadTicket() {
     showStatus('Ticket loaded.');
     // Private handoff availability does not lock a fully refreshed ticket view.
     finishOperation(operation);
+    // Admission opens only after the ACK (if any) and this complete current GET.
+    syncLearning(view);
     await loadHandoff();
     return {
       generation,
@@ -774,34 +781,52 @@ function learningPending() {
 function learningOccupied() {
   return learningRequests > 0 || learningPending();
 }
-async function learningRequest(run) {
+function requireLearningAdmission(reviewRecovery = false) {
+  if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null ||
+    ordinaryAcknowledged || suspended || authorityReloadRequired ||
+    viewer === null || currentView === null ||
+    (currentView.learningEnabled !== true && !(reviewRecovery && learning?.hasPendingReview?.() === true &&
+      currentView.learningReviewRecoveryEnabled === true)) || !onThisTicket())
+    throw Object.assign(new Error('learning_suspended'), { stale: true });
+}
+async function learningRequest(run, reviewRecovery = false) {
+  requireLearningAdmission(reviewRecovery);
+  const generation = readGeneration;
   ++learningRequests;
   updateControls();
-  try { return await run(); }
-  finally { --learningRequests; updateControls(); }
+  try {
+    const result = await run();
+    guard(generation);
+    requireLearningAdmission(reviewRecovery);
+    return result;
+  } finally { --learningRequests; updateControls(); }
 }
 function syncLearning(view) {
   if (learning === null || learningRoot === null) return;
-  if (view.learningEnabled !== true || ordinaryPacket !== null || takeoverPacket !== null) {
+  if (busy !== null || (view.learningEnabled !== true && !(learning.hasPendingReview?.() === true &&
+    view.learningReviewRecoveryEnabled === true)) || ordinaryPacket !== null || takeoverPacket !== null) {
     learning.suspend();
     learningRoot.hidden = true;
     return;
   }
   learningRoot.hidden = false;
   void learning.showTicket({ ticketId: view.ticket.id, revision: view.ticket.revision,
-    actorSubject: viewer.subject, status: view.ticket.status, resolvedAt: view.ticket.resolvedAt });
+    actorSubject: viewer.subject, status: view.ticket.status, resolvedAt: view.ticket.resolvedAt },
+    { recoveryOnly: view.learningEnabled !== true });
 }
 if (learningRoot !== null && typeof globalThis.PegmaSupportLearning?.createPanel === 'function') {
   // One closure owns all unresolved packets for the lifetime of this staff page.
   learning = globalThis.PegmaSupportLearning.createPanel({
     root: learningRoot,
-    request: (path, init) => learningRequest(() => api(path, init)),
+    stagedReviewsEnabled: () => currentView?.learningStagedReviewEnabled === true,
+    request: (path, init) => learningRequest(() => api(path, init),
+      learning.hasPendingReview?.() === true && /\/review(?:-receipt|-cancel|-queue(?:-status|-cancel)?)?$/u.test(path)),
     readSession: () => learningRequest(async () => {
       const generation = readGeneration;
       const current = await readViewer(generation);
       guard(generation);
       return current;
-    }),
+    }, learning.hasPendingReview?.() === true),
     onPendingChange: () => updateControls(),
     onAccessLost: ({ status }) => {
       // Fence concurrent handoff/detail reads as well as the learning closure.

@@ -131,7 +131,7 @@ describe('maintenance dispatch', () => {
     ]) {
       expect(cleanupLaneAt(time)).toEqual(
         expect.objectContaining({
-          kind: expect.stringMatching(/^(identity|support|knowledge)$/),
+          kind: expect.stringMatching(/^(identity|support|knowledge|learning_reviews)$/),
         }),
       );
     }
@@ -174,8 +174,8 @@ describe('maintenance dispatch', () => {
         observed.push(JSON.stringify(cleanupLaneAt(time)));
       }
     }
-    const cycle = observed.slice(0, 15);
-    expect(new Set(cycle).size).toBe(15);
+    const cycle = observed.slice(0, 16);
+    expect(new Set(cycle).size).toBe(16);
     for (let index = 0; index < observed.length; index++) {
       expect(observed[index]).toBe(cycle[index % cycle.length]);
     }
@@ -207,10 +207,10 @@ describe('maintenance dispatch', () => {
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
-  it('preserves all 15 cleanup lanes across a UTC day boundary without sharing the global rate job', async () => {
+  it('preserves all 16 cleanup lanes across a UTC day boundary without sharing the global rate job', async () => {
     const lanes = [];
     const start = Date.parse('2026-10-15T23:53:00Z');
-    for (let minute = 0; minute < 16; minute++) {
+    for (let minute = 0; minute < 17; minute++) {
       const time = start + minute * 60_000;
       if (new Date(time).getUTCMinutes() === 59) continue;
       const lane = cleanupLaneAt(time);
@@ -222,7 +222,7 @@ describe('maintenance dispatch', () => {
         identity: runIdentityMaintenance,
         support: runSupportMaintenance,
       };
-      if (lane.kind !== 'knowledge') {
+      if (lane.kind === 'identity' || lane.kind === 'support') {
         expect(maintenance[lane.kind]).toHaveBeenCalledExactlyOnceWith(
           expect.anything(),
           expect.anything(),
@@ -239,7 +239,7 @@ describe('maintenance dispatch', () => {
       }
       expect(runReleaseReconciliation).not.toHaveBeenCalled();
     }
-    expect(new Set(lanes).size).toBe(15);
+    expect(new Set(lanes).size).toBe(16);
     expect(
       lanes.filter(
         (lane) =>
@@ -257,6 +257,21 @@ describe('maintenance dispatch', () => {
         );
       }
     }
+  });
+
+  it('leaves the learning dispatch lane port-free when trusted review composition is absent', async () => {
+    const start = Date.parse('2026-10-15T00:00:00Z');
+    const offset = Array.from({ length: 16 }, (_, minute) => minute).find(
+      (minute) => cleanupLaneAt(start + minute * 60_000).kind === 'learning_reviews',
+    );
+    if (offset === undefined) throw new Error('Expected the exclusive review dispatch lane');
+    expect(await scheduled(CLEANUP_CRON, start + offset * 60_000)).toBe(0);
+    expect(runIdentityMaintenance).not.toHaveBeenCalled();
+    expect(runSupportMaintenance).not.toHaveBeenCalled();
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+    expect(createCloudflareD1Store).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalReady).not.toHaveBeenCalled();
   });
 
   it('isolates 39 rate pages and 19 ready pages per hour across a UTC day boundary', async () => {
@@ -308,7 +323,7 @@ describe('maintenance dispatch', () => {
   it('isolates a failed rate invocation from later identity and support cleanup invocations', async () => {
     const start = Date.parse('2026-10-15T00:00:00Z');
     for (const kind of ['identity', 'support'] as const) {
-      const offset = Array.from({ length: 15 }, (_, minute) => minute).find(
+      const offset = Array.from({ length: 16 }, (_, minute) => minute).find(
         (minute) => cleanupLaneAt(start + minute * 60_000).kind === kind,
       );
       if (offset === undefined)

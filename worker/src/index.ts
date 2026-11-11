@@ -56,13 +56,34 @@ import {
 import { createPegmaMcpHandler } from './mcp-server';
 import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 import { handleKnowledgeRequest, isKnowledgeRequest } from './knowledge-host';
+import type { createSupportLearningReviewQueue, SupportLearningReviewQueueMessage } from './support-learning-review-queue';
 
-type AppEnv = Env &
+type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED'> &
   LoggerEnv &
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
   SupportRuntimeEnv &
-  CatalogFetchEnv;
+  CatalogFetchEnv & {
+    readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
+    readonly SUPPORT_LEARNING_REVIEWS?: Queue<SupportLearningReviewQueueMessage>;
+  };
+
+/** Trusted source composition only; no product/check/source ports are invented here. */
+export interface SupportLearningReviewWorkerComposition {
+  readonly enabled: () => boolean;
+  create(environment: AppEnv, logger: ReturnType<typeof createAppLogger>): {
+    /** The actual configured Support API, including its fresh staff-detail hints. */
+    readonly api: (request: Request) => Promise<Response>;
+    readonly queue: ReturnType<typeof createSupportLearningReviewQueue>;
+  };
+}
+
+function learningReviewsEnabled(environment: { readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
+  readonly SUPPORT_LEARNING_REVIEWS?: unknown }, composition?: SupportLearningReviewWorkerComposition): boolean {
+  try { return environment.PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED === 'true' &&
+    environment.SUPPORT_LEARNING_REVIEWS !== undefined && composition?.enabled() === true; }
+  catch { return false; }
+}
 
 function knowledgeRetrievalEnabled(environment: {
   readonly PEGMA_KNOWLEDGE_ENABLED?: string;
@@ -125,7 +146,8 @@ function createSupportHandler(
  * Cloudflare Workers Logs (via @pegma/logger-cloudflare + observability)
  * teed with Datadog when DATADOG_API_KEY is set.
  */
-export default {
+export function createWorker(options: { readonly learningReviews?: SupportLearningReviewWorkerComposition } = {}) {
+return {
   async fetch(
     request: Request,
     env: AppEnv,
@@ -197,7 +219,7 @@ export default {
         probe: 'disabled' | 'ok' | 'fail';
       } = {
         storage: 'cloudflare-d1',
-        packages: '@pegma/support-desk-application@0.2.3',
+        packages: '@pegma/support-desk-application@0.2.5',
         probe: 'disabled',
       };
       if (supportHealthProbeEnabled(env)) {
@@ -379,6 +401,9 @@ export default {
 
     if (path.startsWith('/api/support/')) {
       try {
+        const reviews = options.learningReviews;
+        if (reviews !== undefined && learningReviewsEnabled(env, reviews))
+          return await reviews.create(env, logger).api(request);
         return await createSupportHandler(env, logger).api(request);
       } catch (error) {
         logger.log('error', 'support.runtime_unavailable', {
@@ -528,6 +553,16 @@ export default {
         })(),
       );
 
+    if (cleanup?.kind === 'learning_reviews') {
+      const reviews = options.learningReviews;
+      if (reviews !== undefined && learningReviewsEnabled(env, reviews))
+        ctx.waitUntil((async () => {
+          try { await reviews.create(env, logger).queue.runPage(); }
+          catch { /* Durable SDK rows remain available on the next physical scan. */ }
+        })());
+      return;
+    }
+
     if (cleanup?.kind === 'support')
       ctx.waitUntil(
         (async () => {
@@ -550,4 +585,23 @@ export default {
         })(),
       );
   },
+  async queue(batch: MessageBatch<unknown>, env: AppEnv, ctx: ExecutionContext): Promise<void> {
+    // The consumer configuration is max_batch_size:1. Refuse accidental other
+    // queues and leave durable SDK requests available for rediscovery.
+    const reviews = options.learningReviews;
+    if (batch.queue !== 'pegma-dev-support-learning-reviews' || reviews === undefined ||
+      !learningReviewsEnabled(env, reviews)) {
+      for (const message of batch.messages) message.retry({ delaySeconds: 30 });
+      return;
+    }
+    const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
+    try { await reviews.create(env, logger).queue.consume(batch); }
+    catch {
+      for (const message of batch.messages) message.retry({ delaySeconds: 30 });
+    }
+  },
 } satisfies ExportedHandler<AppEnv>;
+}
+
+// A binding/flag alone cannot supply missing trusted runtime configuration.
+export default createWorker();

@@ -374,7 +374,7 @@ describe('maintenance cursor writes over D1', () => {
     expect(
       createProductionSupportMaintenanceRuntime(env).limiters,
     ).toHaveLength(supportLimiters.length);
-    const lanes = Array.from({ length: 15 }, (_, index) =>
+    const lanes = Array.from({ length: 16 }, (_, index) =>
       cleanupLaneAt(Date.parse('2026-10-15T12:01:00Z') + index * 60_000),
     );
     for (const [kind, limiters] of [
@@ -382,7 +382,7 @@ describe('maintenance cursor writes over D1', () => {
       ['support', supportLimiters],
     ] as const) {
       const indices = lanes
-        .filter((lane) => lane.kind !== 'knowledge')
+        .filter((lane) => lane.kind === 'identity' || lane.kind === 'support')
         .filter((lane) => lane.kind === kind && lane.task === 'rate_limits')
         .map((lane) => lane.limiterIndex)
         .sort();

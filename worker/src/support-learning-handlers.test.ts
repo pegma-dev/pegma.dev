@@ -1,5 +1,6 @@
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createMemoryStore, type CollectionDefinition, type CollectionStore, type Store } from '@pegma/storage-core';
+import { learningTargetBinding, type LearningReviewIntent } from '@pegma/support-desk-ai';
 import { supportPermissions, supportRecords } from '@pegma/support-desk-application';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,7 +12,7 @@ import {
   ADMIN_ROLE, APPLICATION_SCOPE, KNOWLEDGE_ROLE, SUPPORT_ROLE,
 } from './support-access';
 import { createSupportRuntime } from './support-desk';
-import { controlledHumanBody } from './support-human-control-fixtures';
+import { controlledHumanBody, humanLatch } from './support-human-control-fixtures';
 import { createSupportLearningRuntime } from './support-learning';
 import {
   createSupportLearningFixture, learningCanary, learningTicketId,
@@ -43,7 +44,7 @@ function text(value: unknown) {
 /** Actual Identity, session, audited host roles, limiter and both SDK factories. */
 async function fixture() {
   const backing = createMemoryStore();
-  const hooks: { commit?: () => Promise<void>; draft?: () => Promise<void> } = {};
+  const hooks: { commit?: () => Promise<void>; draft?: () => Promise<void>; reviewProof?: () => Promise<void> } = {};
   const store: Store = {
     collection<Value>(definition: CollectionDefinition<Value>): CollectionStore<Value> {
       const actual = backing.collection(definition);
@@ -88,7 +89,20 @@ async function fixture() {
   const authority = { identity, sessions, logger, roleStore: host.roleStore,
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims };
   const resolve = createAgentPrincipalResolver(authority);
-  const runtime = createSupportLearningRuntime({ application: learning.application, knowledge: learning.knowledge,
+  let reviewDepth = 0;
+  const observedKnowledge = { ...learning.knowledge, async getDraft(...args: Parameters<typeof learning.knowledge.getDraft>) {
+    const draft = await learning.knowledge.getDraft(...args); await hooks.draft?.();
+    if (reviewDepth > 0) await hooks.reviewProof?.();
+    return draft;
+  } };
+  const observedApplication = { ...learning.application,
+    async reviewResolutionLearningProposal(...args: Parameters<typeof learning.application.reviewResolutionLearningProposal>) {
+      reviewDepth += 1;
+      try { return await learning.application.reviewResolutionLearningProposal(...args); }
+      finally { reviewDepth -= 1; }
+    },
+  };
+  const runtime = createSupportLearningRuntime({ application: observedApplication, knowledge: observedKnowledge,
     sources: learning.sources, clock: learning.clock, ports: learning.ports,
     staffAccess: { resolve: (principalId) => resolve(principalId) }, processingEnabled: () => learning.state.enabled });
   const state = { enabled: true, runtimeCalls: 0, runtime, captured: [] as string[] };
@@ -96,11 +110,6 @@ async function fixture() {
     ...authority,
     enabled: () => state.enabled,
     runtime: () => { state.runtimeCalls += 1; return state.runtime; },
-    knowledge: { getProvenance: learning.knowledge.getProvenance, async getDraft(...args: Parameters<typeof learning.knowledge.getDraft>) {
-      const draft = await learning.knowledge.getDraft(...args); await hooks.draft?.(); return draft;
-    } },
-    reviewPolicy: learning.ports.checks,
-    clock: learning.clock,
     limiter: host.replyLimiter,
   };
   const handle = createSupportLearningHandlers(options);
@@ -143,8 +152,8 @@ async function fixture() {
     const response = await send(request('proposal', undefined, 'staff', '?sourceGeneration=' + delivered.source.sourceGeneration));
     expect(response.status).toBe(200);
     const view = result(await object(response));
-    return { delivered, view, packet: { commandId: 'REVIEW-EXACT', sourceGeneration: number(view.sourceGeneration),
-      expectedWorkGeneration: number(view.expectedWorkGeneration), reviewBindingHash: text(view.reviewBindingHash), decision: 'approve' } };
+    return { delivered, view, packet: { commandId: 'REVIEW-EXACT',
+      intent: view.intent as LearningReviewIntent, decision: 'approve' as const } };
   }
   return { learning, host, identity, sessions, principals, cookies, csrf, hooks, state, options, resolve, handle,
     request, send, revoke, verified, proposal,
@@ -152,7 +161,219 @@ async function fixture() {
   };
 }
 
+/** A well-formed retired HTTP packet, computed from actual SDK coordinates. */
+async function hashOnlyReviewPacket(f: Awaited<ReturnType<typeof fixture>>) {
+  const prepared = await f.proposal(); const intent = prepared.packet.intent;
+  const work = await f.learning.runtime.readWork(f.learning.actors.staff,
+    { ticketId: learningTicketId, sourceGeneration: intent.sourceGeneration });
+  const draft = await f.learning.knowledge.getDraft(f.learning.actors.staff, { articleId: intent.target.articleId });
+  const provenance = await f.learning.knowledge.getProvenance(f.learning.actors.staff, { articleId: intent.target.articleId });
+  // The old HTTP tuple hashes the public binding's insertion order. The new
+  // immutable intent is a canonical SDK snapshot with different object order.
+  const target = await learningTargetBinding(draft.revision, provenance.snapshot);
+  expect(target).toEqual(intent.target);
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([
+    'pegma.support-learning.review.v1', f.principals.staff, learningTicketId,
+    intent.sourceGeneration, intent.expectedWorkGeneration, work.sourceBindingHash, target,
+    [intent.policy.version, intent.policy.binding, intent.policy.verifiedAt, intent.policy.validUntil],
+  ])));
+  const reviewBindingHash = [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return { commandId: 'LEGACY-ABCDEFAB-1234-4ABC-8DEF-ABCDEF123456',
+    sourceGeneration: intent.sourceGeneration, expectedWorkGeneration: intent.expectedWorkGeneration,
+    reviewBindingHash, decision: 'approve' as const };
+}
+
 describe('unregistered staff learning HTTP with current public host authority', () => {
+  it.each(['session', 'knowledge', 'support'] as const)(
+    'prevents a full-intent review commit when %s is revoked inside the actual SDK proof',
+    async (change) => {
+      const f = await fixture();
+      const { packet } = await f.proposal();
+      const before = await f.learning.rows();
+      const hold = humanLatch();
+      let proofReached = false;
+      let commits = 0;
+      f.hooks.commit = async () => { commits += 1; };
+      f.hooks.reviewProof = async () => {
+        delete f.hooks.reviewProof;
+        proofReached = true;
+        await hold.ready;
+      };
+      const pending = f.send(f.request('review', packet));
+      try {
+        await vi.waitFor(() => expect(proofReached).toBe(true), { timeout: 3_000 });
+        if (change === 'session') await f.destroy('staff');
+        else await f.revoke('staff', change === 'knowledge' ? KNOWLEDGE_ROLE : SUPPORT_ROLE);
+      } finally {
+        hold.release();
+      }
+      const response = await pending;
+      // The SDK reports a Knowledge-only host guard rejection as unknown.
+      // Closing browser authority reports session and Support loss directly.
+      const expectedStatus = { session: 401, knowledge: 503, support: 403 }[change];
+      expect(response.status).toBe(expectedStatus);
+      expect(commits).toBe(0);
+      expect(await f.learning.rows()).toEqual(before);
+      expect(before.filter((row) => row.kind === 'resolution_learning_review')).toHaveLength(0);
+      expect(await object(response)).not.toHaveProperty('result');
+    },
+  );
+
+  it('rejects a valid hash-only review packet before invoking the runtime', async () => {
+    const f = await fixture();
+    const packet = await hashOnlyReviewPacket(f);
+    const before = await f.learning.rows();
+    const calls = f.state.runtimeCalls;
+    const response = await f.send(f.request('review', packet));
+    expect(response.status).toBe(400);
+    expect(await object(response)).toEqual({ error: 'invalid_request' });
+    expect(f.state.runtimeCalls).toBe(calls);
+    expect(await f.learning.rows()).toEqual(before);
+  });
+
+  it('requires current Knowledge authority inside a direct legacy runtime mutation even without a browser callback', async () => {
+    const f = await fixture(); const { packet } = await f.proposal(); const intent = packet.intent;
+    const access = await f.resolve(f.principals.staff); if (access === null) throw new Error('Expected current staff authority');
+    const before = await f.learning.rows(); const hold = humanLatch(); let proofReached = false; let commits = 0;
+    f.hooks.commit = async () => { commits += 1; };
+    f.hooks.reviewProof = async () => { delete f.hooks.reviewProof; proofReached = true; await hold.ready; };
+    const pending = f.state.runtime.reviewProposal(access, { ticketId: learningTicketId,
+      clientCommandId: 'DIRECT-LEGACY-REVIEW-EXACT', sourceGeneration: intent.sourceGeneration,
+      expectedWorkGeneration: intent.expectedWorkGeneration, target: intent.target,
+      policyVersion: intent.policy.version, decision: 'approve' }).then(() => 'accepted' as const, () => 'rejected' as const);
+    try {
+      await vi.waitFor(() => expect(proofReached).toBe(true), { timeout: 3_000 });
+      await f.revoke('staff', KNOWLEDGE_ROLE);
+    } finally { hold.release(); }
+    expect(await pending).toBe('rejected'); expect(commits).toBe(0);
+    expect(await f.learning.rows()).toEqual(before);
+  });
+
+  it('recovers the accepted full review through HTTP with the original body after reopening and Knowledge loss', async () => {
+    const f = await fixture();
+    const { packet } = await f.proposal();
+    const retained = { ...packet, commandId: uppercaseCommand + '-REVIEW', reason: 'Retain this exact review decision.' };
+    const first = f.request('review', retained);
+    const body = await first.clone().text();
+    const original = f.state.runtime;
+    const observed: { accepted?: Awaited<ReturnType<typeof original.submitReviewIntent>> } = {};
+    f.state.runtime = { ...original, async submitReviewIntent(access, input, guard) {
+      const accepted = await original.submitReviewIntent(access, input, guard);
+      if (observed.accepted === undefined) {
+        observed.accepted = accepted;
+        throw new Error('Synthetic lost committed review ACK');
+      }
+      return accepted;
+    } };
+    expect((await f.send(first)).status).toBe(503);
+    const accepted = observed.accepted;
+    if (accepted === undefined) throw new Error('Expected an actual committed review');
+    const acceptedRows = await f.learning.rows();
+    expect(acceptedRows.filter((row) => row.kind === 'resolution_learning_review')).toHaveLength(1);
+
+    await f.learning.application.reopenTicket(f.learning.actors.staff,
+      { ...f.learning.command('exact-body-receipt-reopen'), ticketId: learningTicketId });
+    const currentSource = await f.learning.runtime.readSource(f.learning.actors.staff, learningTicketId);
+    expect(currentSource).toMatchObject({
+      state: 'held', heldReason: 'reopened', sourceGeneration: retained.intent.sourceGeneration + 1,
+    });
+    await f.revoke('staff', KNOWLEDGE_ROLE);
+    const current = await f.resolve(f.principals.staff);
+    expect(current?.permissions).toEqual(expect.arrayContaining([supportPermissions.learningReview, supportPermissions.queueRead]));
+    expect(current?.permissions).not.toContain(knowledgePermissions.draftRead);
+    expect(current?.permissions).not.toContain(knowledgePermissions.provenanceRead);
+    f.hooks.draft = async () => { throw new Error('Receipt recovery must not read the obsolete draft'); };
+    f.state.runtime = { ...f.state.runtime,
+      async readSource() { throw new Error('Receipt recovery must not rebuild the source'); },
+      async readWork() { throw new Error('Receipt recovery must not rebuild the work'); },
+    };
+    const before = await f.learning.rows();
+    for (const operation of ['review-receipt', 'review', 'review-cancel'] as const) {
+      const response = await f.send(new Request(f.request(operation, retained), { body }));
+      expect(response.status).toBe(200);
+      expect(result(await object(response))).toEqual({ outcome: 'accepted', result: accepted });
+      expect(await f.learning.rows()).toEqual(before);
+    }
+    expect(f.learning.state.modelCalls).toBe(1);
+  });
+
+  it.each(['reopen', 'withdraw', 'draft-edit'] as const)('recovers the exact committed review after %s and actual KB role revocation without stale proposal reads', async (change) => {
+    const f = await fixture(); const { packet, delivered } = await f.proposal();
+    const original = f.state.runtime; let lose = true;
+    f.state.runtime = { ...original, async submitReviewIntent(access, input, guard) {
+      const accepted = await original.submitReviewIntent(access, input, guard);
+      if (lose) { lose = false; throw new Error('Synthetic lost committed review ACK'); }
+      return accepted;
+    } };
+    expect((await f.send(f.request('review', packet))).status).toBe(503);
+    if (change === 'reopen') await f.learning.application.reopenTicket(f.learning.actors.staff,
+      { ...f.learning.command('receipt-after-reopen'), ticketId: learningTicketId });
+    else if (change === 'withdraw') await f.learning.runtime.withdraw(f.learning.actors.staff,
+      { ticketId: learningTicketId, clientCommandId: 'receipt-after-withdraw', reason: 'privacy_withdrawal' });
+    else {
+      const draft = await f.learning.knowledge.getDraft(f.learning.actors.staff, { articleId: delivered.articleId });
+      await f.learning.knowledge.updateDraft(f.learning.actors.staff,
+        { ...f.learning.command('receipt-after-edit', draft.generation), articleId: delivered.articleId,
+          collectionId: draft.revision.collectionId, draft: { kind: draft.revision.kind, title: 'New current draft',
+            summary: draft.revision.summary, content: draft.revision.content, tags: draft.revision.tags,
+            applicability: draft.revision.applicability } });
+    }
+    await f.revoke('staff', KNOWLEDGE_ROLE); f.learning.state.enabled = false;
+    f.hooks.draft = async () => { throw new Error('Receipt must not read obsolete KB target'); };
+    f.state.runtime = { ...f.state.runtime, async readSource() { throw new Error('No source preflight'); },
+      async readWork() { throw new Error('No work preflight'); } };
+    const before = await f.learning.rows();
+    const receipt = await f.send(f.request('review-receipt', packet));
+    expect(receipt.status).toBe(200); expect(result(await object(receipt)).outcome).toBe('accepted');
+    expect((await f.send(f.request('review', packet))).status).toBe(200);
+    expect((await f.send(f.request('review-cancel', packet))).status).toBe(200);
+    expect(await f.learning.rows()).toEqual(before); expect(f.learning.state.modelCalls).toBe(1);
+    expect((await f.learning.knowledge.getDraft(f.learning.actors.admin, { articleId: delivered.articleId })).state).toBe('draft');
+  });
+
+  it('recovers a lost real cancellation ACK with the same complete packet and no new review rows', async () => {
+    const f = await fixture(); const { packet } = await f.proposal(); const original = f.state.runtime; let lose = true;
+    f.state.runtime = { ...original, async cancelReview(access, input, guard) {
+      const cancelled = await original.cancelReview(access, input, guard);
+      if (lose) { lose = false; throw new Error('Synthetic lost committed cancellation ACK'); }
+      return cancelled;
+    } };
+    expect((await f.send(f.request('review-cancel', packet))).status).toBe(503);
+    const before = await f.learning.rows();
+    expect(before.filter((row) => row.kind === 'resolution_learning_review')).toHaveLength(0);
+    const receipt = await f.send(f.request('review-receipt', packet));
+    expect(receipt.status).toBe(200);
+    expect(result(await object(receipt))).toEqual({ outcome: 'cancelled', ticketId: learningTicketId, commandId: packet.commandId });
+    expect((await f.send(f.request('review-cancel', packet))).status).toBe(200);
+    expect((await f.send(f.request('review', packet))).status).toBe(503);
+    expect(await f.learning.rows()).toEqual(before);
+  });
+
+  it('binds complete policy timestamps on exact HTTP receipt and cancellation recovery', async () => {
+    const f = await fixture(); const { packet } = await f.proposal();
+    expect((await f.send(f.request('review', packet))).status).toBe(200);
+    const before = await f.learning.rows();
+    const changed = { ...packet, intent: { ...packet.intent, policy: { ...packet.intent.policy,
+      verifiedAt: new Date(Date.parse(packet.intent.policy.verifiedAt) - 1).toISOString() } } };
+    expect((await f.send(f.request('review-receipt', changed))).status).toBe(409);
+    expect((await f.send(f.request('review-cancel', changed))).status).toBe(409);
+    expect(await f.learning.rows()).toEqual(before);
+  });
+
+  it.each(['submit', 'cancel'] as const)('fences the actual %s commit against revocation of the original session', async (action) => {
+    const f = await fixture(); const { packet } = await f.proposal(); const before = await f.learning.rows();
+    if (action === 'submit') f.hooks.draft = async () => { delete f.hooks.draft; await f.destroy('staff'); };
+    else {
+      const original = f.state.runtime;
+      f.state.runtime = { ...original, async cancelReview(access, input, guard) {
+        await f.destroy('staff'); return original.cancelReview(access, input, guard);
+      } };
+    }
+    const response = await f.send(f.request(action === 'submit' ? 'review' : 'review-cancel', packet));
+    expect(response.status).toBe(401); expect(await f.learning.rows()).toEqual(before);
+    expect(JSON.stringify(await object(response))).not.toContain(learningCanary);
+  });
+
   it('defaults OFF before lazy runtime construction and leaves unrelated routes unclaimed', async () => {
     const f = await fixture();
     const { enabled, ...options } = f.options;
@@ -205,8 +426,8 @@ describe('unregistered staff learning HTTP with current public host authority', 
     expect(view.draft).toEqual(await f.learning.knowledge.getDraft(f.learning.actors.staff, { articleId: delivered.articleId }));
     expect(JSON.stringify(view)).not.toContain(learningCanary);
     const original = f.state.runtime; let lose = true;
-    f.state.runtime = { ...original, async reviewProposal(access, input) {
-      const value = await original.reviewProposal(access, input);
+    f.state.runtime = { ...original, async submitReviewIntent(access, input, guard) {
+      const value = await original.submitReviewIntent(access, input, guard);
       if (lose) { lose = false; throw new Error('Synthetic post-commit response loss'); }
       return value;
     } };
@@ -281,25 +502,28 @@ describe('unregistered staff learning HTTP with current public host authority', 
       draft: { kind: draft.revision.kind, title: 'A separately edited guide', summary: draft.revision.summary,
         content: draft.revision.content, tags: draft.revision.tags, applicability: draft.revision.applicability } });
     const rows = await f.learning.rows();
-    expect((await f.send(f.request('review', packet))).status).toBe(409);
+    expect((await f.send(f.request('review', packet))).status).toBe(503);
     expect(await f.learning.rows()).toEqual(rows);
   });
 
-  it('refuses forged or client-supplied review provenance and a mismatched review hash', async () => {
+  it('refuses extra review provenance and a changed complete intent', async () => {
     const f = await fixture(); const { packet } = await f.proposal(); const rows = await f.learning.rows();
     expect((await f.send(f.request('review', { ...packet, target: { articleId: 'forged' } }))).status).toBe(400);
-    expect((await f.send(f.request('review', { ...packet, reviewBindingHash: '0'.repeat(64) }))).status).toBe(409);
+    expect((await f.send(f.request('review', { ...packet, intent: { ...packet.intent, target: { ...packet.intent.target, contentHash: '0'.repeat(64) } } }))).status).toBe(503);
     expect(await f.learning.rows()).toEqual(rows);
   });
 
   it('holds the private review surface when the independent trusted check policy is unavailable', async () => {
     const f = await fixture(); const { packet, delivered } = await f.proposal(); const rows = await f.learning.rows();
-    const handle = createSupportLearningHandlers({ ...f.options,
-      reviewPolicy: { async resolvePolicy() { return { outcome: 'unavailable' }; } } });
+    f.state.runtime = createSupportLearningRuntime({ application: f.learning.application, knowledge: f.learning.knowledge,
+      sources: f.learning.sources, clock: f.learning.clock, staffAccess: { resolve: f.resolve },
+      ports: { ...f.learning.ports, checks: { ...f.learning.ports.checks,
+        async resolvePolicy() { return { outcome: 'unavailable' }; } } } });
+    const handle = createSupportLearningHandlers(f.options);
     const read = await handle(f.request('proposal', undefined, 'staff', '?sourceGeneration=' + delivered.source.sourceGeneration));
     expect(read?.status).toBe(503);
     if (read === null) throw new Error('Expected an owned route');
-    expect(await object(read)).toEqual({ error: 'review_policy_unavailable' });
+    expect(await object(read)).toEqual({ error: 'support_learning_unavailable' });
     expect((await handle(f.request('review', packet)))?.status).toBe(503);
     expect(await f.learning.rows()).toEqual(rows);
   });

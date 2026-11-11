@@ -56,8 +56,7 @@ async function backend() {
     afterDetail: undefined as (() => Promise<void>) | undefined,
     afterHandler: undefined as (() => Promise<void>) | undefined };
   const actualHandler = createSupportLearningHandlers({ ...authority,
-    enabled: () => state.enabled, runtime: () => runtime, knowledge: learning.knowledge,
-    reviewPolicy: learning.ports.checks, clock: learning.clock, limiter: host.replyLimiter });
+    enabled: () => state.enabled, runtime: () => runtime, limiter: host.replyLimiter });
   const learningHandler = async (request: Request) => {
     const response = await actualHandler(request); await state.afterHandler?.(); return response;
   };
@@ -134,7 +133,11 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
   const calls: { path: string; method: string; body?: string; csrf: string | null;
     status?: number; serverStatus?: number; transportError?: boolean }[] = [];
   const state = { actor: 'staff' as Actor, lostAck: false, loseOrdinaryAck: false, postCommitLogout: false,
-    pauseLearning: undefined as ReturnType<typeof browserGate<void>> | undefined };
+    loseReviewAck: false, loseCancelAck: false, postReviewLogout: false,
+    pauseLearning: undefined as ReturnType<typeof browserGate<void>> | undefined,
+    pauseOrdinaryAck: undefined as ReturnType<typeof browserGate<void>> | undefined,
+    pauseCurrentDetail: undefined as ReturnType<typeof browserGate<void>> | undefined,
+    loseMutationAck: false };
   let reloads = 0;
   let activeRequests = 0;
   const window = Object.assign(new EventTarget(), { location: {
@@ -165,6 +168,21 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
       const incoming = new Request(IDENTITY_ISSUER + path, { ...init, headers });
       const response = path.startsWith('/api/identity/') ? await f.identityRuntime.api(incoming) : await api(incoming);
       observed.serverStatus = response.status;
+      const pathname = new URL(path, IDENTITY_ISSUER).pathname;
+      const ordinaryMutation = (init.method === 'PATCH' && pathname === base) ||
+        (init.method === 'POST' && (pathname === base + '/messages' || pathname === base + '/take-over'));
+      // Defer delivery only after genuine route/SDK execution. No auth or
+      // persistence result is synthesized by these ordering barriers.
+      if (ordinaryMutation && state.pauseOrdinaryAck) await state.pauseOrdinaryAck.promise;
+      // The real controller omits method for GET, as fetch permits. Hold the
+      // normalized request method already recorded above, including default GET.
+      if (observed.method === 'GET' && pathname === base && state.pauseCurrentDetail)
+        await state.pauseCurrentDetail.promise;
+      if (ordinaryMutation && response.ok && state.loseMutationAck) {
+        state.loseMutationAck = false;
+        observed.status = 503;
+        return new Response(JSON.stringify({ error: 'synthetic_lost_ack' }), { status: 503 });
+      }
       if (path.endsWith('/learning/enroll') && init.method === 'POST' && response.ok) {
         if (state.postCommitLogout) {
           state.postCommitLogout = false;
@@ -172,6 +190,16 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
           // The client must also fence an ACK against the closing real session.
         }
         if (state.lostAck) { state.lostAck = false; observed.status = 503; return new Response(JSON.stringify({ error: 'synthetic_lost_ack' }), { status: 503 }); }
+      }
+      if (init.method === 'POST' && path.endsWith('/learning/review') && response.ok && state.postReviewLogout) {
+        state.postReviewLogout = false;
+        await f.sessions.destroy(f.ids.get(state.actor)!);
+      }
+      if (init.method === 'POST' && response.ok &&
+        ((path.endsWith('/learning/review') && state.loseReviewAck) ||
+          (path.endsWith('/learning/review-cancel') && state.loseCancelAck))) {
+        state.loseReviewAck = false; state.loseCancelAck = false; observed.status = 503;
+        return new Response(JSON.stringify({ error: 'synthetic_lost_review_ack' }), { status: 503 });
       }
       if (path.endsWith('/messages') && init.method === 'POST' && response.ok && state.loseOrdinaryAck) {
         state.loseOrdinaryAck = false;
@@ -194,6 +222,12 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
   const field = (key: string) => { const value = node('staff-learning-panel').all().find((value) => value.dataset.learningField === key); if (!value) throw new Error('Missing learning field ' + key); return value; };
   const pending = () => runInContext('learningPending()', vm) as boolean;
   const writes = () => calls.filter((call) => call.method !== 'GET');
+  const ordinaryPending = () => runInContext('ordinaryPacket !== null || takeoverPacket !== null', vm) as boolean;
+  const admittedLearning = runInContext('learningRequest', vm) as (run: () => Promise<unknown>) => Promise<unknown>;
+  const actualApi = runInContext('api', vm) as (path: string, init: RequestInit) => Promise<unknown>;
+  const probeLearningAdmission = (expectedRevision: number) => admittedLearning(() => actualApi(base + '/learning/enroll', {
+    method: 'POST', body: JSON.stringify({ commandId: 'QUEUED-ENROLL-MUST-STAY-BLOCKED', expectedRevision }),
+  }));
   async function diagnose() {
     // Failure-only metadata: no DOM inputs, request bodies, credentials, hashes,
     // article text, candidate content, provenance or arbitrary SDK payloads.
@@ -249,10 +283,14 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
     };
   }
   const wait = (check: () => boolean) => eventually(check, diagnose);
-  const dispose = () => { window.dispatchEvent(new Event('pagehide')); for (const timer of timers) clearTimeout(timer); timers.clear(); disposers.delete(dispose); };
+  const dispose = () => {
+    state.pauseLearning?.resolve(); state.pauseOrdinaryAck?.resolve(); state.pauseCurrentDetail?.resolve();
+    window.dispatchEvent(new Event('pagehide'));
+    for (const timer of timers) clearTimeout(timer); timers.clear(); disposers.delete(dispose);
+  };
   disposers.add(dispose);
   await wait(() => node('staff-ticket-detail').hidden === false || node('staff-ticket-signed-out').hidden === false || node('staff-ticket-forbidden').hidden === false);
-  return { node, action, control, field, pending, state, calls, writes, window, document, dispose, wait, get reloads() { return reloads; },
+  return { node, action, control, field, pending, ordinaryPending, probeLearningAdmission, state, calls, writes, window, document, dispose, wait, get reloads() { return reloads; },
     async idle() { await wait(() => activeRequests === 0); },
     async ready(phase: 'fresh' | 'unresolved' = 'fresh') {
       const unresolved = phase === 'unresolved';
@@ -269,6 +307,64 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
 }
 
 describe('registered public staff ticket and learning panel with real auth/SDK routes', () => {
+
+  it('retains a genuinely accepted review when its original session is destroyed before the client closing fence', async () => {
+    const f = await backend(); await f.learning.enrollAndVerify(); await f.learning.delivered();
+    const page = await browser(f); await page.ready();
+    page.action('work'); await page.wait(() => page.node('staff-learning-panel').textContent.includes('Current learning work read.'));
+    page.action('proposal'); await page.wait(() => page.node('staff-learning-panel').textContent.includes('Checked private KB proposal shown.'));
+    page.state.postReviewLogout = true; page.action('approve');
+    await page.wait(() => page.node('staff-ticket-signed-out').hidden === false); await page.idle();
+    expect(page.pending()).toBe(true);
+    expect(page.node('staff-learning-panel').hidden).toBe(true);
+    expect(page.node('staff-learning-panel').textContent).not.toContain('Download and verify');
+    expect(page.writes().find((call) => call.path.endsWith('/learning/review'))?.serverStatus).toBe(200);
+    expect((await f.learning.rows()).filter((row) => row.kind === 'resolution_learning_review')).toHaveLength(1);
+  });
+  it('recovers a lost real review ACK through the actual controller after reopen and actual Knowledge revocation', async () => {
+    const f = await backend(); await f.learning.enrollAndVerify(); await f.learning.delivered();
+    const page = await browser(f); await page.ready();
+    page.action('work'); await page.wait(() => page.node('staff-learning-panel').textContent.includes('Current learning work read.'));
+    page.action('proposal'); await page.wait(() => page.node('staff-learning-panel').textContent.includes('Checked private KB proposal shown.'));
+    page.state.loseReviewAck = true; page.action('approve');
+    await page.wait(() => page.writes().some((call) => call.path.endsWith('/learning/review') && call.status === 503)); await page.idle();
+    const original = page.writes().find((call) => call.path.endsWith('/learning/review'))!;
+    await f.learning.application.reopenTicket(f.learning.actors.staff,
+      { ...f.learning.command('controller-after-review-reopen'), ticketId: learningTicketId });
+    await f.revoke('staff', KNOWLEDGE_ROLE);
+    const before = await f.learning.rows(); const start = page.calls.length;
+    page.action('check-review'); await page.wait(() => !page.pending()); await page.idle();
+    const recovery = page.writes().find((call) => call.path.endsWith('/learning/review-receipt'))!;
+    expect(recovery.body).toBe(original.body); expect(recovery.serverStatus).toBe(200);
+    expect(page.calls.slice(start).some((call) => /\/learning(?:\/(?:work|proposal))?(?:\?|$)/u.test(call.path))).toBe(false);
+    expect(await f.learning.rows()).toEqual(before);
+  });
+
+  it('keeps the actual controller pending after lost cancellation ACK and retries cancellation only', async () => {
+    const f = await backend(); await f.learning.enrollAndVerify(); const delivered = await f.learning.delivered();
+    const page = await browser(f); await page.ready();
+    page.action('work'); await page.wait(() => page.node('staff-learning-panel').textContent.includes('Current learning work read.'));
+    page.action('proposal'); await page.wait(() => page.node('staff-learning-panel').textContent.includes('Checked private KB proposal shown.'));
+    const draft = await f.learning.knowledge.getDraft(f.learning.actors.staff, { articleId: delivered.articleId });
+    await f.learning.knowledge.updateDraft(f.learning.actors.staff,
+      { ...f.learning.command('controller-stale-target', draft.generation), articleId: delivered.articleId,
+        collectionId: draft.revision.collectionId, draft: { kind: draft.revision.kind, title: 'Independently updated',
+          summary: draft.revision.summary, content: draft.revision.content, tags: draft.revision.tags,
+          applicability: draft.revision.applicability } });
+    page.action('approve');
+    await page.wait(() => page.writes().some((call) => call.path.endsWith('/learning/review') && call.status === 503)); await page.idle();
+    const original = page.writes()[0]!;
+    page.state.loseCancelAck = true; page.action('cancel-review');
+    await page.wait(() => page.writes().some((call) => call.path.endsWith('/learning/review-cancel') && call.status === 503)); await page.idle();
+    expect(page.pending()).toBe(true); const before = await f.learning.rows();
+    page.action('retry'); await page.wait(() => !page.pending()); await page.idle();
+    const reviews = page.writes().filter((call) => /\/learning\/review(?:-cancel)?$/u.test(call.path));
+    expect(reviews.map((call) => call.path.split('/').at(-1))).toEqual(['review', 'review-cancel', 'review-cancel']);
+    expect(reviews.every((call) => call.body === original.body)).toBe(true);
+    expect(await f.learning.rows()).toEqual(before);
+    expect(before.filter((row) => row.kind === 'resolution_learning_review')).toHaveLength(0);
+  });
+
   it('mounts one persistent panel only from the current detail capability and leaves the legacy absence OFF', async () => {
     const f = await backend(); await f.learning.terminal();
     const old = await browser(f, true);
@@ -396,8 +492,9 @@ describe('registered public staff ticket and learning panel with real auth/SDK r
     page.action('proposal'); await page.wait(() => page.node('staff-learning-panel').textContent.includes('Checked private KB proposal shown.'));
     page.action('approve'); await page.wait(() => !page.pending() && page.writes().length === 1);
     const packet = JSON.parse(page.writes()[0]?.body ?? '{}');
-    expect(Object.keys(packet).sort()).toEqual(['commandId', 'decision', 'expectedWorkGeneration', 'reviewBindingHash', 'sourceGeneration']);
-    expect(packet.reviewBindingHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(Object.keys(packet).sort()).toEqual(['commandId', 'decision', 'intent']);
+    expect(packet.intent.reviewerId).toBe(f.principals.staff);
+    expect(packet.intent.target.contentHash).toMatch(/^[0-9a-f]{64}$/u);
     const draft = await f.learning.knowledge.getDraft(f.learning.actors.staff, { articleId: delivered.articleId });
     expect(draft.state).toBe('draft');
   });
@@ -434,6 +531,97 @@ describe('registered public staff ticket and learning panel with real auth/SDK r
     expect(repeated).toHaveLength(2); expect(repeated[1]?.body).toBe(first.body);
     expect(JSON.stringify(await f.learning.rows())).toBe(rows);
   });
+  it.each(['patch', 'reply', 'take-over'] as const)(
+    'suspends learning during an actual %s and admits it only after the ACK and complete current GET', async (kind) => {
+      const f = await backend(); await f.learning.terminal();
+      if (kind === 'take-over') await f.learning.application.reopenTicket(f.learning.actors.staff,
+        { ...f.learning.command('open-deferred-takeover'), ticketId: learningTicketId });
+      const before = await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId);
+      const page = await browser(f); await page.ready(); await page.idle();
+      const staleEnroll = page.control('enroll');
+      const ack = browserGate<void>(); page.state.pauseOrdinaryAck = ack;
+      if (kind === 'patch') page.node('action-assign').fire('click');
+      else if (kind === 'take-over') page.node('action-take-over').fire('click');
+      else {
+        for (const input of page.node('staff-compose-form').all())
+          if (input.attributes.get('name') === 'composeMode') input.checked = input.value === 'public';
+        page.node('compose-body').value = 'A fictional deferred ordinary reply.';
+        page.node('staff-compose-form').fire('change'); page.node('staff-compose-form').fire('submit');
+      }
+      await page.wait(() => page.writes().length === 1 && page.writes()[0]?.serverStatus === (kind === 'reply' ? 201 : 200));
+      expect(page.node('staff-learning-panel').hidden).toBe(true);
+      expect(staleEnroll.disabled).toBe(true);
+      staleEnroll.fire('click');
+      await expect(page.probeLearningAdmission(before.ticket.revision)).rejects.toMatchObject({ stale: true });
+      expect(page.writes().filter((call) => isLearningPath(call.path))).toEqual([]);
+      expect(page.pending()).toBe(false);
+      const current = browserGate<void>(); page.state.pauseCurrentDetail = current;
+      page.state.pauseOrdinaryAck = undefined; ack.resolve();
+      await page.wait(() => page.calls.some((call) => call.path === base && call.method === 'GET' &&
+        call.serverStatus === 200 && call.status === undefined));
+      expect(page.node('staff-learning-panel').hidden).toBe(true);
+      staleEnroll.fire('click');
+      await expect(page.probeLearningAdmission(before.ticket.revision)).rejects.toMatchObject({ stale: true });
+      expect(page.writes().filter((call) => isLearningPath(call.path))).toEqual([]);
+      page.state.pauseCurrentDetail = undefined; current.resolve();
+      await page.ready(); await page.idle();
+      expect(page.ordinaryPending()).toBe(false);
+      const after = await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId);
+      expect(after.ticket.revision).toBeGreaterThan(before.ticket.revision);
+      page.action('enroll');
+      await page.wait(() => !page.pending() && page.writes().filter((call) => isLearningPath(call.path)).length === 1 &&
+        page.node('staff-learning-panel').textContent.includes('Action acknowledged.'));
+      const enrollment = page.writes().find((call) => isLearningPath(call.path))!;
+      expect(enrollment.path).toBe(base + '/learning/enroll');
+      expect(JSON.parse(enrollment.body ?? '{}').expectedRevision).toBe(after.ticket.revision);
+      expect(f.learning.state.modelCalls).toBe(0);
+    },
+  );
+
+  it.each(['patch', 'reply', 'take-over'] as const)(
+    'keeps learning blocked through an unknown actual %s ACK and a current GET until exact ordinary recovery', async (kind) => {
+      const f = await backend(); await f.learning.terminal();
+      if (kind === 'take-over') await f.learning.application.reopenTicket(f.learning.actors.staff,
+        { ...f.learning.command('open-unknown-takeover'), ticketId: learningTicketId });
+      const before = await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId);
+      const page = await browser(f); await page.ready(); await page.idle();
+      page.state.loseMutationAck = true;
+      if (kind === 'patch') page.node('action-assign').fire('click');
+      else if (kind === 'take-over') page.node('action-take-over').fire('click');
+      else {
+        for (const input of page.node('staff-compose-form').all())
+          if (input.attributes.get('name') === 'composeMode') input.checked = input.value === 'public';
+        page.node('compose-body').value = 'A fictional unknown ordinary reply.';
+        page.node('staff-compose-form').fire('change'); page.node('staff-compose-form').fire('submit');
+      }
+      await page.wait(() => page.node('staff-ticket-detail').hidden && page.ordinaryPending() && page.writes().length === 1);
+      const original = page.writes()[0]!;
+      expect(original.serverStatus).toBe(kind === 'reply' ? 201 : 200);
+      expect(original.status).toBe(503);
+      await page.reload(); await page.idle();
+      expect(page.ordinaryPending()).toBe(true);
+      expect(page.node('staff-learning-panel').hidden).toBe(true);
+      expect(page.control('enroll').disabled).toBe(true);
+      page.action('enroll');
+      await expect(page.probeLearningAdmission(before.ticket.revision)).rejects.toMatchObject({ stale: true });
+      expect(page.writes()).toHaveLength(1);
+      expect(page.pending()).toBe(false);
+      const rows = JSON.stringify(await f.learning.rows());
+      if (kind === 'patch') page.node('action-assign').fire('click');
+      else if (kind === 'take-over') page.node('action-take-over').fire('click');
+      else page.node('staff-compose-form').fire('submit');
+      await page.ready(); await page.idle();
+      expect(page.ordinaryPending()).toBe(false);
+      const repeated = page.writes().filter((call) => !isLearningPath(call.path));
+      expect(repeated).toHaveLength(2);
+      expect(repeated[1]?.path).toBe(original.path);
+      expect(repeated[1]?.method).toBe(original.method);
+      expect(repeated[1]?.body).toBe(original.body);
+      expect(JSON.stringify(await f.learning.rows())).toBe(rows);
+      expect(page.writes().filter((call) => isLearningPath(call.path))).toEqual([]);
+      expect(f.learning.state.modelCalls).toBe(0);
+    },
+  );
   it('does not let ordinary controls race an awaited learning request and clears the panel on page suspension', async () => {
     const f = await backend(); await f.learning.terminal();
     const page = await browser(f); await page.ready();

@@ -15,14 +15,21 @@ activation evidence.
 
 ## Packages and authority
 
-The host pins Support Desk packages to **0.2.1** and its direct Knowledge Base
-packages to **0.1.5**. The optional AI package still recognizes the exact KB
-**0.1.2** error constructors. The registry alias
-`@pegma/knowledge-base-ai-compat` supplies those constructors;
-[the compatibility port](../worker/src/support-learning-ports.ts) translates only
-recognized not-found and concurrency errors from the direct KB application.
-It does not create another KB application, Store or authorization policy. See
-[package pins](../package.json) and the [lockfile](../pnpm-lock.yaml).
+The host selects all five published Support Desk packages at **0.2.5** and its
+four direct Knowledge Base packages at **0.1.5**. The qualified
+[Support 0.2.5 release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5)
+also uses exact KB **0.1.5** public contracts. The
+[public forwarding port](../worker/src/support-learning-ports.ts) preserves the
+actual KB error instances; the obsolete KB 0.1.2 constructor alias and translation
+shim are removed. See [package pins](../package.json) and the
+[lockfile](../pnpm-lock.yaml). Package publication and installation do not qualify
+this host's changed review flow or activate learning.
+
+Historically, Support **0.2.1** used nested KB **0.1.2** while this host selected
+direct KB **0.1.5**. The exact `@pegma/knowledge-base-ai-compat` registry alias and
+recognized-error translation belonged to that earlier assembly. Its failed
+isolated production-layout diagnostic remains historical evidence; neither its
+ordinary fixture passes nor that failure qualifies the current 0.2.5 graph.
 
 The current [host policy](../worker/src/support-access.ts) grants four human
 learning permissions through the actual stored, audited **Support** role:
@@ -38,8 +45,14 @@ The routes also require current Support queue-read authority. Invalidation keeps
 the SDK's learning-withdraw check as well as the HTTP evidence-submit entry
 check; the entry permission never replaces application/resource guards. Human Support does
 not gain `support.learning.process`, service identities or KB permissions.
-Proposal reads and reviews additionally require current KB `draftRead` **and**
-`provenanceRead`, normally through the separately assigned **Knowledge** role.
+Proposal reads and new review mutations additionally require current KB
+`draftRead` **and** `provenanceRead`, normally through the separately assigned
+**Knowledge** role. The runtime rechecks those permissions, learning review and
+queue authority before and after the SDK's actual commit-proof callback, for
+browser submissions and trusted direct SDK reviews. HTTP requires a complete
+review intent and fences the original browser session and headers at commit. Exact accepted-receipt recovery and explicit
+cancellation require current learning review/queue and browser authority without
+reconstructing obsolete KB proof or requiring a retained Knowledge grant.
 Knowledge or Admin alone does not grant Support access. Learning approval does
 not grant KB review or publication authority.
 
@@ -76,7 +89,7 @@ Processing uses only the permitted customer-visible solution/transcript rows;
 internal notes never enter model input or customer KB output. A generated
 candidate is bounded untrusted data, not publication proof. Trusted checks,
 current target selection and human KB governance remain separate gates.
-The actual transitions, including `unverified0 → eligible1` and a missing-product
+The actual transitions, including `unverified0 â†’ eligible1` and a missing-product
 `held0`, run through real auth, routes and SDKs in
 [the browser integration tests](../src/support-learning-integration.test.ts).
 The [panel tests](../src/support-learning.test.ts) also cover invalid counters,
@@ -94,12 +107,15 @@ request-header bindings are fenced across awaited reads, body parsing, operation
 and final responses. A postcommit denial can withhold an ACK while a durable SDK
 effect remains; it does not roll the effect back.
 
-All mutation bodies are closed objects. There are no client actor, role, target,
-provenance, product, policy, timestamp, receipt-authority or correlation fields.
-The server preserves `commandId` exactly, including case, and derives its own
-stable correlation identity from actor, operation, ticket and that exact ID.
-Scalar IDs and reasons are bounded to 200 characters; `reviewBindingHash` is
-64 lowercase hexadecimal characters. Ticket revisions,
+All mutation bodies are closed objects. Ordinary packets cannot independently
+supply actor, role, target, provenance, product, policy, timestamp,
+receipt-authority or correlation fields. Review packets echo the complete
+server-prepared immutable intent, including its actor/target/policy coordinates;
+that echo grants no authority and remains subject to SDK validation. The server
+preserves `commandId` exactly, including case, and derives its own stable
+correlation identity from actor, operation, ticket and that exact ID for submit,
+receipt and cancellation alike. Scalar IDs and reasons are bounded to 200
+characters. A hash-only body fails review packet validation. Ticket revisions,
 resolution cycles and requested work/review generations are positive safe
 integers. Query generations use canonical positive decimal text, with no
 duplicate or extra query keys. The existing JSON reader limits the body to
@@ -110,10 +126,12 @@ body deadline.
 | --- | --- | --- |
 | `GET` base | No query | Source generation, resolution cycle, state, reconciliation flag and optional hold reason |
 | `GET /work` | Exactly `sourceGeneration=N`, positive | Work generation, status, stage, proposal-presence flag and optional hold reason |
-| `GET /proposal` | Exactly `sourceGeneration=N`, positive | Current eligible source/work, actual checked private KB draft, expected work generation and server-issued `reviewBindingHash` |
+| `GET /proposal` | Exactly `sourceGeneration=N`, positive | Actual checked private KB draft and complete immutable review intent, including source/work/target and full trusted policy binding |
 | `POST /enroll` | `commandId`, `expectedRevision` | Actual SDK source result; initial generation may be zero |
 | `POST /evidence` | `commandId`, `expectedRevision`, `resolutionCycle`, `solutionMessageId`, `verificationReference` | Server fixes the evidence kind to `staff_verified_fix` |
-| `POST /review` | `commandId`, `sourceGeneration`, `expectedWorkGeneration`, `reviewBindingHash`, `decision`; optional `reason` | `approve` or `reject` of the exact currently checked proposal |
+| `POST /review` | `commandId`, `intent`, `decision`; optional `reason` | `approve` or `reject`; accepted result is `{outcome:'accepted',result}` |
+| `POST /review-receipt` | The identical retained review packet | Actual accepted/cancelled receipt union, or `null`; no stale source/KB reconstruction |
+| `POST /review-cancel` | The identical retained review packet | Atomically fence that exact unaccepted review, or recover its existing accepted receipt |
 | `POST /invalidate` | `commandId`, `reason` | Evidence/product/check-policy invalidation |
 | `POST /withdraw` | `commandId`, `reason` | Privacy/access/deletion withdrawal |
 
@@ -123,10 +141,16 @@ Invalidation reasons are exactly `evidence_revoked`, `product_binding_revoked` a
 
 Ordinary source/work DTOs contain no KB body, generated candidate, draft payload,
 private proof or exact delivery request. The separate proposal route requires KB
-authority, reads the actual draft and provenance, resolves the current trusted
-check policy and binds what was shown. Review rereads those facts and compares
-the shown binding before the SDK's final guard. A changed proposal needs a new
-explicit review; it cannot rebind an earlier command ID.
+authority and prepares the actual draft plus the SDK's full immutable intent.
+The entire policy binding, including verification and expiry timestamps, remains
+part of that exact command. A new review checks current source, target and
+policy plus the fresh human commit guards. Accepted receipt recovery precedes
+obsolete proof reads. A changed proposal needs a new explicit review after the
+old command is acknowledged or explicitly cancelled; it cannot rebind an earlier
+command ID. Cancellation does not undo an already accepted review. A `null`
+receipt or any error is not a terminal acknowledgement. An external commit-guard
+refusal may conservatively surface as `503` acknowledgement uncertainty; retain
+the packet instead of inferring a new command is safe.
 
 Success is `{result, csrfToken}`. Errors use closed safe codes and the existing
 no-store JSON response convention; durable rate limiting supplies `Retry-After`
@@ -147,18 +171,26 @@ Only a fully refreshed current staff detail response with
 not a credential. [The router](../worker/src/support-api.ts) emits it only when the
 optional server callback is configured, after current stored Support,
 Identity/session and ticket reads. Absent capability is false; the browser does
-not infer it from a 404. The old detail JSON shape stays unchanged when the
-callback is omitted. The learning namespace is dispatched before legacy generic
-mutations, and stays 404 without both a configured handler and a current strict
+not infer it from a 404. The separate `learningReviewRecoveryEnabled` hint can
+keep only a retained review's receipt/cancel controls available when ordinary
+learning reads are unavailable. It grants no authority; the server still checks
+the original browser and current review/queue permissions. Recovery controls
+remain outside the hidden private-draft panel. The old detail JSON shape stays
+unchanged when the callback is omitted. The learning namespace is dispatched
+before legacy generic mutations, and stays 404 without both a configured handler and a current strict
 true readiness callback.
 
 A sent action retains its original actor, ticket, route and **exact JSON bytes**
 in the panel's page-lifetime closure. A timeout, denial, malformed ACK or raced
 session change leaves it unresolved. No GET, new proposal or apparent state
-change acknowledges it. Recovery is a fresh read under the original account and
-ticket followed by an explicit retry of the same packet, using current CSRF;
-it never invents a replacement command ID. A valid ACK must also pass the closing
-same-session check before the packet can clear.
+change acknowledges it. Recovery uses the original account and ticket with
+current CSRF and the identical retained packet. Explicit receipt lookup or exact submission retry can recover
+acceptance without reopening obsolete source/KB facts. Explicit cancellation
+becomes sticky: after an unknown cancellation ACK, Retry keeps cancelling the
+same command instead of resending approval. A null receipt, ordinary GET or new
+proposal never clears it. A valid accepted/cancelled ACK must also pass the
+closing same-session check before the packet can clear; no replacement command
+ID is invented.
 
 Ticket refresh, sign-out, address changes and account A-to-B-to-A transitions
 clear private DOM immediately while preserving that unresolved packet for its
@@ -180,7 +212,7 @@ The source seams are optional and preserve previous defaults:
 | [Learning runtime](../worker/src/support-learning.ts) | Supply actual applications, source verifier, clock and a current staff resolver; `processingEnabled` defaults false and missing ports hold work before claiming or paying |
 | [Knowledge runtime](../worker/src/knowledge-runtime.ts) `privateSources` option | Pass the same current source verifier into the direct KB application and its ready path |
 | [Projection application and maintenance](../worker/src/knowledge-retrieval-maintenance.ts), [ready factory](../worker/src/knowledge-retrieval-ready.ts) `privateSources` options | Preserve that verifier when constructing projection/repair applications, so derived hints cannot bypass current source authority |
-| [HTTP handler](../worker/src/support-learning-handlers.ts) and [Support router](../worker/src/support-api.ts) | Supply real auth, lazy runtime, direct KB reads, trusted review policy, clock, existing durable limiter and current surface/readiness callbacks |
+| [HTTP handler](../worker/src/support-learning-handlers.ts) and [Support router](../worker/src/support-api.ts) | Supply real auth, lazy learning runtime, existing durable limiter and current surface/readiness callbacks. The runtime supplies trusted KB, checks and clock ports. |
 
 Intake, model processing and HTTP availability are separate controls. Model
 processing defaults off; an incomplete processing assembly returns a held result.
@@ -208,12 +240,14 @@ synthetic.
 
 ## Validation status and remaining gates
 
-The released-pin learning baseline has passed **24 Memory cases and three genuine
-local Native D1 cases**; the HTTP surface has passed **39 cases**. The current
-focused browser/backend run passed **93 cases**: 24 assembly, 45 panel, nine actual
-browser integration and 15 router cases. The current Astro, Worker and recipe
-check reported zero errors. These counts overlap the assembly baseline; they are
-scoped results, not a sum proving a complete workflow.
+At the earlier Support **0.2.1** / direct KB **0.1.5** learning checkpoint,
+**24 Memory cases and three genuine local Native D1 cases** passed; the HTTP
+surface passed **39 cases**. That earlier focused browser/backend run passed
+**93 cases**: 24 assembly, 45 panel, nine actual browser integration and 15 router
+cases, with zero errors in its Astro, Worker and recipe check. These historical
+counts overlap the assembly baseline. They precede this 0.2.2 adoption and
+full-intent/commit-guard changes and do not qualify the current host source.
+Current-head host validation, CI and review remain required.
 
 Relevant executable sources are the
 [Memory assembly](../worker/src/support-learning.test.ts),
@@ -227,7 +261,13 @@ Whole current Native-suite and whole HTTP-invocation query/parameter evidence,
 CPU/day limits, deployment, actual client/provider privacy evidence, complete
 customer/staff/admin workflow acceptance and pilot gates remain open. A separate
 native answering run with released Support 0.2.1, KB 0.1.5 and the D1 adapter
-failed the Workers Free 50-call whole-invocation limit. The proposed staged
-retrieval Support 0.2.2 remains an **unpublished SDK candidate** under separate
-producer review; it is not a released dependency or evidence that this host fits
-Free. Neither grouped reads nor these focused source results close activation.
+failed the Workers Free 50-call whole-invocation limit. Published Support
+**0.2.2** now supplies opt-in staged assistant retrieval, separately from learning:
+preparation consumes attempt one without paid usage or a model call, and paid
+generation consumes attempt two in a genuinely later physical invocation. Both
+attempt limits must allow at least two. Only a durable acknowledged no-call finish
+returns `prepared`; an uncertain finish remains `pending`. Default behavior stays
+monolithic, and an opted-in host must return rather than resume through the same
+invocation or `waitUntil`. These producer semantics are not a passed whole-host
+Free, CPU or daily-quota result. Neither grouped reads nor historical focused
+source results close activation.

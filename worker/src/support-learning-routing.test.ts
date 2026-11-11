@@ -58,8 +58,7 @@ async function fixture() {
     afterDetail: undefined as (() => Promise<void>) | undefined,
     afterHandler: undefined as (() => Promise<void>) | undefined };
   const actualHandler = createSupportLearningHandlers({ ...authority,
-    enabled: () => state.enabled, runtime: () => runtime, knowledge: learning.knowledge,
-    reviewPolicy: learning.ports.checks, clock: learning.clock, limiter: host.replyLimiter });
+    enabled: () => state.enabled, runtime: () => runtime, limiter: host.replyLimiter });
   const learningHandler = async (request: Request) => {
     const response = await actualHandler(request); await state.afterHandler?.(); return response;
   };
@@ -166,8 +165,8 @@ describe('optional public learning namespace through actual Support router/auth/
     const delivered = await f.learning.delivered();
     const shown = await json(await f.api(f.request(base + '/learning/proposal?sourceGeneration=' + delivered.source.sourceGeneration)));
     if (!isPlainObject(shown.result)) throw new Error('Expected actual checked proposal');
-    const packet = { commandId: 'REVIEW-EXACT-UPPERCASE', sourceGeneration: shown.result.sourceGeneration,
-      expectedWorkGeneration: shown.result.expectedWorkGeneration, reviewBindingHash: shown.result.reviewBindingHash, decision: 'approve' };
+    if (!isPlainObject(shown.result.intent)) throw new Error('Expected the actual complete SDK review intent');
+    const packet = { commandId: 'REVIEW-EXACT-UPPERCASE', intent: shown.result.intent, decision: 'approve' };
     const first = await f.api(f.request(base + '/learning/review', 'staff', packet));
     expect(first.status).toBe(200);
     const rows = JSON.stringify(await f.learning.rows());

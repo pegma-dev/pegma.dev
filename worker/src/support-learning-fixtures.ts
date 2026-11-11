@@ -50,7 +50,8 @@ type Actor = keyof typeof principalIds;
 /** Actual audited role assignments are read again for every authority resolve. */
 export async function createSupportLearningFixture(
   store: Store,
-  options: { readonly intake?: boolean; readonly processing?: boolean } = {},
+  options: { readonly intake?: boolean; readonly processing?: boolean; readonly stagedReviews?: boolean;
+    readonly readScheduling?: 'sdk'; readonly beforeSourceRead?: (ticketId: string) => void | Promise<void> } = {},
 ) {
   let milliseconds = Date.parse('2026-11-10T12:00:00.000Z');
   const clock = { now: () => new Date(milliseconds).toISOString() };
@@ -150,6 +151,7 @@ export async function createSupportLearningFixture(
     store, clock,
     resolutionLearning: supportLearningApplicationOptions({
       enabled: options.intake ?? true,
+      ...(options.stagedReviews === true ? { stagedReviews: true } : {}),
       checks,
       productContext: {
         async resolve(context) {
@@ -173,7 +175,15 @@ export async function createSupportLearningFixture(
       } };
     },
   };
-  const sources = createSupportLearningSourceBridge({ application, serviceAccess, reviewPolicy: checks, clock });
+  const sourceApplication = options.beforeSourceRead === undefined ? application : {
+    ...application,
+    async readResolutionLearningSource(...args: Parameters<typeof application.readResolutionLearningSource>) {
+      await options.beforeSourceRead?.(args[1]);
+      return application.readResolutionLearningSource(...args);
+    },
+  };
+  const sources = createSupportLearningSourceBridge({ application: sourceApplication, serviceAccess, reviewPolicy: checks, clock,
+    ...(options.readScheduling === undefined ? {} : { readScheduling: options.readScheduling }) });
   let knowledge: KnowledgeBaseApplication;
   const reports = createKnowledgeEvidenceReports({
     store, clock, collectionName: 'synthetic-support-learning-reports.v1',
@@ -235,6 +245,7 @@ export async function createSupportLearningFixture(
   const runtimeFor = () => createSupportLearningRuntime({
     application, knowledge: directKnowledge, sources, clock, ports,
     processingEnabled: () => state.enabled,
+    ...(options.readScheduling === undefined ? {} : { readScheduling: options.readScheduling }),
     staffAccess: { async resolve(id) { await state.beforeStaffResolve?.(); return resolve(id); } },
   });
   let runtime = runtimeFor();

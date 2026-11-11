@@ -34,6 +34,9 @@
     let work = null;
     let shownBinding = null;
     let pending = null;
+    let pendingAction = 'submit';
+    let pollTimer = null;
+    let polls = 0;
     let busy = false;
     let ready = false;
     let retryAt = 0;
@@ -62,13 +65,15 @@
     const invalidateReason = choice('invalidate-reason', 'Invalidation reason', invalidationReasons);
     const invalidateButton = button('invalidate', 'Invalidate learning evidence', () => mutate('invalidate'));
     const retryButton = button('retry', 'Retry the previous exact action', () => retry());
+    const receiptButton = button('check-review', 'Check the unresolved review', () => recoverReview('receipt'));
+    const cancelButton = button('cancel-review', 'Cancel the unresolved review', () => recoverReview('cancel'));
     privatePanel.append(sourceText, workText, readWorkButton, proposalButton,
       proposalText, enrollButton, solution.label, verification.label, evidenceButton,
       reviewReason.label, approveButton, rejectButton, withdrawReason.label,
-      withdrawButton, invalidateReason.label, invalidateButton, retryButton);
+      withdrawButton, invalidateReason.label, invalidateButton);
     root.replaceChildren(element('h2', 'Resolution learning'),
       element('p', 'Staff review only. Approved proposals remain KB drafts for a separate publication review.'),
-      status, refreshButton, privatePanel);
+      status, refreshButton, privatePanel, retryButton, receiptButton, cancelButton);
     hidePrivate();
     controls();
 
@@ -124,6 +129,23 @@
       shownBinding = null;
       ready = false;
     }
+    function stopPolling() {
+      if (pollTimer !== null) globalThis.clearTimeout?.(pollTimer);
+      pollTimer = null;
+    }
+    function pollReview(generation, candidate, held) {
+      stopPolling();
+      // Poll only a durably admitted intent, never an ambiguous failed write.
+      // Ten read-only polls bound automatic traffic; explicit recovery remains.
+      if (held || polls >= 10 || candidate.queued !== true || pending !== candidate ||
+        generation !== epoch || context === null || typeof globalThis.setTimeout !== 'function') return;
+      pollTimer = globalThis.setTimeout(() => {
+        pollTimer = null;
+        if (pending !== candidate || generation !== epoch || context === null || busy) return;
+        ++polls;
+        void recoverReview('receipt');
+      }, 30_000);
+    }
     function canRecordEvidence() {
       return source !== null && source.state !== 'withdrawn' && context?.resolved === true;
     }
@@ -141,8 +163,16 @@
       readWorkButton.disabled = blocked || !canReadWork();
       proposalButton.disabled = blocked || !canReadWork() || work?.hasProposal !== true;
       retryButton.hidden = pending === null;
-      retryButton.disabled = blocked || pending === null ||
+      retryButton.disabled = busy || context === null || (pending?.review !== true && !ready) || pending === null ||
         pending.subject !== context?.actorSubject || pending.ticketId !== context?.ticketId;
+      for (const node of [receiptButton, cancelButton]) {
+        node.hidden = pending?.review !== true;
+        node.disabled = busy || context === null || pending?.review !== true ||
+          pending.subject !== context?.actorSubject || pending.ticketId !== context?.ticketId;
+      }
+      if (pending?.review === true && pendingAction === 'cancel') retryButton.textContent = 'Retry the exact cancellation';
+      else if (pending?.queued === true) retryButton.textContent = 'Retry the exact queued review intent';
+      else retryButton.textContent = 'Retry the previous exact action';
       for (const node of [solution.input, verification.input, reviewReason.input,
         withdrawReason.input, invalidateReason.input]) node.disabled = blocked || pending !== null;
     }
@@ -191,6 +221,7 @@
     }
     function failure(error, generation) {
       if (generation !== epoch || error?.stale) return;
+      stopPolling();
       hidePrivate();
       session = null;
       if (error?.status === 429) retryAt = Math.max(retryAt,
@@ -214,6 +245,28 @@
       try { await run(generation); }
       catch (error) { failure(error, generation); }
       finally { if (generation === epoch) { busy = false; controls(); } }
+    }
+    function checkedIntent(value) {
+      const exact = (input, keys) => object(input) && Object.keys(input).length === keys.length &&
+        keys.every((key) => Object.prototype.hasOwnProperty.call(input, key));
+      if (!exact(value, ['reviewerId', 'ticketId', 'sourceGeneration', 'expectedWorkGeneration', 'target', 'policy']) ||
+        value.reviewerId !== context.actorSubject || value.ticketId !== context.ticketId ||
+        !exact(value.target, ['articleId', 'collectionId', 'articleRevision', 'contentHash',
+          'sourceSnapshotGeneration', 'sourceSnapshotHash', 'orderedReferencesHash']) ||
+        !exact(value.policy, ['version', 'binding', 'verifiedAt', 'validUntil'])) throw invalid();
+      positive(value.sourceGeneration); positive(value.expectedWorkGeneration);
+      positive(value.target.articleRevision); sourceCounter(value.target.sourceSnapshotGeneration);
+      for (const key of ['articleId', 'collectionId']) scalar(value.target[key]);
+      for (const key of ['contentHash', 'sourceSnapshotHash', 'orderedReferencesHash'])
+        if (typeof value.target[key] !== 'string' || !/^[0-9a-f]{64}$/u.test(value.target[key])) throw invalid();
+      scalar(value.policy.version); scalar(value.policy.binding);
+      for (const key of ['verifiedAt', 'validUntil']) {
+        const stamp = scalar(value.policy[key], 40); const parsed = Date.parse(stamp);
+        if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== stamp) throw invalid();
+      }
+      return Object.freeze({ reviewerId: value.reviewerId, ticketId: value.ticketId,
+        sourceGeneration: value.sourceGeneration, expectedWorkGeneration: value.expectedWorkGeneration,
+        target: Object.freeze({ ...value.target }), policy: Object.freeze({ ...value.policy }) });
     }
     function validateSource(value) {
       if (!object(value) || value.ticketId !== context.ticketId ||
@@ -259,8 +312,8 @@
         hidePrivate();
         const actor = await viewer(generation, previous.session);
         const result = await call(`${base()}/${kind}?sourceGeneration=${selected}`, { method: 'GET' }, generation, actor);
-        if (!object(result) || result.ticketId !== context.ticketId || result.sourceGeneration !== selected)
-          throw invalid();
+        if (!object(result) || result.ticketId !== context.ticketId ||
+          (kind === 'work' && result.sourceGeneration !== selected)) throw invalid();
         let next;
         if (kind === 'work') {
           positive(result.workGeneration);
@@ -269,13 +322,12 @@
           next = Object.freeze({ workGeneration: result.workGeneration,
             status: result.status, stage: result.stage, hasProposal: result.hasProposal });
         } else {
-          positive(result.expectedWorkGeneration);
-          if (typeof result.reviewBindingHash !== 'string' || !/^[0-9a-f]{64}$/u.test(result.reviewBindingHash) ||
+          const intent = checkedIntent(result.intent);
+          if (intent.sourceGeneration !== selected ||
             !object(result.draft?.revision) || typeof result.draft.revision.title !== 'string' ||
-            !object(result.draft.revision.content) || typeof result.draft.revision.content.text !== 'string') throw invalid();
-          next = Object.freeze({ sourceGeneration: selected,
-            expectedWorkGeneration: result.expectedWorkGeneration,
-            reviewBindingHash: result.reviewBindingHash });
+            !object(result.draft.revision.content) || typeof result.draft.revision.content.text !== 'string' ||
+            result.draft.revision.articleId !== intent.target.articleId) throw invalid();
+          next = Object.freeze({ intent });
         }
         await viewer(generation, actor);
         current(generation);
@@ -290,8 +342,8 @@
           work = next;
           workText.textContent = `Work ${next.workGeneration} · ${next.status} · ${next.stage}${next.hasProposal ? ' · private proposal available' : ''}`;
         } else {
-          // The full checked revision is visible as inert text. No client target,
-          // provenance, reviewer identity or policy can be sent back as authority.
+          // The actual checked revision is inert text. Echo its immutable intent
+          // as a binding; the server/SDK recheck authority and new-write proof.
           proposalText.textContent = JSON.stringify(result.draft.revision, null, 2);
           shownBinding = next;
         }
@@ -309,8 +361,9 @@
           solutionMessageId: scalar(solution.input.value), verificationReference: scalar(verification.input.value) };
       } else if (action === 'approve' || action === 'reject') {
         if (shownBinding === null || !canReadWork()) throw new Error('not_ready');
-        path = 'review';
-        value = { ...shownBinding, decision: action,
+        try { path = options.stagedReviewsEnabled?.() === true ? 'review-queue' : 'review'; }
+        catch { path = 'review'; }
+        value = { intent: shownBinding.intent, decision: action,
           ...(reviewReason.input.value === '' ? {} : { reason: scalar(reviewReason.input.value) }) };
       } else if (action === 'withdraw' || action === 'invalidate') {
         const reason = action === 'withdraw' ? withdrawReason.input.value : invalidateReason.input.value;
@@ -318,42 +371,85 @@
         value = { reason };
       } else throw new Error('invalid_input');
       // Never normalize a command identifier or reconstruct a sent JSON packet.
-      const body = JSON.stringify({ commandId: scalar(commandId()), ...value });
+      const id = scalar(commandId());
+      const body = JSON.stringify({ commandId: id, ...value });
       return Object.freeze({ subject: context.actorSubject, ticketId: context.ticketId,
-        path: `${base()}/${path}`, body });
+        path: `${base()}/${path}`, body, commandId: id,
+        review: path === 'review' || path === 'review-queue', queued: path === 'review-queue',
+        reviewGeneration: path === 'review' || path === 'review-queue' ? shownBinding.intent.sourceGeneration : undefined });
     }
     function pendingChanged() {
       try { options.onPendingChange?.(pending !== null); } catch { /* The packet remains owned here. */ }
     }
-    async function send(candidate, generation) {
+    async function send(candidate, generation, action = 'submit') {
       if (now() < retryAt) {
         notice('The server requested a retry delay. Wait before retrying the same action.', true);
         return;
       }
       const expected = session;
+      stopPolling();
       hidePrivate();
       controls();
       const actor = await viewer(generation, expected);
       if (candidate.subject !== actor.subject || candidate.ticketId !== context.ticketId)
         throw Object.assign(new Error('session_changed'), { status: 401 });
       current(generation);
-      if (pending === null) { pending = candidate; pendingChanged(); }
+      if (pending === null) { pending = candidate; pendingAction = 'submit'; pendingChanged(); }
       else if (pending !== candidate) throw new Error('pending_action');
       hidePrivate();
       controls();
-      const result = await call(candidate.path, { method: 'POST',
+      if (candidate.review && action === 'cancel') pendingAction = 'cancel';
+      if (candidate.review && action === 'submit' && pendingAction === 'cancel') action = 'cancel';
+      const path = candidate.review && action !== 'submit'
+        ? candidate.path + (action === 'receipt' ? (candidate.queued ? '-status' : '-receipt') : '-cancel') : candidate.path;
+      const result = await call(path, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: candidate.body }, generation, actor);
-      if (!object(result) || result.ticketId !== candidate.ticketId ||
-        !['unverified', 'eligible', 'held', 'withdrawn'].includes(result.state)) throw invalid();
-      if (candidate.path.endsWith('/review')) positive(result.sourceGeneration);
-      else sourceCounter(result.sourceGeneration);
-      positive(result.resolutionCycle);
+      let cancelled = false;
+      if (candidate.review) {
+        if (candidate.queued && object(result) && result.outcome === 'pending') {
+          if (result.ticketId !== candidate.ticketId || result.commandId !== candidate.commandId ||
+            !['proof', 'commit'].includes(result.phase) || typeof result.claimed !== 'boolean' ||
+            typeof result.held !== 'boolean' || typeof result.expiresAt !== 'string' ||
+            !Number.isFinite(Date.parse(result.expiresAt)) || new Date(result.expiresAt).toISOString() !== result.expiresAt)
+            throw invalid();
+          await viewer(generation, actor);
+          session = actor;
+          notice(result.held
+            ? 'The recorded review intent is held. Keep the original action to check or cancel it.'
+            : 'The review intent is recorded and pending. This is not a completed review or KB publication.');
+          pollReview(generation, candidate, result.held);
+          return;
+        }
+        if (action === 'receipt' && result === null) {
+          await viewer(generation, actor); current(generation);
+          notice('No exact receipt was observed. The review may still complete; keep its original packet.', true);
+          return;
+        }
+        if (!object(result)) throw invalid();
+        if (result.outcome === 'cancelled') {
+          if (result.ticketId !== candidate.ticketId || result.commandId !== candidate.commandId) throw invalid();
+          cancelled = true;
+        } else if (result.outcome === 'accepted') {
+          const accepted = result.result;
+          if (!object(accepted) || accepted.ticketId !== candidate.ticketId ||
+            accepted.sourceGeneration !== candidate.reviewGeneration ||
+            !['unverified', 'eligible', 'held', 'withdrawn'].includes(accepted.state)) throw invalid();
+          positive(accepted.sourceGeneration); positive(accepted.resolutionCycle);
+        } else throw invalid();
+      } else {
+        if (!object(result) || result.ticketId !== candidate.ticketId ||
+          !['unverified', 'eligible', 'held', 'withdrawn'].includes(result.state)) throw invalid();
+        sourceCounter(result.sourceGeneration); positive(result.resolutionCycle);
+      }
       await viewer(generation, actor);
       current(generation);
       if (pending !== candidate) throw invalid();
-      pending = null;
+      pending = null; pendingAction = 'submit';
+      polls = 0;
+      stopPolling();
       pendingChanged();
-      notice('Action acknowledged. Read the source again before another action.');
+      notice(cancelled ? 'Review cancellation acknowledged. Read current state before another action.'
+        : 'Action acknowledged. Read the source again before another action.');
     }
     async function mutate(action) {
       if (pending !== null || busy || !ready) return;
@@ -363,11 +459,16 @@
       return operation((generation) => send(candidate, generation));
     }
     async function retry() {
-      if (pending === null || !ready || busy) return;
+      if (pending === null || (pending.review !== true && !ready) || busy) return;
       return operation((generation) => send(pending, generation));
+    }
+    async function recoverReview(action) {
+      if (pending?.review !== true || context === null || busy) return;
+      return operation((generation) => send(pending, generation, action));
     }
     function suspend() {
       ++epoch;
+      stopPolling();
       cancelReads();
       context = null;
       session = null;
@@ -376,7 +477,7 @@
       notice(pending ? 'An earlier action is awaiting confirmation under its original account and ticket.' : 'Learning view cleared.');
       controls();
     }
-    async function showTicket(value) {
+    async function showTicket(value, mode = {}) {
       suspend();
       try {
         const ticketId = scalar(value?.ticketId);
@@ -386,10 +487,14 @@
           resolved: ['resolved', 'closed'].includes(value.status) &&
             typeof value.resolvedAt === 'string' && Number.isFinite(Date.parse(value.resolvedAt)) });
       } catch { notice('A current staff ticket is required.', true); controls(); return; }
+      if (mode.recoveryOnly === true && pending?.review === true) {
+        notice('The original review is retained. Check its exact receipt or explicitly cancel it.');
+        controls(); return;
+      }
       return refresh();
     }
     return Object.freeze({ showTicket, refresh, suspend,
-      hasPending: () => pending !== null });
+      hasPending: () => pending !== null, hasPendingReview: () => pending?.review === true });
   }
   globalThis.PegmaSupportLearning = Object.freeze({ createPanel });
 })();

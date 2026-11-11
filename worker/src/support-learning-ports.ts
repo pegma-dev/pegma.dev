@@ -1,13 +1,5 @@
 import type { AccessContext } from '@pegma/authorization-core';
-import {
-  KnowledgeBaseNotFoundError,
-  RepositoryConflictError,
-  type KnowledgeBaseApplication,
-} from '@pegma/knowledge-base-application';
-import {
-  KnowledgeBaseNotFoundError as LearningKnowledgeNotFoundError,
-  RepositoryConflictError as LearningRepositoryConflictError,
-} from '@pegma/knowledge-base-ai-compat';
+import type { KnowledgeBaseApplication } from '@pegma/knowledge-base-application';
 import type {
   LearningKnowledgeApplication,
   SupportDeskLearningOptions,
@@ -19,6 +11,13 @@ export interface SupportLearningStaffAccess {
     principalId: string,
     signal: AbortSignal,
   ): Promise<AccessContext | null>;
+}
+
+/** Durable review admission is explicitly opt-in and independent of model generation. */
+export interface SupportLearningStagedReviewOptions {
+  readonly enabled: () => boolean;
+  /** Best-effort acceleration after durable SDK admission; never review authority. */
+  readonly enqueue: (key: { readonly ticketId: string; readonly commandId: string }) => Promise<void>;
 }
 
 /** These are trusted server ports, never a browser or model response envelope. */
@@ -41,24 +40,14 @@ export type DirectLearningKnowledge = Pick<
 >;
 
 /**
- * AI 0.2.1 recognizes its exact KB 0.1.2 error constructors. The alias is a
- * public registry dependency, not another application, Store or policy model.
- * Translate only the two recognized direct-KB errors; never disclose a private
- * resource name, message or cause through the compatibility boundary.
+ * Support 0.2.5 uses the same exact KB 0.1.5 public contracts as this host.
+ * Forward the narrow capability surface and preserve actual error identity.
  */
 export function createSupportLearningKnowledgePort(
   application: DirectLearningKnowledge,
 ): LearningKnowledgeApplication {
   async function call<Result>(operation: () => Promise<Result>): Promise<Result> {
-    try {
-      return await operation();
-    } catch (error) {
-      if (error instanceof KnowledgeBaseNotFoundError)
-        throw new LearningKnowledgeNotFoundError('knowledge_resource');
-      if (error instanceof RepositoryConflictError)
-        throw new LearningRepositoryConflictError();
-      throw error;
-    }
+    return operation();
   }
   return Object.freeze<LearningKnowledgeApplication>({
     searchPublishedArticles: (access, input) =>
