@@ -160,10 +160,13 @@ function bindingMeter(backing: D1Database) {
           ...env,
           IDENTITY_DB: database,
           IDENTITY_EMAIL_CODE_SECRET_BASE64: humanSecret,
-          PEGMA_KNOWLEDGE_ENABLED: 'false',
           DATADOG_API_KEY: undefined,
-          ...extra,
         };
+        // Override the generated deployment literal for disabled-path coverage.
+        Object.defineProperty(configuration, 'PEGMA_KNOWLEDGE_ENABLED', {
+          value: 'false',
+        });
+        Object.assign(configuration, extra);
         // Every call traverses the real worker.fetch and reconstructs its actual
         // Identity/Support/session/role services. Setup cannot supply warm ones.
         const response = await worker.fetch(request, configuration, {

@@ -1,8 +1,11 @@
 # Knowledge Base host composition
 
 The KB host integration is merged in
-[PR #59](https://github.com/pegma-dev/pegma.dev/pull/59), with public activation
-disabled. The host uses
+[PR #59](https://github.com/pegma-dev/pegma.dev/pull/59). The checked-in profile
+enables controlled staff authoring qualification with three explicit public client
+registrations and closed test collections once the reviewed Worker configuration
+is deployed. Deployment of this profile, native-client acceptance and broader
+rollout remain pending. The host uses
 exact published `@pegma/agent-access@0.1.1` and all four
 `@pegma/knowledge-base-*` packages at `0.1.5`, over its existing Identity,
 Sessions, stored roles and D1 Store. The public catalog at `/api/mcp` remains
@@ -42,8 +45,8 @@ at signed source
 passed full-set original-byte, signature/provenance and registry-consumer
 verification. Recovery retained the original prepared artifact without
 repacking; the [release run completed at attempt 5](https://github.com/pegma-dev/knowledge-base/actions/runs/42576167664/attempts/5).
-Activation remains disabled; producer verification and installation are not host
-or actual-client acceptance.
+That checkpoint records producer verification and installation, with activation
+disabled. Host and actual-client acceptance remain separate.
 Do not substitute a source
 checkout, local tarball, dependency override, or forced SDK/schema deduplication
 for the released producer graph. The catalog transport and protected KB
@@ -96,15 +99,55 @@ for [commit `3a4e5c6a`](https://github.com/pegma-dev/pegma.dev/commit/3a4e5c6a39
 also passed the configured frozen install, check, full 1,125 tests and build.
 These results describe that source checkpoint. Review and deployment acceptance
 remain pending for the changed host.
-Actual-client acceptances remain at zero and no pilot has run. Keep activation disabled through the
-remaining deployed-host, staging/privacy and actual-client acceptance gates.
+Actual-client acceptances remain at zero and no pilot has run. The controlled
+staff profile below permits gathering those results against closed test
+collections. Broader rollout, customer AI and pilot qualification remain pending.
 
 ## Configuration and activation
 
-`worker/wrangler.jsonc` starts with `PEGMA_KNOWLEDGE_ENABLED=false` and
-`PEGMA_AGENT_CLIENTS_JSON=[]`. Disabled requests return before constructing
-Identity or opening D1. Scheduled storage maintenance is a separate path and
-must continue independently of this request switch.
+[`worker/wrangler.jsonc`](../worker/wrangler.jsonc) sets
+`PEGMA_KNOWLEDGE_ENABLED=true` and three explicit public client registrations
+for controlled staff qualification. The previously applied profile was disabled
+with an empty list. Deployment of this profile and completed client flows remain
+pending.
+
+Use existing site login and Admin consent, closed staff-test collections and
+fictional product documentation. Collections, navigation, roles and grants remain
+unchanged. The learning-review flag stays false;
+customer AI, automatic publication, engineering processing/export and other
+provider capabilities remain unchanged and off. All five cron expressions and
+their lanes are retained exactly.
+
+The first tests use these operator-selected registrations. Each test verifies
+them against the installed client.
+
+| Public client ID | First intended flow | Registered callback |
+| --- | --- | --- |
+| `pg-kb-codex-accept-v1` | Codex CLI, authorization code with PKCE | `http://127.0.0.1/callback`; Agent Access `0.1.1` permits only the IP-loopback port substitution |
+| `pg-kb-claude-accept-v1` | Claude Code, authorization code with PKCE | `http://localhost:48772/callback`; configure the client to use that exact port |
+| `pg-kb-device-accept-v1` | Separate RFC 8628 host control | No redirect URI; device-code grant only |
+
+Port `48772` was available on both IPv4 and IPv6 loopback during the local
+2026-11-11 availability check. The port remains unreserved. Record the actual
+callback, installed version and provider mode during each test. Require the
+registered hostname and path, with only the declared IP-loopback port
+substitution. The RFC 8628 host control has its own result, separate from native
+CLI proof. Codex CLI and Claude Code acceptance remain pending. Hosted Grok Bot
+and T3 Code registrations and acceptance remain pending.
+
+Each registration permits only `knowledge.article.draft.read`,
+`knowledge.article.draft.write` and `knowledge.article.evidence.submit`.
+Admin-only linking and the existing browser, collection-audience, human review
+and exact-publication boundaries remain authoritative. Admin roles and
+publication, review, collection/governance and private-provenance authority
+remain outside the delegated scope.
+
+For rollback, revoke known test grants through their existing owner controls
+while available, then restore `PEGMA_KNOWLEDGE_ENABLED=false` and
+`PEGMA_AGENT_CLIENTS_JSON=[]` through the same configuration/deployment path.
+The false flag rejects requests before constructing Identity or opening D1.
+Changing the flag leaves stored grant families unchanged. Scheduled storage
+maintenance continues independently of this switch.
 
 Missing or empty client configuration disables the OAuth issuer and delegated
 transports. Invalid optional agent configuration also leaves those paths
@@ -135,18 +178,21 @@ documented scope rather than a trace-redaction acceptance result. The normal
 check dry-runs the main config with direct Wrangler `4.128.0`, and the Node
 config regression requires its normalized root redaction flag to be `true`.
 The [Worker toolchain notes](../worker/README.md#toolchain-compatibility)
-record the retained older type generation and test-pool parser, optional
+record the current generated runtime, retained older test-pool parser, optional
 workers-types mismatch and upstream Miniflare pairing.
 
-This setting does not establish redaction of arbitrary application messages,
-exception strings, or Live Tail output. Keep application diagnostics
-content-free and qualify the deployed configuration with synthetic query
-sentinels before private OAuth acceptance. Source configuration, tests and a
-dry run alone do not prove deployed redaction.
+On 2026-11-11, after the redaction change in
+[PR #63](https://github.com/pegma-dev/pegma.dev/pull/63) was deployed, three
+fictional GET requests produced positive retained log rows whose observed
+invocation URLs omitted their query strings and synthetic query values.
+The deployed proof covers request-URL logging. Arbitrary application messages,
+exception strings and Live Tail output remain unqualified, and traces remain
+disabled. Keep application diagnostics content-free. Source parsing, tests and
+dry runs provide local validation.
 
-Keep test collections closed during controlled staff acceptance. The disabled
-candidate is not advertised through new global navigation or Account links.
-Expose those entry points only after activation requirements pass. Actual
+Test collections stay closed and global navigation and Account links remain
+unchanged. Broader discoverability, rollout, CPU/load qualification and
+supervised pilot results remain pending. Actual
 existing-login/Admin consent, device/PKCE flows, scoped API/MCP operations,
 revocation, and failure cases must be observed through the requested clients.
 Source and full D1 tests do not establish any of the four actual client
@@ -438,7 +484,9 @@ bridge to `createKnowledgeRuntime`, `createKnowledgeRetrievalReady` and
 `createKnowledgeRetrievalMaintenance`; request-only wiring cannot qualify
 projection work. Omission blocks retained nonempty source references; there is
 no allow-all fallback. The root request and scheduled compositions do not yet
-supply that bridge and keep Knowledge disabled. The real-Memory
+supply that bridge. Retained nonempty private source references therefore remain
+unavailable. Controlled ordinary product-guide authoring omits Support/private
+source references. Source-enabled learning qualification remains pending. The real-Memory
 [composition test](../worker/src/support-learning-composition.test.ts) exercises
 accepted Support sources and current reopen/withdraw/missing-ticket refusals
 through the actual factories, without bypassing KB evidence/publication gates.
@@ -465,8 +513,9 @@ invocations, including genuine 32-proof/96-revocation history, pending work,
 transport failure, newer enqueue races and lost-hint recovery, with a hard
 50-call guard on the bounded Free-plan cases. This local result does not
 establish deployed CPU limits, daily quotas or sustained production throughput.
-Preserve all authority and history checks, keep activation disabled and complete
-the live-platform gates before use.
+Preserve all authority and history checks. The controlled staff profile permits
+closed test-collection authoring. Live-platform CPU, quota and load qualification,
+source-enabled workflows and broader rollout remain pending.
 
 Disable Knowledge if its acceptance fails. Identity and role administration
 remain independent. Support Desk's human-control adoption is documented separately in

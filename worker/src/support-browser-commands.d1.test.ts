@@ -164,15 +164,19 @@ function meter(backing: D1Database) {
           // This is the actual production entry point. Each request constructs
           // fresh Identity, roles, Sessions and Support services over the binding.
           const context = createExecutionContext();
+          const configuration: Parameters<typeof worker.fetch>[1] = {
+            ...env,
+            IDENTITY_DB: database,
+            IDENTITY_EMAIL_CODE_SECRET_BASE64: humanSecret,
+            DATADOG_API_KEY: undefined,
+          };
+          // Override the generated deployment literal for disabled-path coverage.
+          Object.defineProperty(configuration, 'PEGMA_KNOWLEDGE_ENABLED', {
+            value: 'false',
+          });
           const response = await worker.fetch(
             request,
-            {
-              ...env,
-              IDENTITY_DB: database,
-              IDENTITY_EMAIL_CODE_SECRET_BASE64: humanSecret,
-              PEGMA_KNOWLEDGE_ENABLED: 'false',
-              DATADOG_API_KEY: undefined,
-            },
+            configuration,
             context,
           );
           await waitOnExecutionContext(context);

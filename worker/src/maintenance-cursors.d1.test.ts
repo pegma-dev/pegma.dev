@@ -206,11 +206,14 @@ describe('maintenance cursor writes over D1', () => {
         ...env,
         IDENTITY_DB: metered.database,
         DATADOG_API_KEY: undefined,
-        PEGMA_KNOWLEDGE_ENABLED: 'false',
         get IDENTITY_EMAIL_CODE_SECRET_BASE64(): string {
           return secretRead();
         },
       };
+      // Override the generated deployment literal for disabled-path coverage.
+      Object.defineProperty(scheduledEnvironment, 'PEGMA_KNOWLEDGE_ENABLED', {
+        value: 'false',
+      });
       // Wrangler's generated type records the deployed default literal, while
       // this test intentionally supplies malformed runtime configuration.
       Object.defineProperty(scheduledEnvironment, 'PEGMA_AGENT_CLIENTS_JSON', {
