@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "check": "astro check && tsc -p worker/tsconfig.json --noEmit && tsc -p recipes/tsconfig.json --noEmit && pnpm run check:assistant-stage",
+    "check": "astro check && tsc -p worker/tsconfig.json --noEmit && tsc -p recipes/tsconfig.json --noEmit && pnpm run check:worker && pnpm run check:assistant-stage",
+    "check:worker": "wrangler deploy --config worker/wrangler.jsonc --dry-run --outdir .wrangler/worker-dry-run",
     "check:assistant-stage": "tsc -p scripts/tsconfig.support-assistant-stage.json --noEmit && wrangler deploy --config worker/wrangler.assistant-stage.jsonc --dry-run --outdir .wrangler/assistant-stage-dry-run",
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.d1.config.ts && vitest run --config vitest.bench-ticket.config.ts",
     "test:node": "vitest run --config vitest.config.ts",
