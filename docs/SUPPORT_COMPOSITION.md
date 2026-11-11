@@ -444,7 +444,6 @@ store probe runs only when `SUPPORT_HEALTH_PROBE` is exactly `"true"`.
 
 Built in the open by RetireGolden, LLC.
 
-
 ## Optional engineering human composition
 
 The [engineering assembly](SUPPORT_ENGINEERING.md) uses policy version 6.
@@ -456,6 +455,24 @@ The Worker accepts a trusted optional engineering composition. Its current
 enabled callback and dependency bundle gate the router and staff-detail hints.
 Human review has an additional strict current flag. The default Worker passes
 no engineering configuration, leaving intake, review and processing OFF.
+
+The optional [repository metadata adapter](../worker/src/support-engineering-repository.ts)
+supplies the existing Application `repositoryMetadata` and human review
+`github.getMetadata` ports. Its immutable allowlist identifies each repository,
+GitHub App and installation. A trusted host issuer must supply current,
+expiring App-JWT and installation-token authority; no credential issuer or live
+repository is configured by default. Each observation makes two read-only
+GitHub requests: [repository installation discovery](https://docs.github.com/en/rest/apps/apps#get-a-repository-installation-for-the-authenticated-app)
+with the App JWT, then [repository metadata](https://docs.github.com/en/rest/repos/repos#get-a-repository)
+with the installation token. Public repository visibility alone does not prove
+installation membership. Exact identity, visibility, active installation and
+current host authority must agree. One deadline bounds authentication and both
+streamed responses to ten seconds or the earlier caller deadline or credential
+expiry, with at most 64 KiB per response and no retries or cached observations.
+The [composition regression](../worker/src/support-engineering-repository.test.ts)
+uses actual SDK policy and human approval with fictional external responses.
+This read capability adds no issue writes, model calls, processor or scheduler,
+and does not enable the default Worker or qualify a live GitHub installation.
 
 A configured staged-learning factory receives the same optional composition
 as its third `create` argument. It composes `composeSupportEngineeringHuman`
