@@ -921,11 +921,17 @@ describe('real production KB request budgets over actual D1', () => {
             ...env,
             IDENTITY_DB: meter.database,
             DATADOG_API_KEY: undefined,
-            PEGMA_KNOWLEDGE_ENABLED: 'false',
             get IDENTITY_EMAIL_CODE_SECRET_BASE64(): string {
               throw new Error('Rate cleanup must not initialize Identity.');
             },
           };
+          // Override the generated deployment literal for disabled-path coverage.
+          Object.defineProperty(configuration, 'PEGMA_KNOWLEDGE_ENABLED', {
+            value: 'false',
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
           Object.defineProperty(configuration, 'PEGMA_AGENT_CLIENTS_JSON', {
             value: 'not-json',
           });

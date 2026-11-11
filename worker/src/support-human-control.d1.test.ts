@@ -160,10 +160,16 @@ function bindingMeter(backing: D1Database) {
           ...env,
           IDENTITY_DB: database,
           IDENTITY_EMAIL_CODE_SECRET_BASE64: humanSecret,
-          PEGMA_KNOWLEDGE_ENABLED: 'false',
           DATADOG_API_KEY: undefined,
-          ...extra,
         };
+        // Override the generated deployment literal for disabled-path coverage.
+        Object.defineProperty(configuration, 'PEGMA_KNOWLEDGE_ENABLED', {
+          value: 'false',
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        Object.assign(configuration, extra);
         // Every call traverses the real worker.fetch and reconstructs its actual
         // Identity/Support/session/role services. Setup cannot supply warm ones.
         const response = await worker.fetch(request, configuration, {
@@ -247,6 +253,27 @@ async function fixture() {
 }
 
 describe('full cold-worker human controls within the actual D1 invocation guard', () => {
+  it('preserves an explicit enabled override after the disabled fixture default', async () => {
+    const meter = bindingMeter(env.IDENTITY_DB);
+    try {
+      const response = await meter.invoke(
+        new Request('https://pegma.dev/.well-known/oauth-authorization-server'),
+        { PEGMA_KNOWLEDGE_ENABLED: 'true' },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        issuer: 'https://pegma.dev',
+        scopes_supported: [
+          'knowledge.article.draft.read',
+          'knowledge.article.draft.write',
+          'knowledge.article.evidence.submit',
+        ],
+      });
+    } finally {
+      meter.assert();
+    }
+  });
+
   it.each([0, 80])(
     'executes all three routes and exact replays with %i real private notes in history',
     async (notes) => {
