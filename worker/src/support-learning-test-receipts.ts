@@ -2,16 +2,16 @@ import {
   hasPermission,
   serializeAccessContext,
   type AccessContext,
-} from '@pegma/authorization-core';
-import type { Clock } from '@pegma/spine';
-import { defineCollection, type Store } from '@pegma/storage-core';
-import { knowledgeDigest as evidenceDigest } from '@pegma/knowledge-base-core';
-import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
+} from "@pegma/authorization-core";
+import type { Clock } from "@pegma/spine";
+import { defineCollection, type Store } from "@pegma/storage-core";
+import { knowledgeDigest as evidenceDigest } from "@pegma/knowledge-base-core";
+import { knowledgePermissions } from "@pegma/knowledge-base-contracts";
 import type {
   GovernanceConfigurationDto,
   KnowledgeBaseApplication,
   KnowledgeEvidenceReports,
-} from '@pegma/knowledge-base-application';
+} from "@pegma/knowledge-base-application";
 import {
   supportPermissions,
   type ResolutionProductContext,
@@ -19,9 +19,9 @@ import {
   type ResolutionTestReceiptPort,
   type ResolutionTrustContext,
   type SupportDeskApplication,
-} from '@pegma/support-desk-application';
-import { knowledgeDigest } from './knowledge-evidence';
-import { KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION } from './support-access';
+} from "@pegma/support-desk-application";
+import { knowledgeDigest } from "./knowledge-evidence";
+import { KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION } from "./support-access";
 
 const MAX_REFERENCES = 16;
 const MAX_ROW_BYTES = 65_536;
@@ -52,13 +52,13 @@ export interface PrepareLearningTestReceipt {
 
 type SupportReads = Pick<
   SupportDeskApplication,
-  'readStaffTicket' | 'readResolutionLearningSource'
+  "readStaffTicket" | "readResolutionLearningSource"
 >;
 type KnowledgeReads = Pick<
   KnowledgeBaseApplication,
-  'getAuthoringContext' | 'confirmAuthoringContext'
+  "getAuthoringContext" | "confirmAuthoringContext"
 >;
-type ReportReads = Pick<KnowledgeEvidenceReports, 'read' | 'verifier'>;
+type ReportReads = Pick<KnowledgeEvidenceReports, "read" | "verifier">;
 interface BoundPorts {
   readonly support: SupportReads;
   readonly knowledge: KnowledgeReads;
@@ -67,7 +67,7 @@ interface BoundPorts {
 
 type ProductBinding = Pick<
   ResolutionProductContext,
-  'productId' | 'version' | 'buildId' | 'binding' | 'contextVersion'
+  "productId" | "version" | "buildId" | "binding" | "contextVersion"
 >;
 
 export interface LearningTestReceiptOptions {
@@ -115,49 +115,49 @@ interface Reference {
 }
 interface BindingRow {
   readonly partition: string;
-  readonly id: 'bindings';
+  readonly id: "bindings";
   readonly ticketId: string;
   readonly references: readonly Reference[];
 }
 
 export class LearningTestReceiptError extends Error {
-  readonly name = 'LearningTestReceiptError';
+  readonly name = "LearningTestReceiptError";
   constructor(
     readonly code:
-      'invalid' | 'forbidden' | 'changed' | 'unavailable' | 'capacity',
+      "invalid" | "forbidden" | "changed" | "unavailable" | "capacity",
   ) {
-    super('The approved test association is unavailable.');
+    super("The approved test association is unavailable.");
   }
 }
 
-function refuse(code: LearningTestReceiptError['code']): never {
+function refuse(code: LearningTestReceiptError["code"]): never {
   throw new LearningTestReceiptError(code);
 }
 function text(value: unknown, maximum = 200): asserts value is string {
   if (
-    typeof value !== 'string' ||
+    typeof value !== "string" ||
     value.trim().length === 0 ||
     value.length > maximum ||
     /[\u0000-\u001f\u007f]/u.test(value)
   )
-    refuse('invalid');
+    refuse("invalid");
 }
 function exactKeys(value: unknown, fields: readonly string[]): void {
   if (
     value === null ||
-    typeof value !== 'object' ||
+    typeof value !== "object" ||
     Array.isArray(value) ||
     Object.keys(value).some((field) => !fields.includes(field)) ||
     fields.some((field) => !Object.hasOwn(value, field))
   )
-    refuse('invalid');
+    refuse("invalid");
 }
 function positive(value: number) {
-  if (!Number.isSafeInteger(value) || value < 1) refuse('invalid');
+  if (!Number.isSafeInteger(value) || value < 1) refuse("invalid");
 }
 function instant(value: string): number {
   const result = Date.parse(value);
-  if (!Number.isFinite(result)) refuse('invalid');
+  if (!Number.isFinite(result)) refuse("invalid");
   return result;
 }
 function stableProduct(product: ResolutionProductContext): ProductBinding {
@@ -178,7 +178,7 @@ function actorPermissions(access: AccessContext) {
     knowledgePermissions.draftRead,
     knowledgePermissions.evidenceRead,
   ]) {
-    if (!hasPermission(access, permission)) refuse('forbidden');
+    if (!hasPermission(access, permission)) refuse("forbidden");
   }
 }
 function reviewerPermissions(access: AccessContext) {
@@ -187,30 +187,30 @@ function reviewerPermissions(access: AccessContext) {
     knowledgePermissions.draftRead,
     knowledgePermissions.evidenceRead,
   ]) {
-    if (!hasPermission(access, permission)) refuse('forbidden');
+    if (!hasPermission(access, permission)) refuse("forbidden");
   }
   if (
     !hasPermission(access, knowledgePermissions.evidenceSubmit) &&
     !hasPermission(access, knowledgePermissions.draftWrite)
   )
-    refuse('forbidden');
+    refuse("forbidden");
 }
 function validateInput(input: PrepareLearningTestReceipt) {
   exactKeys(input, [
-    'ticketId',
-    'expectedRevision',
-    'resolutionCycle',
-    'solutionMessageId',
-    'clientCommandId',
-    'report',
+    "ticketId",
+    "expectedRevision",
+    "resolutionCycle",
+    "solutionMessageId",
+    "clientCommandId",
+    "report",
   ]);
   exactKeys(input.report, [
-    'articleId',
-    'ledgerEpoch',
-    'reportId',
-    'expectedReportGeneration',
-    'reviewBindingHash',
-    'receipt',
+    "articleId",
+    "ledgerEpoch",
+    "reportId",
+    "expectedReportGeneration",
+    "reviewBindingHash",
+    "receipt",
   ]);
   for (const value of [
     input.ticketId,
@@ -229,18 +229,18 @@ function validateInput(input: PrepareLearningTestReceipt) {
   ])
     positive(value);
   if (!/^[a-f0-9]{64}$/u.test(input.report.reviewBindingHash))
-    refuse('invalid');
+    refuse("invalid");
 }
 function validateRow(row: BindingRow) {
-  exactKeys(row, ['partition', 'id', 'ticketId', 'references']);
+  exactKeys(row, ["partition", "id", "ticketId", "references"]);
   if (
-    row.id !== 'bindings' ||
+    row.id !== "bindings" ||
     !/^[a-f0-9]{64}$/u.test(row.partition) ||
     !Array.isArray(row.references) ||
     row.references.length > MAX_REFERENCES ||
     encoder.encode(JSON.stringify(row)).byteLength > MAX_ROW_BYTES
   )
-    refuse('invalid');
+    refuse("invalid");
   text(row.ticketId);
   const ids = new Set<string>();
   const commands = new Set<string>();
@@ -256,11 +256,11 @@ function validateRow(row: BindingRow) {
         ref.sourceFingerprint,
       ].every((v) => /^[a-f0-9]{64}$/u.test(v))
     )
-      refuse('invalid');
+      refuse("invalid");
     ids.add(ref.id);
     commands.add(ref.commandHash);
     validateInput(ref.prepared);
-    if (ref.prepared.ticketId !== row.ticketId) refuse('invalid');
+    if (ref.prepared.ticketId !== row.ticketId) refuse("invalid");
     text(ref.actorId);
     for (const value of Object.values(ref.product)) text(value);
     for (const value of [ref.executionId, ref.runnerId, ref.testId])
@@ -278,7 +278,7 @@ function validateRow(row: BindingRow) {
   return row;
 }
 const bindings = defineCollection<BindingRow>({
-  name: 'pegma.support-learning-test-bindings.v1',
+  name: "pegma.support-learning-test-bindings.v1",
   key: (row) => ({ partition: row.partition, id: row.id }),
   codec: {
     encode(value) {
@@ -289,19 +289,19 @@ const bindings = defineCollection<BindingRow>({
         payload: JSON.stringify(value),
       };
       if (encoder.encode(JSON.stringify(stored)).byteLength > MAX_ROW_BYTES)
-        refuse('capacity');
+        refuse("capacity");
       return stored;
     },
     decode(raw) {
       if (
-        typeof raw.payload !== 'string' ||
+        typeof raw.payload !== "string" ||
         encoder.encode(raw.payload).byteLength > MAX_ROW_BYTES
       )
-        refuse('invalid');
+        refuse("invalid");
       const value: BindingRow = JSON.parse(raw.payload);
       validateRow(value);
       if (raw.partition !== value.partition || raw.id !== value.id)
-        refuse('invalid');
+        refuse("invalid");
       return value;
     },
   },
@@ -316,7 +316,7 @@ export function createSupportLearningTestReceipts(
   positive(options.retentionMilliseconds);
   const duration = options.operationMilliseconds ?? 2500;
   positive(duration);
-  if (duration > 10_000) refuse('invalid');
+  if (duration > 10_000) refuse("invalid");
   const records = options.store.collection(bindings);
   const now = () => instant(options.clock.now());
   let bound: BoundPorts | undefined;
@@ -331,10 +331,10 @@ export function createSupportLearningTestReceipts(
         knowledge === undefined ||
         reports === undefined
       )
-        refuse('unavailable');
+        refuse("unavailable");
       current = { support, knowledge, reports };
     } catch {
-      refuse('unavailable');
+      refuse("unavailable");
     }
     if (
       bound !== undefined &&
@@ -342,7 +342,7 @@ export function createSupportLearningTestReceipts(
         bound.knowledge !== current.knowledge ||
         bound.reports !== current.reports)
     )
-      refuse('changed');
+      refuse("changed");
     bound ??= Object.freeze(current);
     return bound;
   }
@@ -354,10 +354,10 @@ export function createSupportLearningTestReceipts(
   ): Promise<T> {
     const controller = new AbortController();
     const abort = () => controller.abort();
-    parent?.addEventListener('abort', abort, { once: true });
+    parent?.addEventListener("abort", abort, { once: true });
     if (parent?.aborted) controller.abort();
     const check = () => {
-      if (controller.signal.aborted) refuse('unavailable');
+      if (controller.signal.aborted) refuse("unavailable");
     };
     let rejectTimeout: ((error: Error) => void) | undefined;
     const expired = new Promise<never>((_, reject) => {
@@ -365,14 +365,14 @@ export function createSupportLearningTestReceipts(
     });
     const timer = setTimeout(() => {
       controller.abort();
-      rejectTimeout?.(new LearningTestReceiptError('unavailable'));
+      rejectTimeout?.(new LearningTestReceiptError("unavailable"));
     }, duration);
     try {
       check();
       return await Promise.race([work(controller.signal, check), expired]);
     } finally {
       clearTimeout(timer);
-      parent?.removeEventListener('abort', abort);
+      parent?.removeEventListener("abort", abort);
     }
   }
 
@@ -388,31 +388,32 @@ export function createSupportLearningTestReceipts(
       const current = await resolve(signal);
       check();
       if (current === null || current.principalId !== actorId)
-        refuse('forbidden');
+        refuse("forbidden");
       actorPermissions(current);
       const snapshot = authority(current);
-      if (original !== undefined && snapshot !== original) refuse('changed');
+      if (original !== undefined && snapshot !== original) refuse("changed");
       original = snapshot;
-      return current;
+      return Object.freeze({
+        ...current,
+        roles: Object.freeze([...current.roles]),
+        entitlements: Object.freeze([...current.entitlements]),
+        permissions: Object.freeze([...current.permissions]),
+      });
     };
   }
 
   async function supportFacts(
-    current: () => Promise<AccessContext>,
+    access: AccessContext,
     prepared: PrepareLearningTestReceipt,
     actorId: string,
     signal: AbortSignal,
     check: () => void,
   ) {
     const application = ports().support;
-    const ticket = await application.readStaffTicket(
-      await current(),
-      prepared.ticketId,
-    );
-    const source = await application.readResolutionLearningSource(
-      await current(),
-      prepared.ticketId,
-    );
+    const [ticket, source] = await Promise.all([
+      application.readStaffTicket(access, prepared.ticketId),
+      application.readResolutionLearningSource(access, prepared.ticketId),
+    ]);
     check();
     const value = ticket.ticket;
     if (
@@ -420,15 +421,15 @@ export function createSupportLearningTestReceipts(
       value.revision !== prepared.expectedRevision ||
       source.resolutionCycle !== prepared.resolutionCycle ||
       value.resolvedAt === undefined ||
-      !['resolved', 'closed'].includes(value.status) ||
-      source.state === 'withdrawn' ||
+      !["resolved", "closed"].includes(value.status) ||
+      source.state === "withdrawn" ||
       !ticket.messages.some(
         (message) =>
           message.id === prepared.solutionMessageId &&
-          message.visibility === 'customer',
+          message.visibility === "customer",
       )
     )
-      refuse('changed');
+      refuse("changed");
     const trust: ResolutionTrustContext = {
       ticketId: value.id,
       ticketRevision: value.revision,
@@ -438,19 +439,19 @@ export function createSupportLearningTestReceipts(
       acceptedAt: options.clock.now(),
     };
     const product = await options.productContext.resolve(trust, signal);
-    await current();
+    check();
     if (
       product === null ||
       instant(product.verifiedAt) > now() ||
       instant(product.validUntil) <= now()
     )
-      refuse('changed');
+      refuse("changed");
     for (const field of Object.values(stableProduct(product))) text(field);
     return { trust, product, sourceFingerprint: await knowledgeDigest(source) };
   }
 
   async function qualify(
-    current: () => Promise<AccessContext>,
+    access: AccessContext,
     prepared: PrepareLearningTestReceipt,
     product: ResolutionProductContext,
     signal: AbortSignal,
@@ -462,23 +463,20 @@ export function createSupportLearningTestReceipts(
       reportId: prepared.report.reportId,
     };
     const actual = ports();
-    const view = await actual.reports.read(await current(), key);
-    if (typeof view.receipt !== 'string') refuse('unavailable');
+    const view = await actual.reports.read(access, key);
+    if (typeof view.receipt !== "string") refuse("unavailable");
     if (
-      view.status !== 'confirmed' ||
+      view.status !== "confirmed" ||
       view.confirmation === null ||
       view.receipt !== prepared.report.receipt ||
       view.reportGeneration !== prepared.report.expectedReportGeneration ||
       view.reviewBindingHash !== prepared.report.reviewBindingHash
     )
-      refuse('changed');
-    const observed = await actual.knowledge.getAuthoringContext(
-      await current(),
-      {
-        articleId: key.articleId,
-        includeEvidence: true,
-      },
-    );
+      refuse("changed");
+    const observed = await actual.knowledge.getAuthoringContext(access, {
+      articleId: key.articleId,
+      includeEvidence: true,
+    });
     const context = observed.context;
     const draft = context.draft.revision;
     const requirements = context.requirements;
@@ -489,10 +487,10 @@ export function createSupportLearningTestReceipts(
       (await knowledgeDigest(view.requirements)) !==
         (await knowledgeDigest(requirements))
     )
-      refuse('changed');
+      refuse("changed");
     const policy = await options.readGovernance(draft.collectionId, signal);
-    await current();
-    if (policy === null) refuse('unavailable');
+    check();
+    if (policy === null) refuse("unavailable");
     const configuration = policy.configuration;
     const submission = view.evidence;
     const confirmation = view.confirmation;
@@ -501,14 +499,14 @@ export function createSupportLearningTestReceipts(
       signal,
     );
     if (reviewer === null || reviewer.principalId !== confirmation.reviewerId)
-      refuse('forbidden');
+      refuse("forbidden");
     reviewerPermissions(reviewer);
     const checkRule = requirements.checks.find(
       (rule) =>
         rule.id === submission.checkId && rule.testKind === submission.testKind,
     );
     if (
-      submission.result !== 'passed' ||
+      submission.result !== "passed" ||
       checkRule === undefined ||
       !configuration.trustedAttesterIds.includes(confirmation.reviewerId) ||
       submission.articleId !== draft.articleId ||
@@ -538,7 +536,7 @@ export function createSupportLearningTestReceipts(
       (await knowledgeDigest(submission)) !== view.submissionHash ||
       (await knowledgeDigest(requirements)) !== view.governanceHash
     )
-      refuse('changed');
+      refuse("changed");
     const attestation = {
       id: view.receipt,
       verifiedBy: confirmation.reviewerId,
@@ -555,9 +553,8 @@ export function createSupportLearningTestReceipts(
             attestation,
           }))
       )
-        refuse('changed');
+        refuse("changed");
     }
-    const access = await current();
     if (
       access.principalId === view.submittedBy &&
       hasPermission(access, knowledgePermissions.evidenceSubmit)
@@ -574,31 +571,26 @@ export function createSupportLearningTestReceipts(
         (await knowledgeDigest(verified)) !==
           (await knowledgeDigest(attestation))
       )
-        refuse('changed');
+        refuse("changed");
     }
     // Different-staff association uses the authoritative public report/KB DTOs
     // above, never another owner's AccessContext or private report storage.
     await actual.knowledge.confirmAuthoringContext(
-      await current(),
+      access,
       observed.observation,
     );
-    const final = await actual.reports.read(await current(), key);
-    const latestPolicy = await options.readGovernance(
-      draft.collectionId,
-      signal,
-    );
-    const latestReviewer = await options.resolvePrincipal(
-      confirmation.reviewerId,
-      signal,
-    );
-    await current();
+    const [final, latestPolicy, latestReviewer] = await Promise.all([
+      actual.reports.read(access, key),
+      options.readGovernance(draft.collectionId, signal),
+      options.resolvePrincipal(confirmation.reviewerId, signal),
+    ]);
     if (
       latestReviewer === null ||
       authority(latestReviewer) !== authority(reviewer) ||
       (await knowledgeDigest(final)) !== (await knowledgeDigest(view)) ||
       (await knowledgeDigest(latestPolicy)) !== (await knowledgeDigest(policy))
     )
-      refuse('changed');
+      refuse("changed");
     check();
     ports();
     return {
@@ -647,9 +639,8 @@ export function createSupportLearningTestReceipts(
         signal,
         check,
       );
-      await current();
       const partition = await knowledgeDigest(prepared.ticketId);
-      const key = { partition, id: 'bindings' };
+      const key = { partition, id: "bindings" };
       const commandHash = await knowledgeDigest([
         original.principalId,
         prepared.clientCommandId,
@@ -659,40 +650,44 @@ export function createSupportLearningTestReceipts(
         prepared,
       });
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+        // Reuse this immutable admitted actor only for internal public reads.
+        // Refresh the original credentials after proof awaits and after CAS.
+        const access = await current();
         const saved = await records.getVersioned(key);
         if (
           saved !== null &&
           (saved.value.ticketId !== prepared.ticketId ||
             saved.value.partition !== partition)
         )
-          refuse('changed');
-        await current();
+          refuse("changed");
         const previous = saved?.value.references.find(
           (ref) => ref.commandHash === commandHash,
         );
         if (previous !== undefined) {
-          if (previous.inputHash !== inputHash) refuse('changed');
+          if (previous.inputHash !== inputHash) refuse("changed");
+          await current();
+          ports();
           return {
             receipt: receipt(previous),
             validUntil: previous.validUntil,
           };
         }
         const facts = await supportFacts(
-          current,
+          access,
           prepared,
           original.principalId,
           signal,
           check,
         );
         const qualified = await qualify(
-          current,
+          access,
           prepared,
           facts.product,
           signal,
           check,
         );
         const closing = await supportFacts(
-          current,
+          access,
           prepared,
           original.principalId,
           signal,
@@ -704,14 +699,14 @@ export function createSupportLearningTestReceipts(
           (await knowledgeDigest(stableProduct(closing.product))) !==
             (await knowledgeDigest(stableProduct(facts.product)))
         )
-          refuse('changed');
+          refuse("changed");
         const created = now();
         const validUntil = Math.min(
           qualified.expiry,
           instant(closing.product.validUntil),
           created + options.retentionMilliseconds,
         );
-        if (validUntil <= created) refuse('changed');
+        if (validUntil <= created) refuse("changed");
         const reference: Reference = {
           id: crypto.randomUUID(),
           commandHash,
@@ -734,10 +729,10 @@ export function createSupportLearningTestReceipts(
           retainUntil: new Date(qualified.retainUntil).toISOString(),
         };
         const references = [...(saved?.value.references ?? []), reference];
-        if (references.length > MAX_REFERENCES) refuse('capacity');
+        if (references.length > MAX_REFERENCES) refuse("capacity");
         const value: BindingRow = {
           partition,
-          id: 'bindings',
+          id: "bindings",
           ticketId: prepared.ticketId,
           references,
         };
@@ -757,11 +752,11 @@ export function createSupportLearningTestReceipts(
             validUntil: reference.validUntil,
           };
       }
-      refuse('unavailable');
+      refuse("unavailable");
     });
   }
 
-  const verify: ResolutionTestReceiptPort['verify'] = async (
+  const verify: ResolutionTestReceiptPort["verify"] = async (
     token,
     context,
     parent,
@@ -775,10 +770,10 @@ export function createSupportLearningTestReceipts(
           signal,
           check,
         );
-        await current();
+        const access = await current();
         const row = await records.get({
           partition: await knowledgeDigest(context.ticketId),
-          id: 'bindings',
+          id: "bindings",
         });
         if (row !== null && row.ticketId !== context.ticketId) return null;
         const reference = row?.references.find((ref) => receipt(ref) === token);
@@ -794,21 +789,21 @@ export function createSupportLearningTestReceipts(
         )
           return null;
         const before = await supportFacts(
-          current,
+          access,
           reference.prepared,
           reference.actorId,
           signal,
           check,
         );
         const qualified = await qualify(
-          current,
+          access,
           reference.prepared,
           context.product,
           signal,
           check,
         );
         const closing = await supportFacts(
-          current,
+          access,
           reference.prepared,
           reference.actorId,
           signal,
@@ -854,13 +849,13 @@ export function createSupportLearningTestReceipts(
       input.limit < 1 ||
       input.limit > 32
     )
-      refuse('invalid');
+      refuse("invalid");
     const page = await records.scan(input);
     let changed = 0;
     for (const entry of page.records) {
       const row = entry.value;
       if (row.partition !== entry.key.partition || row.id !== entry.key.id)
-        refuse('changed');
+        refuse("changed");
       const references = row.references.filter(
         (ref) => instant(ref.retainUntil) > now(),
       );
