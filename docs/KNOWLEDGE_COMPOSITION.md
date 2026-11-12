@@ -8,7 +8,7 @@ the existing deployment workflow, which deploys the Worker before the Pages
 site. Confirm that run and the metadata readback below before client tests.
 Native-client acceptance and broader rollout remain pending. The host uses
 exact published `@pegma/agent-access@0.1.1` and all four
-`@pegma/knowledge-base-*` packages at `0.1.5`, over its existing Identity,
+`@pegma/knowledge-base-*` packages at `0.1.6`, over its existing Identity,
 Sessions, stored roles and D1 Store. The public catalog at `/api/mcp` remains
 separate from protected article authoring.
 
@@ -21,23 +21,24 @@ at signed source
 passed independent exact-byte, signature/provenance and registry-consumer
 verification. Existing Identity and Support Desk keep their
 `@pegma/rate-limit@0.2.0` dependency. The current host selects all five Support
-Desk packages at `0.2.6`, including the optional AI coordinator. The separate
+Desk packages at `0.2.7`, including the optional AI coordinator. The separate
 synthetic stage remains default-disabled. The
-[verified Support Desk `0.2.6` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.6)
-pins its optional AI dependency on KB application/contracts `0.1.5`.
+[verified Support Desk `0.2.7` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7)
+pins its optional AI dependency on KB application/contracts `0.1.6`.
 
 The learning port forwards actual KB errors without the obsolete `0.1.2`
 constructor alias or class-translation shim. The earlier `0.2.1` / nested `0.1.2`
 assembly and its failed isolated production-layout diagnostic remain historical;
 they neither establish nor replace current-graph qualification.
 
-All four exact KB `0.1.5` packages are installed in the manifest and lockfile.
-The answering read-batching release retains the shared report factory and
-governed authoring-context/report-query APIs. Its producer verification covers
+All four exact KB `0.1.6` packages are installed in the manifest and lockfile.
+The release adds bounded native-client MCP request-metadata compatibility and
+retains the shared report factory and governed authoring-context/report-query
+APIs. Its producer verification covers
 original registry bytes, signatures/source provenance and public-consumer
 checks at signed source
-[`6dae20df8dace50ad961d9c5fe8d28c90bf4918f`](https://github.com/pegma-dev/knowledge-base/commit/6dae20df8dace50ad961d9c5fe8d28c90bf4918f).
-[Verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
+[`b2946e149078e0ef460f970c2271c196ea9fc759`](https://github.com/pegma-dev/knowledge-base/commit/b2946e149078e0ef460f970c2271c196ea9fc759).
+[Verified KB `0.1.6` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.6).
 
 The historical
 [verified `0.1.4` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.4)
@@ -59,7 +60,7 @@ model. It adds no public ingress or sixth cron to the existing human/KB
 handlers. Actual stage broker and CPU proof remain pending, together with the
 existing production, customer and provider acceptance gates.
 
-The current manifest and lockfile pin released KB `0.1.5`,
+The current manifest and lockfile pin released KB `0.1.6`,
 `@pegma/storage-cloudflare-d1@0.4.7` and genuine `@pegma/storage-core@0.4.0`.
 The D1 adapter itself retains that exact Core `0.4.0` dependency; no source alias,
 local archive, override or forced Core deduplication supplies the canonical

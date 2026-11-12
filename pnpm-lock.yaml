@@ -39,17 +39,17 @@ importers:
         specifier: 0.1.2
         version: 0.1.2
       '@pegma/knowledge-base-application':
-        specifier: 0.1.5
-        version: 0.1.5
+        specifier: 0.1.6
+        version: 0.1.6
       '@pegma/knowledge-base-contracts':
-        specifier: 0.1.5
-        version: 0.1.5
+        specifier: 0.1.6
+        version: 0.1.6
       '@pegma/knowledge-base-core':
-        specifier: 0.1.5
-        version: 0.1.5
+        specifier: 0.1.6
+        version: 0.1.6
       '@pegma/knowledge-base-mcp':
-        specifier: 0.1.5
-        version: 0.1.5
+        specifier: 0.1.6
+        version: 0.1.6
       '@pegma/logger-cloudflare':
         specifier: ^0.1.1
         version: 0.1.1
@@ -81,20 +81,20 @@ importers:
         specifier: 0.4.0
         version: 0.4.0
       '@pegma/support-desk-ai':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: 0.2.7
+        version: 0.2.7
       '@pegma/support-desk-application':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: 0.2.7
+        version: 0.2.7
       '@pegma/support-desk-contracts':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: 0.2.7
+        version: 0.2.7
       '@pegma/support-desk-core':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: 0.2.7
+        version: 0.2.7
       '@pegma/support-desk-templates':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: 0.2.7
+        version: 0.2.7
       '@pegma/webhooks':
         specifier: 0.1.1
         version: 0.1.1
@@ -1179,20 +1179,20 @@ packages:
     resolution: {integrity: sha512-r8AsVTnwCSBU2LZZjieW5FgIJ2TUWi5DlU9kp+4tuaWDFfl85EezkD6F5omAFjTnaFqCRN1T2d/KsHoESarB2A==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-application@0.1.5':
-    resolution: {integrity: sha512-tH9Hw+BSVmLzQPzdyhK9YaiAthWEwgYuG0Ef2kxT7FohMqYq4iaW/vDOHQdGa/gIMAlULqS/p0vCOPr7rPQfdA==}
+  '@pegma/knowledge-base-application@0.1.6':
+    resolution: {integrity: sha512-i7rD3uWz4XSuii7Kx3Y2l1tn3TK6WHfjBpJxkmdxYLVes2cBYaaQ3KgCjSbU5m0W01w0SmDPDOLsvFWdHGFDow==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-contracts@0.1.5':
-    resolution: {integrity: sha512-TgK0HNLlBJ6a3EYS0aBmF+UO9v2ykK0xVYPo51Cmcn1ET15Fj90w3dpyzBX7dRomi1aGBAW3FX4X+djrayqbzg==}
+  '@pegma/knowledge-base-contracts@0.1.6':
+    resolution: {integrity: sha512-/jntfNSu0OGrDpaEg+Mhi1kv9ek8thbEBObT9WYmeo6laPr4jEmYqiLi+zBT52SinMmnGEUGU3f0dzeM9i2CQQ==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-core@0.1.5':
-    resolution: {integrity: sha512-ZuaXkuuyuMN+n1xGfPcXvInvwdNsCQpjo8m9GhFmc0fu1reisj0oeVzF4i9DvYbhHqMA6QoZgIUBUCVijLd9ug==}
+  '@pegma/knowledge-base-core@0.1.6':
+    resolution: {integrity: sha512-VKK5r8vNed9b2BZJQTAf68faW6mjjR/SLCooOtLvQsw5xhYjvNwfkri2cqPLVSZ44xMQXNRlx1nD1DfddNkoKw==}
     engines: {node: '>=22'}
 
-  '@pegma/knowledge-base-mcp@0.1.5':
-    resolution: {integrity: sha512-IBdsjzxVhGeMGViJpWLwzKTXGr2iOLeVylaBRnT9Bn+oSeAKxe1yMez+/eg7Nu19Ru/bweIrmUb0JuqIxem0Nw==}
+  '@pegma/knowledge-base-mcp@0.1.6':
+    resolution: {integrity: sha512-e1LIDIElZPa+JyyuYrw0VmqTzK4OULmxQBI1eZWIupu6PonDvIRQLbMSlI8KPFEGRuoMnEP3IbXoQCzmtf//aA==}
     engines: {node: '>=22'}
 
   '@pegma/logger-cloudflare@0.1.1':
@@ -1239,24 +1239,24 @@ packages:
     resolution: {integrity: sha512-aWbRhhis4Qs4TvH1Sb+OCI0a0ddOyV+6pm6HhPs+XPlaP86mTaV7OlwkIIPqk5Hw45t//tNaqfaggUeOc7rIGA==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-ai@0.2.6':
-    resolution: {integrity: sha512-KEYGWcLonL+m4IUJrbfCFFzXm2l7CLBzRAUdAu3jX99OU0+iR+dqjF/sWaj61JDLj2s1T3VwAGLd1i00+RAYKg==}
+  '@pegma/support-desk-ai@0.2.7':
+    resolution: {integrity: sha512-Ra6k3a0JEERXeIfDbRlUMOa9F4/o4W0l54yjMDBcoM16tjUUmGrifc8oxWrSNir0p7a8TLyevVkfNxs+T6szUA==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-application@0.2.6':
-    resolution: {integrity: sha512-jqecCURuVcasRZGXFdwiDtQk3yM/P03Ij/JmQovw9nYrhXOzGeIYB3+Ro19IDKgMkH+XF4MghVFUZ+b7BPMDIg==}
+  '@pegma/support-desk-application@0.2.7':
+    resolution: {integrity: sha512-t0asEJYY7Xmndz1GTp/7j5RUVzXYIs0a8uZ+hRUq5fwgPmqfMoPVJ9xSA7xPhbhDtZUq3B2tRD4tG91Fn6XA0g==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-contracts@0.2.6':
-    resolution: {integrity: sha512-blhLS3iUXK0dDz2k/uw2fN0as2Tnvjx/XLMc8OGg/0Njiox+0YHdotYewx/yIrzI6XQkUWBzz/CyVyNI+ObUAA==}
+  '@pegma/support-desk-contracts@0.2.7':
+    resolution: {integrity: sha512-/9Zz473fyItEjJWLEzyXBzIR2poCqhvsqwdxU1yQOchy2++E9fdj/ErklGmea4VouUdnouhx2mRpIJJ0+gn+0A==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-core@0.2.6':
-    resolution: {integrity: sha512-Gc5L7/mniQnOsi+sLGYDINEgXJE6ilgC3ghleQ6QIYNfOMJ94WIZ1v/mEI7w9kRPBjsk+TISxRAiQPjRaQC9Ow==}
+  '@pegma/support-desk-core@0.2.7':
+    resolution: {integrity: sha512-3+8e2ZS1J2om0ePn2ioQ1wpqdY5f9NA6svEPl4RPVpmCdXwwiJxLbocLHtjcGJNbW37MnyOZKY97X5jdrMXSAw==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-templates@0.2.6':
-    resolution: {integrity: sha512-94ZgKYa4K4gu//7aHohyJhjfDbX+hUJPOKCIL9XbhdAsX5FZK+uXTrDszGZwJiO4aGSvZUrQ/Ju5cDDIyhW/7w==}
+  '@pegma/support-desk-templates@0.2.7':
+    resolution: {integrity: sha512-4mDF2e4ZzYjSlIQYu4FWpjr1cUUU2N7jJUfGTTMnYG6Gf5UN45j7q7ueOFJjlcgC7D0+TqKludaKDYZf0nqTjg==}
     engines: {node: '>=22'}
 
   '@pegma/webhooks@0.1.1':
@@ -4189,31 +4189,31 @@ snapshots:
       unicode-case-folding: 1.1.1
       unorm: 1.6.0
 
-  '@pegma/knowledge-base-application@0.1.5':
+  '@pegma/knowledge-base-application@0.1.6':
     dependencies:
       '@pegma/audit': 0.2.0
       '@pegma/authorization-core': 0.4.0
-      '@pegma/knowledge-base-contracts': 0.1.5
-      '@pegma/knowledge-base-core': 0.1.5
+      '@pegma/knowledge-base-contracts': 0.1.6
+      '@pegma/knowledge-base-core': 0.1.6
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
 
-  '@pegma/knowledge-base-contracts@0.1.5':
+  '@pegma/knowledge-base-contracts@0.1.6':
     dependencies:
       '@pegma/spine': 0.1.2
 
-  '@pegma/knowledge-base-core@0.1.5':
+  '@pegma/knowledge-base-core@0.1.6':
     dependencies:
-      '@pegma/knowledge-base-contracts': 0.1.5
+      '@pegma/knowledge-base-contracts': 0.1.6
 
-  '@pegma/knowledge-base-mcp@0.1.5':
+  '@pegma/knowledge-base-mcp@0.1.6':
     dependencies:
       '@cfworker/json-schema': 4.1.6
       '@modelcontextprotocol/sdk': 1.32.2(@cfworker/json-schema@4.1.6)(zod@4.6.7)
       '@pegma/authorization-core': 0.4.0
-      '@pegma/knowledge-base-application': 0.1.5
-      '@pegma/knowledge-base-contracts': 0.1.5
-      '@pegma/knowledge-base-core': 0.1.5
+      '@pegma/knowledge-base-application': 0.1.6
+      '@pegma/knowledge-base-contracts': 0.1.6
+      '@pegma/knowledge-base-core': 0.1.6
       zod: 4.6.7
     transitivePeerDependencies:
       - supports-color
@@ -4260,33 +4260,33 @@ snapshots:
 
   '@pegma/storage-core@0.4.0': {}
 
-  '@pegma/support-desk-ai@0.2.6':
+  '@pegma/support-desk-ai@0.2.7':
     dependencies:
       '@pegma/authorization-core': 0.4.0
-      '@pegma/knowledge-base-application': 0.1.5
-      '@pegma/knowledge-base-contracts': 0.1.5
+      '@pegma/knowledge-base-application': 0.1.6
+      '@pegma/knowledge-base-contracts': 0.1.6
       '@pegma/spine': 0.1.2
-      '@pegma/support-desk-application': 0.2.6
+      '@pegma/support-desk-application': 0.2.7
 
-  '@pegma/support-desk-application@0.2.6':
+  '@pegma/support-desk-application@0.2.7':
     dependencies:
       '@pegma/audit': 0.2.0
       '@pegma/authorization-core': 0.4.0
       '@pegma/mail': 0.1.1
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
-      '@pegma/support-desk-contracts': 0.2.6
-      '@pegma/support-desk-core': 0.2.6
+      '@pegma/support-desk-contracts': 0.2.7
+      '@pegma/support-desk-core': 0.2.7
 
-  '@pegma/support-desk-contracts@0.2.6':
+  '@pegma/support-desk-contracts@0.2.7':
     dependencies:
       '@pegma/spine': 0.1.2
 
-  '@pegma/support-desk-core@0.2.6':
+  '@pegma/support-desk-core@0.2.7':
     dependencies:
-      '@pegma/support-desk-contracts': 0.2.6
+      '@pegma/support-desk-contracts': 0.2.7
 
-  '@pegma/support-desk-templates@0.2.6': {}
+  '@pegma/support-desk-templates@0.2.7': {}
 
   '@pegma/webhooks@0.1.1':
     dependencies:

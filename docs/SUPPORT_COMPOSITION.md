@@ -17,11 +17,11 @@ provider and customer activation retain their acceptance gates. See the
 
 Exact published versions:
 
-- `@pegma/support-desk-application@0.2.6`
-- `@pegma/support-desk-contracts@0.2.6`
-- `@pegma/support-desk-core@0.2.6`
-- `@pegma/support-desk-templates@0.2.6`
-- `@pegma/support-desk-ai@0.2.6` (optional coordinator)
+- `@pegma/support-desk-application@0.2.7`
+- `@pegma/support-desk-contracts@0.2.7`
+- `@pegma/support-desk-core@0.2.7`
+- `@pegma/support-desk-templates@0.2.7`
+- `@pegma/support-desk-ai@0.2.7` (optional coordinator)
 - `@pegma/authorization-admin@0.4.0` (role administration service)
 - `@pegma/authorization-core@0.4.0` (AccessContext resolution)
 - `@pegma/authorization-policy@0.4.0` (PolicyDocumentV1 schema validation)
@@ -29,10 +29,10 @@ Exact published versions:
 
 All five Support Desk packages have completed producer publication and
 registry qualification. The optional AI package selects exact KB application
-and contracts `0.1.5`; the host selects all four KB packages at that version.
+and contracts `0.1.6`; the host selects all four KB packages at that version.
 Producer qualification and installation do not complete host or provider
-acceptance. [Verified Support Desk `0.2.6` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.6),
-[verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
+acceptance. [Verified Support Desk `0.2.7` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7),
+[verified KB `0.1.6` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.6).
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
 `@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.2.1`,
@@ -47,7 +47,7 @@ uses signed source
 [Strict release verification](https://github.com/pegma-dev/support-desk/actions/runs/42907283767/job/130161276758)
 qualifies those historical producer packages. The earlier public `0.2.5` graph
 passed the [normal local and CI validation checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
-That checkpoint does not qualify the current `0.2.6` host graph. Current host
+That checkpoint does not qualify the current `0.2.7` host graph. Current host
 validation, review and deployment acceptance remain pending. The current
 [Sessions `0.2.1` selection](https://github.com/pegma-dev/sessions/releases/tag/v0.2.1)
 includes the verified producer fix for the earlier `0.2.0` default-clock
@@ -286,16 +286,16 @@ invocation.
 
 ## Optional resolution learning
 
-The current source selects all five published Support Desk `0.2.6` packages
-with the four direct KB `0.1.5` packages. AI `0.2.6` also declares exact KB
-`0.1.5` dependencies. The public forwarding port preserves KB error instances;
+The current source selects all five published Support Desk `0.2.7` packages
+with the four direct KB `0.1.6` packages. AI `0.2.7` also declares exact KB
+`0.1.6` dependencies. The public forwarding port preserves KB error instances;
 no KB `0.1.2` alias, translation shim, second Store, override or private SDK
 import supplies this assembly. The earlier Support `0.2.1` / nested KB `0.1.2`
 compatibility assembly and its failed isolated production-layout diagnostic are
 historical, not current graph or host-acceptance evidence.
 
 The staged learning review admission and Queue worker retained in this branch
-use the published, strictly verified Support Desk `0.2.6` APIs. The earlier
+use the published, strictly verified Support Desk `0.2.7` APIs. The earlier
 `0.2.5` host validation checkpoint remains historical. Current host validation,
 review and deployment acceptance remain pending. Runtime availability and
 feature activation retain their existing trusted composition and readiness
@@ -368,7 +368,7 @@ request/maintenance batching and activation limits remain documented in
 ## Staged assistant retrieval is separate
 
 AI `0.2.2` introduced explicit `stagedRetrieval:true`, retained by the current
-`0.2.6` selection; omission remains monolithic. The preparation attempt retrieves authorized sources and records a
+`0.2.7` selection; omission remains monolithic. The preparation attempt retrieves authorized sources and records a
 bounded no-call request without reserving paid usage. Only its durably
 acknowledged finish returns `prepared`. The host must return and schedule a
 genuinely later physical invocation at or after `nextAttemptAt`, never loop or

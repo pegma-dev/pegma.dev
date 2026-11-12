@@ -4,7 +4,7 @@ Developer and operator documentation for the optional engineering assembly.
 The Worker and staff ticket controller accept the human engineering composition
 through explicit trusted configuration. The default Worker supplies no such
 configuration, so engineering intake and review remain OFF. This assembly uses
-the five published Support Desk packages at exact version `0.2.6`.
+the five published Support Desk packages at exact version `0.2.7`.
 
 The [runtime](../worker/src/support-engineering.ts),
 [HTTP adapter](../worker/src/support-engineering-handlers.ts),
