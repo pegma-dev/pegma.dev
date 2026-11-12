@@ -42,6 +42,9 @@ const staffPermissions = [
   supportPermissions.engineeringReview,
   supportPermissions.engineeringWithdraw,
   supportPermissions.engineeringPolicyRead,
+  supportPermissions.engineeringFollowupRead,
+  supportPermissions.engineeringFollowupReview,
+  supportPermissions.engineeringFollowupEvidenceSubmit,
 ];
 
 function roleStore() {

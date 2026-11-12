@@ -1,3 +1,4 @@
+import { createSupportReleaseFollowupHandlers, type SupportReleaseFollowupHandlerOptions } from './support-release-followup-handlers';
 import {
   bestEffortSupportAssistantHint,
   supportAssistantAcceptedTarget,
@@ -151,6 +152,7 @@ interface SupportApiOptions {
   /** Additive trusted staged-review capability; it never enables learning itself. */
   readonly learningStagedReviewsEnabled?: () => boolean;
   readonly engineering?: SupportEngineeringRouterOptions;
+  readonly releaseFollowup?: SupportReleaseFollowupHandlerOptions;
 }
 
 async function requireAuthentication(
@@ -774,6 +776,7 @@ async function stableBrowserMutation(
 export function createSupportApi(
   options: SupportApiOptions,
 ): (request: Request) => Promise<Response> {
+  const followupHandler = createSupportReleaseFollowupHandlers(options.releaseFollowup);
   const engineeringRouter = createSupportEngineeringRouter(options.engineering);
   const engineeringReady = (): boolean => {
     if (options.engineering?.configuration === undefined) return false;
@@ -843,6 +846,8 @@ export function createSupportApi(
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      const followupResponse = await followupHandler(request);
+      if (followupResponse !== null) return followupResponse;
       const engineeringResponse = await engineeringRouter(request);
       if (engineeringResponse !== null) return engineeringResponse;
       if (LEARNING_NAMESPACE.test(path)) {

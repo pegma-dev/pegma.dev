@@ -43,7 +43,14 @@ export function supportHumanBrowser(
       throw new ApiError(403, 'browser_credential_changed');
   }
   let original: SupportHumanCoordinates | undefined;
+  let observedExpiry = 0;
   return Object.freeze({
+    /** Closing synchronous header/absolute-expiry fence after a current() read. */
+    assertCurrent() {
+      guard();
+      if (original === undefined || Date.now() >= observedExpiry)
+        throw new ApiError(401, 'authentication_required');
+    },
     async current() {
       guard();
       if (original === undefined) {
@@ -98,6 +105,7 @@ export function supportHumanBrowser(
         throw new ApiError(401, 'authentication_required');
       // get() deliberately returns its initially validated record; the final
       // synchronous absolute-expiry comparison covers time spent in that read.
+      observedExpiry = expiresAt;
       return Object.freeze({ authenticated, access });
     },
   });

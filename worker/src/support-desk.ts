@@ -24,6 +24,7 @@ import {
   type SupportDeskApplication,
   type ResolutionLearningOptions,
   type EngineeringOptions,
+  type EngineeringFollowupOptions,
   type AssistantTurnOptions,
 } from '@pegma/support-desk-application';
 import { defineTemplate } from '@pegma/support-desk-templates';
@@ -191,6 +192,7 @@ export interface SupportCompositionOptions {
   readonly engineeringMutationLimiter?: DurableRateLimiter;
   readonly resolutionLearning?: ResolutionLearningOptions;
   readonly engineering?: EngineeringOptions;
+  readonly engineeringFollowup?: EngineeringFollowupOptions;
   /** Explicit host configuration; omission keeps customer assistant intake OFF. */
   readonly assistantTurns?: AssistantTurnOptions;
 }
@@ -360,6 +362,7 @@ export function createSupportRuntime(
     queueTerminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
     ...(options.resolutionLearning === undefined ? {} : { resolutionLearning: options.resolutionLearning }),
     ...(options.engineering === undefined ? {} : { engineering: options.engineering }),
+    ...(options.engineeringFollowup === undefined ? {} : { engineeringFollowup: options.engineeringFollowup }),
   });
 
   // Audited role store on the SAME Store, partitioned by this host's

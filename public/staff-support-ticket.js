@@ -21,6 +21,9 @@ const handoffStatus = select('#staff-handoff-status');
 const handoffList = select('#staff-handoff-list');
 const learningRoot = select('#staff-learning-panel');
 const engineeringRoot = select('#staff-engineering-panel');
+const followupRoot = select('#staff-followup-panel');
+let followup = null;
+let followupBusy = false;
 const engineeringRecovery = select('#staff-engineering-recovery');
 const engineeringOwnerList = select('#staff-engineering-recovery-owners');
 const engineeringRecoveryStatus = select('#staff-engineering-recovery-status');
@@ -77,6 +80,8 @@ function cancelRequests() {
 function beginOperation() {
   // Retain unknown intent, but retire every old panel context before an
   // ordinary mutation or current-ticket reload can await anything.
+  followup?.suspend();
+  if (followupRoot !== null) followupRoot.hidden = !followup?.hasPending();
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
   engineeringPolicyRecovery = null;
@@ -102,6 +107,8 @@ function clearHandoff() {
   handoffPanel.hidden = true;
 }
 function hideAll() {
+  followup?.suspend();
+  if (followupRoot !== null) followupRoot.hidden = !followup?.hasPending();
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
   engineeringPolicyRecovery = null;
@@ -156,8 +163,8 @@ function selectedComposeMode() {
 function updateControls() {
   composeForm.noValidate = ordinaryPacket !== null && ordinaryPacket.kind !== 'patch';
   for (const link of signInLinks) {
-    link.node.target = ordinaryPacket === null && !learningPending() && !engineeringPending() ? link.target : '_blank';
-    link.node.rel = ordinaryPacket === null && !learningPending() && !engineeringPending() ? link.rel : 'noopener noreferrer';
+    link.node.target = ordinaryPacket === null && !learningPending() && !engineeringPending() && !followup?.hasPending() ? link.target : '_blank';
+    link.node.rel = ordinaryPacket === null && !learningPending() && !engineeringPending() && !followup?.hasPending() ? link.rel : 'noopener noreferrer';
   }
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
@@ -871,8 +878,9 @@ if (learningRoot !== null && typeof globalThis.PegmaSupportLearning?.createPanel
 function engineeringPending() {
   return engineeringOwnershipInvalid || engineeringOwners.length > 0;
 }
+function followupOccupied() { return followupBusy || followup?.hasPending() === true; }
 function engineeringOccupied() {
-  return engineeringPending() || engineeringBusy || engineeringRequests > 0;
+  return followupOccupied() || engineeringPending() || engineeringBusy || engineeringRequests > 0;
 }
 function extensionOccupied() { return learningOccupied() || engineeringOccupied(); }
 function renderEngineeringRecovery() {
@@ -896,7 +904,7 @@ function renderEngineeringRecovery() {
 function requireEngineeringAdmission() {
   const policyMode = engineeringPolicyRecovery !== null;
   if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || ordinaryAcknowledged ||
-    learningOccupied() || suspended || authorityReloadRequired || viewer === null ||
+    learningOccupied() || followupOccupied() || suspended || authorityReloadRequired || viewer === null ||
     (!policyMode && (currentView?.engineeringEnabled !== true || !onThisTicket())) ||
     (policyMode && viewer.subject !== engineeringPolicyRecovery.actorSubject))
     throw Object.assign(new Error('engineering_suspended'), { stale: true });
@@ -909,6 +917,8 @@ async function engineeringRequest(run) {
 }
 async function syncExtensions(view) {
   const generation = readGeneration;
+  if (followup !== null && viewer !== null && isCurrent(generation))
+    followup.showTicket({ ticketId: view.ticket.id, actorSubject: viewer.subject });
   await syncLearning(view);
   if (!isCurrent(generation) || currentView !== view || engineering === null) return;
   if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || learningOccupied() || view.engineeringEnabled !== true) {
@@ -952,7 +962,7 @@ if (engineeringRoot !== null && typeof globalThis.PegmaSupportEngineering?.creat
     isEnabled: () => engineeringPolicyRecovery !== null || currentView?.engineeringEnabled === true,
     isReviewEnabled: () => currentView?.engineeringReviewEnabled === true,
     canRequest: () => busy === null && ordinaryPacket === null && takeoverPacket === null &&
-      !ordinaryAcknowledged && !learningOccupied() && !suspended && !authorityReloadRequired,
+      !ordinaryAcknowledged && !learningOccupied() && !followupOccupied() && !suspended && !authorityReloadRequired,
     request: (path, init) => engineeringRequest(() => api(path, init)),
     readSession: () => engineeringRequest(() => readViewer(readGeneration)),
     readCurrentTicket: (id) => engineeringRequest(async () => {
@@ -979,8 +989,40 @@ if (engineeringRoot !== null && typeof globalThis.PegmaSupportEngineering?.creat
   });
   select('#staff-engineering-check-access')?.addEventListener('click', () => { void readEngineeringRecoveryAccount(); });
 }
+if (followupRoot !== null && typeof globalThis.PegmaSupportFollowup?.createPanel === 'function') {
+  function followupAdmission() {
+    if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || ordinaryAcknowledged ||
+      learningOccupied() || engineeringPending() || engineeringBusy || engineeringRequests > 0 ||
+      suspended || authorityReloadRequired || viewer === null || currentView === null || !onThisTicket())
+      throw Object.assign(new Error('followup_suspended'), { stale: true });
+  }
+  async function followupRequest(run) {
+    followupAdmission(); const generation = readGeneration;
+    const value = await run(); guard(generation); followupAdmission(); return value;
+  }
+  followup = globalThis.PegmaSupportFollowup.createPanel({ root: followupRoot,
+    canRequest: () => busy === null && ordinaryPacket === null && takeoverPacket === null && !ordinaryAcknowledged &&
+      !learningOccupied() && !engineeringPending() && !engineeringBusy && engineeringRequests === 0 &&
+      !suspended && !authorityReloadRequired && viewer !== null && currentView !== null && onThisTicket(),
+    request: (path, init) => followupRequest(() => api(path, init)),
+    readSession: () => followupRequest(() => readViewer(readGeneration)),
+    readCurrentTicket: (id) => followupRequest(async () => {
+      if (id !== ticketId) throw Object.assign(new Error('wrong_ticket'), { stale: true });
+      const value = await api('/api/support/admin/tickets/' + encodeURIComponent(id)); validateView(value); return value;
+    }),
+    onPendingChange: () => updateControls(),
+    onBusyChange: (value) => { followupBusy = value === true; updateControls(); },
+    onSettled: () => loadTicket(),
+    onAccessLost: ({ status }) => {
+      ++readGeneration; cancelRequests(); busy = null; viewer = null; csrfToken = ''; authorityReloadRequired = true;
+      hideAll(); signedOut.hidden = status !== 401; forbidden.hidden = status !== 403;
+      showStatus('Restore the original account in another tab, then reload this ticket to retry its exact follow-up command.', true);
+      updateControls();
+    },
+  });
+}
 window.addEventListener('beforeunload', (event) => {
-  if (!learningPending() && !engineeringPending() && ordinaryPacket === null && takeoverPacket === null) return;
+  if (!followup?.hasPending() && !learningPending() && !engineeringPending() && ordinaryPacket === null && takeoverPacket === null) return;
   event.preventDefault();
   event.returnValue = '';
 });

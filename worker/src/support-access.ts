@@ -36,6 +36,9 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
   supportPermissions.engineeringReview,
   supportPermissions.engineeringWithdraw,
   supportPermissions.engineeringPolicyRead,
+  supportPermissions.engineeringFollowupRead,
+  supportPermissions.engineeringFollowupReview,
+  supportPermissions.engineeringFollowupEvidenceSubmit,
 ] as const);
 
 /** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */
@@ -114,10 +117,11 @@ export const APPLICATION_SCOPE = Object.freeze({
  * Version 4 adds owned human requests and explicit Support takeover.
  * Version 5 adds human learning review; processing and KB grants stay separate.
  * Version 6 adds human engineering intake and explicit repository policy grants.
+ * Version 7 adds human release-follow-up read/review/evidence, with processing separate.
  */
 export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
   schemaVersion: 1,
-  version: 'pegma.dev-policy-6',
+  version: 'pegma.dev-policy-7',
   defaults: [...SUPPORT_CUSTOMER_PERMISSIONS, knowledgePermissions.articleRead],
   roles: Object.freeze({
     [SUPPORT_ROLE]: [...SUPPORT_STAFF_PERMISSIONS],

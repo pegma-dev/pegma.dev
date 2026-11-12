@@ -15,10 +15,14 @@ The [human composition](../worker/src/support-engineering-composition.ts)
 provides the request-local assembly. The existing learning queue and its
 physical phase boundaries continue through the same Worker entry point.
 
+The separate [release-follow-up controls](SUPPORT_RELEASE_FOLLOWUP.md) connect
+trusted deployment evidence and explicit staff web updates. Their current
+producer and host validation holds are documented in that guide.
+
 ## Authority and defaults
 
 The [stored-role policy](../worker/src/support-access.ts),
-`pegma.dev-policy-6`, gives Support these five additional human permissions:
+`pegma.dev-policy-7`, retains these five human engineering permissions:
 
 | Published `supportPermissions` member | Current human surface |
 | --- | --- |

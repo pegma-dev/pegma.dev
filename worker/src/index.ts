@@ -6,6 +6,9 @@ import { createSupportAssistantStageDatabase as createSupportAssistantInvocation
 import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
 import { composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
   type SupportEngineeringHumanComposition } from './support-engineering-composition';
+import { composeSupportReleaseFollowup } from './support-release-followup-composition';
+import { supportReleaseFollowupApplicationOptions, supportReleaseFollowupEnabled, type SupportReleaseFollowupComposition } from './support-release-followup-ports';
+import { isSupportReleaseFollowupRequest } from './support-release-followup-handlers';
 import { isSupportEngineeringRequest } from './support-engineering-router';
 import {
   createDetailCheck,
@@ -178,12 +181,14 @@ function createSupportHandler(
   logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {},
   answering: SupportAnsweringComposition = {},
+  releaseFollowup: SupportReleaseFollowupComposition = {},
 ) {
   let selectedEngineering = engineering;
   let selectedAnswering = checkedAnswering(answering, logger);
   let configured = supportEngineeringHumanEnabled(selectedEngineering);
   const answerConfigured = selectedAnswering.configuration !== undefined || selectedAnswering.recoveryOnly === true;
-  const shared = configured || answerConfigured;
+  let followupConfigured = supportReleaseFollowupEnabled(releaseFollowup);
+  const shared = configured || answerConfigured || followupConfigured;
   const identityRuntime = createProductionIdentityRuntime(env, logger, shared ? 512 : undefined);
   function construct(withEngineering: boolean, withAnswering: boolean) {
     try {
@@ -194,6 +199,7 @@ function createSupportHandler(
         identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
         logger,
         ...(intake === undefined ? {} : { engineering: intake }),
+        ...(followupConfigured ? { engineeringFollowup: supportReleaseFollowupApplicationOptions(releaseFollowup) } : {}),
         ...(!withAnswering || selectedAnswering.configuration === undefined
           ? {} : { assistantTurns: supportAnsweringTurns(selectedAnswering) }),
       };
@@ -210,7 +216,9 @@ function createSupportHandler(
   let supportRuntime;
   try { supportRuntime = construct(configured, withAnswering); }
   catch (error) {
-    if (!configured && !withAnswering) throw error;
+    if (!configured && !withAnswering && !followupConfigured) throw error;
+    // Malformed optional follow-up configuration cannot break ordinary Support.
+    followupConfigured = false;
     if (configured && withAnswering) {
       try { supportRuntime = construct(false, true); configured = false; }
       catch {
@@ -249,6 +257,7 @@ function createSupportHandler(
     logger,
     onCustomerMessageAccepted: answeringRuntime?.hintAccepted,
     ...(configured ? { engineering: composeSupportEngineeringHuman(supportRuntime, logger, selectedEngineering) } : {}),
+    ...(followupConfigured ? { releaseFollowup: composeSupportReleaseFollowup(supportRuntime, logger, releaseFollowup) } : {}),
     // The stored Support ROLE is the only staff gate (fail closed).
     roleStore: supportRuntime.roleStore,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
@@ -273,9 +282,12 @@ function createSupportHandler(
 
 /** Request-local optional human composition used by the registered Worker route. */
 export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>,
-  engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {}) {
+  engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {},
+  releaseFollowup: SupportReleaseFollowupComposition = {}) {
   return async (request: Request): Promise<Response> => {
     const selectedAnswering = checkedAnswering(answering, logger);
+    if (isSupportReleaseFollowupRequest(new URL(request.url).pathname) && !supportReleaseFollowupEnabled(releaseFollowup))
+      return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     if (isSupportEngineeringRequest(new URL(request.url).pathname) && !supportEngineeringHumanEnabled(engineering))
       return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     if (new URL(request.url).pathname.startsWith(SUPPORT_ANSWERING_NAMESPACE)) {
@@ -294,7 +306,7 @@ export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<type
     }
     // Receipt-only installation must not change ordinary human Store composition.
     return createSupportHandler(env, logger, engineering,
-      selectedAnswering.configuration === undefined ? {} : selectedAnswering).api(request);
+      selectedAnswering.configuration === undefined ? {} : selectedAnswering, releaseFollowup).api(request);
   };
 }
 
@@ -307,6 +319,7 @@ export function createWorker(options: {
   readonly learningReviews?: SupportLearningReviewWorkerComposition;
   readonly engineering?: SupportEngineeringHumanComposition;
   readonly answering?: SupportAnsweringComposition;
+  readonly releaseFollowup?: SupportReleaseFollowupComposition;
 } = {}) {
 const answeringFor = (env: AppEnv) => options.answering === undefined
   ? createProductionSupportAnswering(env)
@@ -383,7 +396,7 @@ return {
         probe: 'disabled' | 'ok' | 'fail';
       } = {
         storage: 'cloudflare-d1',
-        packages: '@pegma/support-desk-application@0.2.7',
+        packages: '@pegma/support-desk-application@0.2.8',
         probe: 'disabled',
       };
       if (supportHealthProbeEnabled(env)) {
@@ -568,6 +581,8 @@ return {
         const answering = await answeringFor(env);
         if (path.startsWith(SUPPORT_ANSWERING_NAMESPACE))
           return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
+        if (isSupportReleaseFollowupRequest(path))
+          return await createSupportRequestHandler(env, logger, options.engineering, answering, options.releaseFollowup)(request);
         if (isSupportEngineeringRequest(path))
           return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
         const reviews = options.learningReviews;

@@ -83,7 +83,7 @@ unified host policy's `defaults` (no paid entitlement):
 - `support.ticket.reply.own`
 - `support.ticket.request_person.own`
 
-Policy version: `pegma.dev-policy-6` — one `PolicyDocumentV1` for the whole
+Policy version: `pegma.dev-policy-7` — one `PolicyDocumentV1` for the whole
 host, schema-validated in tests (see `docs/ROLE_ADOPTION_PLAN.md`).
 
 ### Staff (stored `Support` role)
@@ -315,8 +315,8 @@ approval nor delivery publishes a guide: ordinary KB evidence, review and
 publication gates still apply.
 
 Policy `pegma.dev-policy-5` introduced four explicit learning permissions to
-`Support`. Current policy `pegma.dev-policy-6` retains those grants and adds
-human engineering permissions; learning processing and KB staff access remain
+`Support`. Current policy `pegma.dev-policy-7` retains those grants and adds
+human engineering and release-follow-up permissions; learning processing and KB staff access remain
 separate. Private proposal reads and new review commits also require separately
 current KB `draftRead` and
 `provenanceRead`, normally through `Knowledge` or `Admin`. Browser submissions
@@ -446,7 +446,9 @@ Built in the open by RetireGolden, LLC.
 
 ## Optional engineering human composition
 
-The [engineering assembly](SUPPORT_ENGINEERING.md) uses policy version 6.
+The [engineering assembly](SUPPORT_ENGINEERING.md) introduced its grants in policy
+version 6. Current policy version 7 retains them and adds the separate
+[release-follow-up controls](SUPPORT_RELEASE_FOLLOWUP.md).
 Support receives the five named human engineering permissions. Admin adds
 repository-policy read and manage permissions. Policy operations require
 current Admin and Support queue authority together.

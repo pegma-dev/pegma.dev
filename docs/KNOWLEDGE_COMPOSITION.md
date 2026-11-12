@@ -223,8 +223,9 @@ The [host policy](../worker/src/support-access.ts) keeps authority explicit:
   staff reply, notes, assignment, management and Audit read) and adds explicit
   human takeover plus explicit learning read, evidence submission, review and
   withdrawal introduced by policy `pegma.dev-policy-5`. Current policy
-  `pegma.dev-policy-6` retains them and adds human engineering read, evidence
-  submission, review, withdrawal and repository-policy read. Learning processing
+  `pegma.dev-policy-7` retains them and adds human engineering read, evidence
+  submission, review, withdrawal and repository-policy read, plus named human
+  release-follow-up read, review and evidence submission. Learning processing
   is not granted. Existing assignments are not migrated or silently granted KB
   powers.
 - `Knowledge` is a separately assigned role for collection reads, draft and
