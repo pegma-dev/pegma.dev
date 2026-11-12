@@ -18,6 +18,8 @@ export interface SupportMaintenanceRuntime {
   readonly clock: Clock;
   readonly limiters: readonly DurableRateLimiter[];
   readonly terminalRetentionMilliseconds?: number;
+  /** Nonpaid cache redaction only; no model, secrets, Source authority or App. */
+  readonly independentChecksPurge?: () => Promise<void>;
 }
 
 // Queue repair can read and update several records for one ticket.
@@ -99,6 +101,7 @@ export async function runSupportMaintenance(
         ...(cursor === undefined ? {} : { cursor }),
       });
       save('queueInactiveSweepCursor', result.nextCursor);
+      await runtime.independentChecksPurge?.();
     },
     rate_limits: async () => {
       const limiters = selectMaintenanceLimiters(

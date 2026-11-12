@@ -22,6 +22,7 @@ import {
   learningCanary,
   learningTicketId,
 } from './support-learning-fixtures';
+import type { IndependentCheckCapture } from './support-independent-checks';
 
 function fixture(options?: Parameters<typeof createSupportLearningFixture>[1]) {
   return createSupportLearningFixture(createMemoryStore(), options);
@@ -648,5 +649,178 @@ describe('published learning assembly', () => {
     expect((await f.runtime.reconcileSource(learningTicketId)).outcome).toBe('reconciled');
     expect(injected).toBe(true); expect(reads).toBeGreaterThan(1);
     expect(f.state.modelCalls).toBe(1);
+  });
+});
+
+describe('operation-local learning processing', () => {
+  it.each(['legacy', 'scoped'] as const)('forwards an already aborted %s invocation before any Work claim', async (mode) => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const source = await f.runtime.readSource(f.actors.staff, learningTicketId);
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, ports: f.ports, processingEnabled: () => true,
+      ...(mode === 'scoped' ? { processingPortsFor: () => f.ports } : {}),
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const controller = new AbortController(); controller.abort();
+    const before = await f.rows();
+    expect(await runtime.processWork({ ticketId: learningTicketId, sourceGeneration: source.sourceGeneration,
+      workerId: 'cancelled-worker', leaseMilliseconds: 30_000 }, { signal: controller.signal }))
+      .toEqual({ outcome: 'held', reason: 'cancelled' });
+    expect(await f.rows()).toEqual(before); expect(f.state.modelCalls).toBe(0);
+  });
+
+  it('forwards cancellation through an awaited scoped service proof without claiming or paying', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const source = await f.runtime.readSource(f.actors.staff, learningTicketId);
+    const entered = barrier(); const wait = barrier(); const returned = barrier();
+    let receivedSignal: AbortSignal | undefined;
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, processingEnabled: () => true,
+      processingPortsFor: () => ({ ...f.ports, serviceAccess: { async resolve(signal) {
+        receivedSignal = signal;
+        const current = await f.ports.serviceAccess.resolve(signal);
+        entered.release(); await wait.reached; returned.release(); return current;
+      } } }), staffAccess: { resolve: (id) => f.resolve(id) } });
+    const controller = new AbortController(); const before = await f.rows();
+    const result = runtime.processWork({ ticketId: learningTicketId, sourceGeneration: source.sourceGeneration,
+      workerId: 'cancelled-scoped-worker', leaseMilliseconds: 30_000 }, { signal: controller.signal });
+    try {
+      await entered.reached; controller.abort();
+      expect(await result).toEqual({ outcome: 'held', reason: 'cancelled' });
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(await f.rows()).toEqual(before); expect(f.state.modelCalls).toBe(0);
+    } finally { wait.release(); await returned.reached; }
+  });
+
+  it('forwards reconciliation cancellation without a retirement read or write', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const controller = new AbortController(); controller.abort();
+    let retirementCalls = 0;
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, ports: { ...f.ports, retirementAccess: { async resolve(signal) {
+        retirementCalls += 1; return f.ports.retirementAccess.resolve(signal);
+      } } }, staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.rows();
+    expect(await runtime.reconcileSource(learningTicketId, { signal: controller.signal }))
+      .toEqual({ outcome: 'pending', processedDestinations: 0, reason: 'reconciliation_unavailable' });
+    expect(retirementCalls).toBe(0); expect(await f.rows()).toEqual(before);
+  });
+
+  it.each(['missing', 'throwing'] as const)('holds a %s scoped port factory before any claim', async (mode) => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const source = await f.runtime.readSource(f.actors.staff, learningTicketId);
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, ports: f.ports, processingEnabled: () => true,
+      processingPortsFor() { if (mode === 'throwing') throw new Error(learningCanary); return undefined; },
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.rows();
+    expect(await runtime.processWork({ ticketId: learningTicketId, sourceGeneration: source.sourceGeneration,
+      workerId: 'unavailable-scoped-worker', leaseMilliseconds: 30_000 }))
+      .toEqual({ outcome: 'held', reason: 'learning_unavailable' });
+    expect(await f.rows()).toEqual(before); expect(f.state.modelCalls).toBe(0);
+  });
+
+  it.each(['serviceAccess', 'configuration'] as const)('rechecks processing after scoped %s awaits', async (port) => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const source = await f.runtime.readSource(f.actors.staff, learningTicketId);
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, processingEnabled: () => f.state.enabled,
+      processingPortsFor: () => ({ ...f.ports,
+        ...(port === 'serviceAccess' ? { serviceAccess: { async resolve(signal) {
+          const current = await f.ports.serviceAccess.resolve(signal); f.state.enabled = false; return current;
+        } } } : { configuration: { async resolve(expected, signal) {
+          const current = await f.ports.configuration.resolve(expected, signal); f.state.enabled = false; return current;
+        } } }),
+      }), staffAccess: { resolve: (id) => f.resolve(id) } });
+    const result = await runtime.processWork({ ticketId: learningTicketId, sourceGeneration: source.sourceGeneration,
+      workerId: 'disabled-scoped-worker', leaseMilliseconds: 30_000 });
+    expect(result.outcome).not.toBe('candidate'); expect(f.state.modelCalls).toBe(0);
+  });
+
+  it('keeps two concurrent real ticket Works and capture callbacks bound to their own scoped ports', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    const otherTicketId = 'learning-ticket-second';
+    const oldApplication = createSupportDeskApplication({ store: f.store, clock: f.clock });
+    await oldApplication.createCustomerTicket(f.actors.customer, { ...f.command('second-ticket'), ticketId: otherTicketId,
+      messageId: 'second-question', subject: 'Synthetic second export', body: 'How do I export another workspace?' });
+    await oldApplication.replyAsStaff(f.actors.staff, { ...f.command('second-solution'), ticketId: otherTicketId,
+      messageId: 'second-solution', body: 'Open the second workspace and choose Export.' });
+    await oldApplication.resolveTicket(f.actors.staff, { ...f.command('second-resolve'), ticketId: otherTicketId });
+    const ticket = (await oldApplication.readStaffTicket(f.actors.staff, otherTicketId)).ticket;
+    await f.runtime.enroll(f.actors.staff, { ticketId: otherTicketId, clientCommandId: 'second-enroll', expectedRevision: ticket.revision });
+    const otherSource = await f.runtime.readSource(f.actors.staff, otherTicketId);
+    await f.runtime.submitVerifiedFix(f.actors.staff, { ticketId: otherTicketId, clientCommandId: 'second-verify',
+      expectedRevision: ticket.revision, resolutionCycle: otherSource.resolutionCycle,
+      evidence: { kind: 'staff_verified_fix', solutionMessageId: 'second-solution', verificationReference: 'SYNTHETIC_SECOND_VERIFICATION' } });
+    const firstSource = await f.runtime.readSource(f.actors.staff, learningTicketId);
+    const secondSource = await f.runtime.readSource(f.actors.staff, otherTicketId);
+    const entered = barrier(); const wait = barrier();
+    const firstCapture: IndependentCheckCapture = { onDurablyDeferred: vi.fn() };
+    const secondCapture: IndependentCheckCapture = { onDurablyDeferred: vi.fn() };
+    const selected: { ticketId: string; sourceGeneration: number; capture?: IndependentCheckCapture }[] = [];
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, processingEnabled: () => true,
+      processingPortsFor(key, capture) {
+        selected.push({ ...key, capture });
+        return { ...f.ports, model: { async generate(...args) {
+          if (key.ticketId === learningTicketId) { entered.release(); await wait.reached; }
+          const generated = await f.ports.model.generate(...args);
+          return { ...generated, outputJson: JSON.stringify({ ...f.candidate, solution: `Export ${key.ticketId}.` }) };
+        } } };
+      }, staffAccess: { resolve: (id) => f.resolve(id) } });
+    const first = runtime.processWork({ ticketId: learningTicketId, sourceGeneration: firstSource.sourceGeneration,
+      workerId: 'first-scoped-worker', leaseMilliseconds: 30_000 }, undefined, firstCapture);
+    try {
+      await entered.reached;
+      expect((await runtime.processWork({ ticketId: otherTicketId, sourceGeneration: secondSource.sourceGeneration,
+        workerId: 'second-scoped-worker', leaseMilliseconds: 30_000 }, undefined, secondCapture)).outcome).toBe('candidate');
+    } finally { wait.release(); }
+    expect((await first).outcome).toBe('candidate');
+    expect(selected).toEqual([
+      { ticketId: learningTicketId, sourceGeneration: firstSource.sourceGeneration, capture: firstCapture },
+      { ticketId: otherTicketId, sourceGeneration: secondSource.sourceGeneration, capture: secondCapture },
+    ]);
+    const firstWork = await runtime.readWork(f.actors.staff, { ticketId: learningTicketId, sourceGeneration: firstSource.sourceGeneration });
+    const secondWork = await runtime.readWork(f.actors.staff, { ticketId: otherTicketId, sourceGeneration: secondSource.sourceGeneration });
+    expect(firstWork.candidate?.solution).toBe(`Export ${learningTicketId}.`);
+    expect(secondWork.candidate?.solution).toBe(`Export ${otherTicketId}.`);
+    expect(f.state.modelCalls).toBe(2);
+  });
+
+  it('discovers eligible and withdrawn Sources for maintenance while legacy processing scans remain OFF', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    f.state.enabled = false;
+    const before = await f.rows();
+    const eligible = await f.runtime.scanMaintenanceCandidates({ limit: 32 });
+    expect(eligible.candidates).toEqual([{ ticketId: learningTicketId,
+      sourceGeneration: (await f.runtime.readSource(f.actors.staff, learningTicketId)).sourceGeneration }]);
+    expect(await f.runtime.scanCandidates({ limit: 32 })).toEqual({ outcome: 'held', reason: 'learning_disabled' });
+    expect(await f.rows()).toEqual(before); expect(f.state.modelCalls).toBe(0);
+    f.state.enabled = true; const { articleId } = await f.delivered();
+    f.state.enabled = false;
+    await f.runtime.withdraw(f.actors.staff, { ticketId: learningTicketId,
+      clientCommandId: 'maintenance-withdraw', reason: 'privacy_withdrawal' });
+    expect((await f.runtime.scanMaintenanceCandidates({ limit: 32 })).reconciliationSources).toContain(learningTicketId);
+    expect((await f.runtime.reconcileSource(learningTicketId)).outcome).toBe('reconciled');
+    expect(await f.knowledge.getProvenance(f.actors.admin, { articleId })).toBeDefined();
+    expect(f.state.modelCalls).toBe(1);
+  });
+
+  it('discovers maintenance work without consulting unavailable model configuration or scoped factories', async () => {
+    const f = await fixture(); await f.enrollAndVerify();
+    let configurationCalls = 0; let scopedCalls = 0;
+    const runtime = createSupportLearningRuntime({ application: f.application, knowledge: f.knowledge,
+      sources: f.sources, clock: f.clock, ports: { serviceAccess: f.ports.serviceAccess,
+        retirementAccess: f.ports.retirementAccess, configuration: { async resolve() {
+          configurationCalls += 1; return { outcome: 'unavailable' };
+        } } },
+      processingEnabled() { throw new Error(learningCanary); },
+      processingPortsFor() { scopedCalls += 1; return undefined; },
+      staffAccess: { resolve: (id) => f.resolve(id) } });
+    const before = await f.rows();
+    expect((await runtime.scanMaintenanceCandidates({ limit: 32 })).candidates).toHaveLength(1);
+    expect(configurationCalls).toBe(0); expect(scopedCalls).toBe(0);
+    expect(await f.rows()).toEqual(before); expect(f.state.modelCalls).toBe(0);
+    expect(await runtime.scanCandidates({ limit: 32 }))
+      .toEqual({ outcome: 'held', reason: 'learning_readiness_unavailable' });
   });
 });

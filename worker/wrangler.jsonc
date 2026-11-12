@@ -27,6 +27,7 @@
     "PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED": "false",
     "PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON": "",
     "PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED": "false",
+    "PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED": "false",
     "PEGMA_AGENT_CLIENTS_JSON": "[{\"clientId\":\"pg-kb-codex-accept-v1\",\"name\":\"Pegma Codex CLI\",\"redirectUris\":[\"http://127.0.0.1/callback\"],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"authorization_code\"]},{\"clientId\":\"pg-kb-claude-accept-v1\",\"name\":\"Pegma Claude Code\",\"redirectUris\":[\"http://localhost:48772/callback\"],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"authorization_code\"]},{\"clientId\":\"pg-kb-device-accept-v1\",\"name\":\"Pegma RFC 8628 control\",\"redirectUris\":[],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"device_code\"]},{\"clientId\":\"pg-kb-grok-accept-v1\",\"name\":\"Pegma Grok Bot\",\"redirectUris\":[\"https://www.cursor.com/agents/mcp/oauth/callback\"],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"authorization_code\"]}]",
     "PEGMA_KNOWLEDGE_BROWSER_LIMIT": "120",
     "PEGMA_AGENT_RESOURCE_LIMIT": "300",
@@ -56,9 +57,12 @@
   // Resource existence is verified before deploying this opt-in configuration.
   "queues": {
     "producers": [
+      { "binding": "SUPPORT_ENGINEERING_JOBS", "queue": "pegma-dev-support-engineering" },
       { "binding": "SUPPORT_LEARNING_REVIEWS", "queue": "pegma-dev-support-learning-reviews" },
     ],
     "consumers": [
+      { "queue": "pegma-dev-support-engineering", "max_batch_size": 1, "max_batch_timeout": 1,
+        "max_concurrency": 1, "max_retries": 7, "dead_letter_queue": "pegma-dev-support-engineering-dlq" },
       { "queue": "pegma-dev-support-learning-reviews", "max_batch_size": 1,
         "max_retries": 3, "dead_letter_queue": "pegma-dev-support-learning-reviews-dlq" },
     ],

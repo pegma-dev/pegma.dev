@@ -1,0 +1,281 @@
+import type { PrivateSourcesVerifier } from "@pegma/knowledge-base-application";
+import type { ResolutionLearningKey } from "@pegma/support-desk-application";
+import type { LearningChecksPort } from "@pegma/support-desk-ai";
+import { createAgentPrincipalResolver } from "./agent-authority";
+import type { SupportRuntime } from "./support-desk";
+import {
+  createKnowledgeRuntime,
+  type KnowledgeRuntime,
+  type KnowledgeRuntimeOptions,
+} from "./knowledge-runtime";
+import {
+  createSupportIndependentChecks,
+  type IndependentCheckCapture,
+  type SupportIndependentChecksOptions,
+} from "./support-independent-checks";
+import {
+  createSupportLearningRuntime,
+  createSupportLearningSourceBridge,
+  type SupportLearningRuntimeOptions,
+} from "./support-learning";
+import {
+  createProductionSupportLearning,
+  type SupportLearningProductionOptions,
+} from "./support-learning-production";
+
+type Configuration = NonNullable<
+  SupportLearningProductionOptions["configuration"]
+>;
+type Checks = ReturnType<typeof createSupportIndependentChecks>;
+type KnowledgeOptions = Omit<
+  KnowledgeRuntimeOptions,
+  "store" | "clock" | "privateSources"
+>;
+type BrowserRuntime = Omit<SupportLearningRuntimeOptions, "staffAccess">;
+
+/** Current operator-owned inputs only. The graph creates no identity, role,
+ * credential, route approval, timer, queue or publication permission. */
+export interface SupportLearningCompositionOptions {
+  readonly production?: Omit<
+    SupportLearningProductionOptions,
+    "configuration"
+  > & {
+    readonly configuration?: Omit<Configuration, "readChecks">;
+  };
+  /** One controller shared by the root's learning and engineering composition.
+   * Actual Support and KB applications are supplied only after construction. */
+  readonly independentChecks?: Omit<
+    SupportIndependentChecksOptions,
+    "store" | "clock" | "application" | "knowledge" | "knowledgeAccess"
+  >;
+  readonly readScheduling?: SupportLearningRuntimeOptions["readScheduling"];
+}
+
+/** Build before Support, bind its exact application, then construct KB here.
+ * Keep this same sources object in answering and both KB maintenance factories. */
+export function createSupportLearningComposition(
+  options: SupportLearningCompositionOptions = {},
+) {
+  let support: SupportRuntime | undefined;
+  let knowledge: KnowledgeRuntime | undefined;
+  let knowledgeOptions: KnowledgeOptions | undefined;
+  let checks: Checks | undefined;
+  let verifier: PrivateSourcesVerifier | undefined;
+  let failed = false;
+  const supplied = options.production?.configuration;
+  const configured =
+    supplied !== undefined && options.independentChecks !== undefined;
+  const readChecks = () => (failed ? undefined : checks);
+  const production = createProductionSupportLearning(
+    !configured
+      ? {}
+      : {
+          ...options.production,
+          configuration: { ...supplied, readChecks },
+        },
+  );
+
+  const policy: Pick<LearningChecksPort, "resolvePolicy"> = Object.freeze({
+    resolvePolicy: (...args) =>
+      readChecks()?.resolvePolicy(...args) ??
+      Promise.resolve({ outcome: "unavailable" as const }),
+  });
+  const unscopedChecks: LearningChecksPort = Object.freeze({
+    ...policy,
+    check: async () => ({ outcome: "held" as const }),
+    verify: (...args: Parameters<LearningChecksPort["verify"]>) =>
+      readChecks()?.learningSdkVerifier.verify(...args) ??
+      Promise.resolve(null),
+  });
+  function ready(): boolean {
+    return (
+      !failed &&
+      support !== undefined &&
+      knowledge !== undefined &&
+      checks !== undefined &&
+      production.sourcePorts !== undefined
+    );
+  }
+  function sourceVerifier(): PrivateSourcesVerifier | undefined {
+    if (
+      !ready() ||
+      support === undefined ||
+      production.sourcePorts === undefined
+    )
+      return undefined;
+    verifier ??= createSupportLearningSourceBridge({
+      application: support.application,
+      clock: support.clock,
+      serviceAccess: production.sourcePorts.serviceAccess,
+      reviewPolicy: policy,
+      ...(options.readScheduling === undefined
+        ? {}
+        : { readScheduling: options.readScheduling }),
+    });
+    return verifier;
+  }
+  // Only the real SDK verifier and exact application are memoized. Every call
+  // retains the SDK's fresh authority, source and review-policy observations.
+  const sources: PrivateSourcesVerifier = Object.freeze({
+    canRead: (request: Parameters<PrivateSourcesVerifier["canRead"]>[0]) =>
+      sourceVerifier()?.canRead(request) ?? Promise.resolve(false),
+    canPublish: (
+      request: Parameters<PrivateSourcesVerifier["canPublish"]>[0],
+    ) => sourceVerifier()?.canPublish(request) ?? Promise.resolve(false),
+    isCurrent: (request: Parameters<PrivateSourcesVerifier["isCurrent"]>[0]) =>
+      sourceVerifier()?.isCurrent(request) ?? Promise.resolve(false),
+  });
+  function refuseBinding(): false {
+    failed = true;
+    checks = undefined;
+    verifier = undefined;
+    return false;
+  }
+  function runtimeOptions(): BrowserRuntime | undefined {
+    if (!ready() || support === undefined || knowledge === undefined)
+      return undefined;
+    return {
+      application: support.application,
+      knowledge: knowledge.application,
+      sources,
+      clock: support.clock,
+      processingEnabled: () => ready() && production.processingEnabled(),
+      ports: { ...production.sourcePorts, checks: unscopedChecks },
+      processingPortsFor: (key, capture) =>
+        ready() ? production.createProcessingPorts(key, capture) : undefined,
+      ...(options.readScheduling === undefined
+        ? {}
+        : { readScheduling: options.readScheduling }),
+    };
+  }
+  return Object.freeze({
+    application: production.application,
+    sources,
+    readChecks,
+    ready,
+    processingEnabled: () => ready() && production.processingEnabled(),
+    bindSupport(runtime: SupportRuntime): boolean {
+      if (failed || !configured || production.sourcePorts === undefined)
+        return false;
+      if (support !== undefined)
+        return support.application === runtime.application &&
+          support.store === runtime.store &&
+          support.clock === runtime.clock
+          ? true
+          : refuseBinding();
+      if (!production.attachRuntime(runtime)) return refuseBinding();
+      support = runtime;
+      return true;
+    },
+    /** Forces the shared Store, Clock and verifier into the actual KB factory.
+     * Rebinding this graph with different options is a closed configuration error. */
+    createKnowledge(input: KnowledgeOptions): KnowledgeRuntime | undefined {
+      if (
+        failed ||
+        support === undefined ||
+        production.sourcePorts === undefined
+      )
+        return undefined;
+      const binding = input as KnowledgeOptions &
+        Partial<
+          Pick<KnowledgeRuntimeOptions, "store" | "clock" | "privateSources">
+        >;
+      if (
+        (binding.store !== undefined && binding.store !== support.store) ||
+        (binding.clock !== undefined && binding.clock !== support.clock) ||
+        (binding.privateSources !== undefined &&
+          binding.privateSources !== sources)
+      ) {
+        refuseBinding();
+        return undefined;
+      }
+      if (knowledge !== undefined) {
+        if (knowledgeOptions === input) return knowledge;
+        refuseBinding();
+        return undefined;
+      }
+      try {
+        knowledgeOptions = input;
+        const current = support;
+        knowledge = createKnowledgeRuntime({
+          ...input,
+          store: current.store,
+          clock: current.clock,
+          privateSources: sources,
+        });
+        checks = createSupportIndependentChecks({
+          ...options.independentChecks!,
+          store: current.store,
+          clock: current.clock,
+          application: () => {
+            if (failed || support !== current)
+              throw new TypeError("Learning Support binding unavailable");
+            return current.application;
+          },
+          knowledge: knowledge.application,
+          knowledgeAccess: production.sourcePorts.knowledgeAccess,
+        });
+        return knowledge;
+      } catch {
+        refuseBinding();
+        return undefined;
+      }
+    },
+    browserRuntime: runtimeOptions,
+    /** Reconciliation stays available when model generation or its route is OFF. */
+    runtime(): ReturnType<typeof createSupportLearningRuntime> | undefined {
+      const base = runtimeOptions();
+      if (base === undefined || support === undefined) return undefined;
+      const resolve = createAgentPrincipalResolver(support);
+      return createSupportLearningRuntime({
+        ...base,
+        staffAccess: {
+          async resolve(principalId, signal) {
+            if (signal.aborted) return null;
+            const access = await resolve(principalId);
+            return signal.aborted ? null : access;
+          },
+        },
+      });
+    },
+    processingFor(
+      key: ResolutionLearningKey,
+      capture: IndependentCheckCapture = {},
+    ) {
+      const base = runtimeOptions();
+      if (base === undefined || support === undefined) return undefined;
+      const ports = production.createProcessingPorts(key, capture);
+      if (ports === undefined) return undefined;
+      const resolve = createAgentPrincipalResolver(support);
+      return createSupportLearningRuntime({
+        ...base,
+        ports,
+        staffAccess: {
+          async resolve(principalId, signal) {
+            if (signal.aborted) return null;
+            const access = await resolve(principalId);
+            return signal.aborted ? null : access;
+          },
+        },
+      });
+    },
+    /** Forward unchanged to ready/physical retrieval construction and answering. */
+    retrievalOptions() {
+      if (!ready() || support === undefined) return undefined;
+      return Object.freeze({
+        store: support.store,
+        clock: support.clock,
+        privateSources: sources,
+      });
+    },
+    precomputePending: (...args: Parameters<Checks["precomputePending"]>) =>
+      ready()
+        ? production.precomputePending(...args)
+        : Promise.resolve({ outcome: "held" as const }),
+    discardChecks: (ticketId: string) => production.discardChecks(ticketId),
+  });
+}
+
+export type SupportLearningComposition = ReturnType<
+  typeof createSupportLearningComposition
+>;

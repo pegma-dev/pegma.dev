@@ -1,4 +1,21 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as d1 from '@pegma/storage-cloudflare-d1';
+import * as supportDesk from './support-desk';
+import * as engineeringComposition from './support-engineering-composition';
+import { createWorker } from './index';
+import { SUPPORT_ENGINEERING_QUEUE } from './support-engineering-queue';
+import { CLEANUP_CRON, cleanupLaneAt } from './maintenance-schedule';
+import * as identityMaintenance from './identity-maintenance';
+import {
+  driverHintRows,
+  driverHintKey,
+  createDeferredDriverChecksFixture,
+} from './support-engineering-driver-fixtures';
+import {
+  engineeringHttpObject,
+  engineeringHttpResult,
+  engineeringHttpNumber,
+} from './support-engineering-http-fixtures';
 import type {
   EngineeringCandidate,
   EngineeringExportRequest,
@@ -20,6 +37,12 @@ import {
   type SupportEngineeringProductionOptions,
   type SupportEngineeringProposalSettings,
 } from './support-engineering-production';
+
+vi.mock('@pegma/storage-cloudflare-d1', async (original) => ({
+  ...(await original<typeof import('@pegma/storage-cloudflare-d1')>()),
+  createCloudflareD1Store: vi.fn(),
+}));
+afterEach(() => vi.restoreAllMocks());
 
 const now = '2026-11-10T12:00:00.000Z';
 const clock = { now: () => now };
@@ -869,4 +892,626 @@ describe('normal production engineering composition', () => {
       expect(t.modelFetch).toHaveBeenCalledOnce();
     },
   );
+});
+
+/** The platform binding selects the genuine existing Memory Store. Host,
+ * Identity/RoleStore, App and production adapters all remain real. */
+async function normalEntry(deferredChecks = false) {
+  const t = await fixture();
+  const deferred = deferredChecks
+    ? await createDeferredDriverChecksFixture(
+        t.f.engineering,
+        t.host.store,
+        false,
+      )
+    : undefined;
+  vi.mocked(d1.createCloudflareD1Store).mockReturnValue(t.host.store);
+  const instances = vi.spyOn(supportDesk, 'createSupportRuntime');
+  const jobs = vi.spyOn(
+    engineeringComposition,
+    'composeSupportEngineeringDriver',
+  );
+  const unavailable = (): never => {
+    throw new Error('Memory root fixture cannot execute D1');
+  };
+  const environment = {
+    IDENTITY_DB: {
+      prepare: unavailable,
+      batch: unavailable,
+      exec: unavailable,
+      dump: unavailable,
+      withSession: unavailable,
+    },
+    IDENTITY_EMAIL_CODE_SECRET_BASE64: btoa('e'.repeat(32)),
+    IDENTITY_EMAIL_FROM: 'Pegma <synthetic@pegma.dev>',
+    IDENTITY_EMAIL_ENABLED: 'false',
+    PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED: 'true',
+  } as unknown as Parameters<ReturnType<typeof createWorker>['fetch']>[1];
+  const options = {
+    engineeringProduction:
+      deferred === undefined
+        ? t.options
+        : {
+            ...t.options,
+            configuration: {
+              ...t.configuration,
+              independentChecks: deferred.configuration,
+            },
+          },
+    engineering: {
+      enabled: () => true,
+      reviewEnabled: () => true,
+      configuration: {
+        application: { enabled: true },
+        repositories: [{ key: 'workspace-core', descriptor: allowed }],
+      },
+    },
+  };
+  const worker = createWorker(options);
+  const pending: Promise<unknown>[] = [];
+  const context = {
+    waitUntil: (promise: Promise<unknown>) => pending.push(promise),
+    passThroughOnException: unavailable,
+    props: {},
+    exports: {},
+    tracing: {},
+    abort: unavailable,
+  } as unknown as ExecutionContext;
+  async function call(request: Request) {
+    const response = await worker.fetch(request, environment, context);
+    await Promise.all(pending.splice(0));
+    return response;
+  }
+  async function eligible() {
+    const ticket = await t.f.legacyTicket();
+    expect(
+      (
+        await call(
+          t.f.request('enroll', {
+            commandId: 'NORMAL-PRODUCTION-ENROLL',
+            expectedRevision: ticket.revision,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const response = await call(
+      t.f.request('evidence', {
+        commandId: 'NORMAL-PRODUCTION-EVIDENCE',
+        expectedRevision: ticket.revision,
+        expectedBehavior: 'Export retains rows.',
+        actualBehavior: 'Export is empty.',
+        reproductionSteps: [
+          'Create one fictional row.',
+          'Export the workspace.',
+        ],
+        visibleMessageIds: ['engineering-question'],
+        verificationReference: 'SYNTHETIC_PRIVATE_FAILURE_REFERENCE',
+        security: 'ordinary',
+      }),
+    );
+    expect(response.status).toBe(200);
+    const source = engineeringHttpResult(await engineeringHttpObject(response));
+    expect(source.state).toBe('eligible');
+    const runtime = instances.mock.results.at(-1)?.value as ReturnType<
+      typeof createSupportRuntime
+    >;
+    const job = jobs.mock.results.at(-1)?.value as ReturnType<
+      typeof engineeringComposition.composeSupportEngineeringDriver
+    >;
+    expect(jobs.mock.calls.at(-1)?.[0]).toBe(runtime);
+    return {
+      key: {
+        ticketId: ticket.id,
+        sourceGeneration: engineeringHttpNumber(source.sourceGeneration),
+      },
+      runtime,
+      job,
+    };
+  }
+  return {
+    ...t,
+    deferred,
+    environment,
+    options,
+    worker,
+    context,
+    call,
+    eligible,
+    jobs,
+    instances,
+  };
+}
+
+async function nextDriverPhase(
+  job: ReturnType<
+    typeof engineeringComposition.composeSupportEngineeringDriver
+  >,
+) {
+  for (let physical = 0; physical < 160; physical++) {
+    const result = await job.runTick();
+    if (result.outcome === 'work') return result;
+  }
+  throw new Error(
+    'Bounded normal entry fixture did not reach existing SDK work',
+  );
+}
+
+describe('normal root production engineering integration', () => {
+  it('installs trusted App proofs before human evidence and uses that exact application for later driver stages', async () => {
+    const t = await normalEntry();
+    const { key, runtime, job } = await t.eligible();
+    expect(t.productContext.resolve).toHaveBeenCalledOnce();
+    expect((await nextDriverPhase(job)).result.outcome).toBe('candidate');
+    expect((await nextDriverPhase(job)).result.outcome).toBe('prepared');
+    const work = await runtime.application.readEngineeringWork(
+      t.f.engineering.actors.security,
+      key,
+    );
+    expect(work.proposal?.request.bundle.evidenceReferences).toEqual(
+      settings.evidenceReferences,
+    );
+    expect(work.approval).toBeUndefined();
+    expect(work.dispatch).toBeUndefined();
+    expect(t.modelFetch).toHaveBeenCalledOnce();
+    expect(
+      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
+    ).toBe(true);
+  });
+  it.each(['deployment', 'source'] as const)(
+    'keeps %s processing OFF without any driver or provider opportunity',
+    async (kind) => {
+      const t = await normalEntry();
+      const { job } = await t.eligible();
+      if (kind === 'deployment')
+        Reflect.set(
+          t.environment,
+          'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED',
+          'false',
+        );
+      else t.state.enabled = false;
+      expect(await job.runTick()).toEqual({
+        outcome: 'disabled',
+        checkpointSaved: false,
+      });
+      expect(t.modelFetch).not.toHaveBeenCalled();
+      expect(t.readApiKey).not.toHaveBeenCalled();
+    },
+  );
+  it('binds current driver admission through the real awaited service-authority boundary', async () => {
+    const t = await normalEntry();
+    const { job } = await t.eligible();
+    for (let physical = 0; physical < 160; physical++) {
+      const result = await job.runTick();
+      if (result.outcome === 'scanned' && result.selected) break;
+      if (physical === 159) throw new Error('Expected bounded discovery');
+    }
+    let begin = () => {};
+    let release = () => {};
+    const entered = new Promise<void>((resolve) => {
+      begin = resolve;
+    });
+    const proceed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = t.configuration.serviceAccess.resolve.bind(
+      t.configuration.serviceAccess,
+    );
+    vi.spyOn(t.configuration.serviceAccess, 'resolve').mockImplementation(
+      async (signal) => {
+        const current = await original(signal);
+        begin();
+        await proceed;
+        return current;
+      },
+    );
+    const running = job.runTick();
+    await entered;
+    Reflect.set(
+      t.environment,
+      'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED',
+      'false',
+    );
+    release();
+    expect((await running).outcome).toBe('unavailable');
+    expect(t.modelFetch).not.toHaveBeenCalled();
+    expect(t.readApiKey).not.toHaveBeenCalled();
+  });
+});
+
+function queueDelivery(attempts: number, sent: string, fail = false) {
+  const message = {
+    id: 'fictional-engineering-envelope',
+    timestamp: new Date(sent),
+    attempts,
+    body: { version: 1, kind: 'support-engineering-wake' },
+    ack: vi.fn(() => {
+      if (fail) throw new Error('FICTIONAL_PLATFORM_ACK_UNKNOWN');
+    }),
+    retry: vi.fn((_options?: QueueRetryOptions) => {
+      if (fail) throw new Error('FICTIONAL_PLATFORM_RETRY_UNKNOWN');
+    }),
+  };
+  const batch: MessageBatch = {
+    queue: SUPPORT_ENGINEERING_QUEUE,
+    messages: [message],
+    metadata: {} as MessageBatchMetadata,
+    ackAll: vi.fn(),
+    retryAll: vi.fn(),
+  };
+  return { message, batch };
+}
+async function queuePhase(
+  t: Awaited<ReturnType<typeof normalEntry>>,
+  match: () => Promise<boolean>,
+  inspect?: () => Promise<unknown>,
+) {
+  const start = Date.parse(t.f.engineering.clock.now());
+  const physical: number[] = [];
+  const observations: unknown[] = [];
+  let cursor: string | null = null;
+  for (let seed = 0; seed < 5; seed++) {
+    const at = start + seed * 60_000;
+    t.f.engineering.advance(at - Date.parse(t.f.engineering.clock.now()));
+    const sent = t.f.engineering.clock.now();
+    for (let attempts = 1; attempts <= 8; attempts++) {
+      const delivery = queueDelivery(attempts, sent);
+      await t.worker.queue(delivery.batch, t.environment, t.context);
+      physical.push(attempts);
+      const row = await t.host.store
+        .collection(driverHintRows)
+        .get(driverHintKey);
+      if (row !== null && typeof row.payload === 'string') {
+        const checkpoint = JSON.parse(row.payload) as {
+          generation: number;
+          cursor: string | null;
+          targets: unknown[];
+        };
+        observations.push({
+          seed,
+          attempts,
+          generation: checkpoint.generation,
+          cursorPresent: checkpoint.cursor !== null,
+          cursorChanged: checkpoint.cursor !== cursor,
+          selected: checkpoint.targets.length > 0,
+          modelCalls: t.modelFetch.mock.calls.length,
+        });
+        cursor = checkpoint.cursor;
+      }
+      if (await match()) return physical;
+      t.f.engineering.advance(1_000);
+      if (!delivery.message.retry.mock.calls.length) break;
+    }
+  }
+  throw new Error(
+    'The bounded actual queue fixture did not reach its expected SDK phase: ' +
+      JSON.stringify({ observations, work: await inspect?.() }),
+  );
+}
+
+describe('registered engineering Queue and cleanup entries', () => {
+  it('runs the genuine deferred checker in a separate registered Queue phase before preparing a human-review proposal', async () => {
+    const t = await normalEntry(true);
+    const { key, runtime } = await t.eligible();
+    const phases = await queuePhase(
+      t,
+      async () =>
+        (
+          await runtime.application.readEngineeringWork(
+            t.f.engineering.actors.security,
+            key,
+          )
+        ).proposal !== undefined,
+      () =>
+        runtime.application.readEngineeringWork(
+          t.f.engineering.actors.security,
+          key,
+        ),
+    );
+    expect(phases.length).toBeGreaterThanOrEqual(5);
+    expect(t.modelFetch).toHaveBeenCalledOnce();
+    expect(t.deferred?.state.calls).toBe(1);
+    const work = await runtime.application.readEngineeringWork(
+      t.f.engineering.actors.security,
+      key,
+    );
+    expect(work.proposal).toBeDefined();
+    expect(work.approval).toBeUndefined();
+    expect(work.dispatch).toBeUndefined();
+    expect(
+      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
+    ).toBe(true);
+    expect((await t.deferred?.rows())?.entries[0]).toMatchObject({
+      state: 'checked',
+      request: null,
+    });
+    const raw = await t.host.store
+      .collection(driverHintRows)
+      .get(driverHintKey);
+    expect(String(raw?.payload)).not.toContain('exactRequest');
+    expect(String(raw?.payload)).not.toContain('FICTIONAL_CHECK_PROVIDER_KEY');
+    expect(String(raw?.payload)).not.toContain(
+      'SYNTHETIC_PRIVATE_FAILURE_REFERENCE',
+    );
+  });
+  it('recovers the registered checker phase after platform retry and ACK failures without another paid call', async () => {
+    const t = await normalEntry(true);
+    const { key, runtime } = await t.eligible();
+    await queuePhase(t, async () => {
+      const row = await t.host.store
+        .collection(driverHintRows)
+        .get(driverHintKey);
+      const targets =
+        row === null
+          ? []
+          : (JSON.parse(String(row.payload)) as { targets: { kind: string }[] })
+              .targets;
+      return targets.some((target) => target.kind === 'checks');
+    });
+    expect(t.deferred?.state.calls).toBe(0);
+    const lost = queueDelivery(1, t.f.engineering.clock.now(), true);
+    await t.worker.queue(lost.batch, t.environment, t.context);
+    expect(lost.message.retry).toHaveBeenCalledOnce();
+    expect(lost.message.ack).toHaveBeenCalledOnce();
+    expect(t.deferred?.state.calls).toBe(1);
+    expect(
+      (
+        await runtime.application.readEngineeringWork(
+          t.f.engineering.actors.security,
+          key,
+        )
+      ).proposal,
+    ).toBeUndefined();
+    const duplicate = queueDelivery(2, t.f.engineering.clock.now());
+    await t.worker.queue(duplicate.batch, t.environment, t.context);
+    expect(
+      (
+        await runtime.application.readEngineeringWork(
+          t.f.engineering.actors.security,
+          key,
+        )
+      ).proposal,
+    ).toBeDefined();
+    expect(t.deferred?.state.calls).toBe(1);
+    expect(t.modelFetch).toHaveBeenCalledOnce();
+    expect(
+      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
+    ).toBe(true);
+  });
+  it('advances historical physical pages across minute seeds without an empty retry chain', async () => {
+    const t = await normalEntry();
+    for (let index = 0; index < 20; index++)
+      await t.host.application.createCustomerTicket(
+        t.f.engineering.actors.customer,
+        {
+          commandId: 'fictional-history-create-' + index,
+          correlationId: 'fictional-history',
+          ticketId: 'a-fictional-history-' + index,
+          messageId: 'fictional-history-message-' + index,
+          subject: 'Historical ordinary question',
+          body: 'No verified engineering failure exists.',
+        },
+      );
+    const seen = new Set<string>();
+    for (let seed = 0; seed < 3; seed++) {
+      const delivery = queueDelivery(1, t.f.engineering.clock.now());
+      await t.worker.queue(delivery.batch, t.environment, t.context);
+      expect(delivery.message.ack).toHaveBeenCalledOnce();
+      expect(delivery.message.retry).not.toHaveBeenCalled();
+      const row = await t.host.store
+        .collection(driverHintRows)
+        .get(driverHintKey);
+      if (row === null || typeof row.payload !== 'string')
+        throw new Error('Expected actual durable cursor');
+      const checkpoint = JSON.parse(row.payload) as {
+        generation: number;
+        cursor: string;
+        targets: unknown[];
+      };
+      expect(checkpoint.generation).toBe(seed + 1);
+      expect(checkpoint.targets).toEqual([]);
+      expect(typeof checkpoint.cursor).toBe('string');
+      expect(seen.has(checkpoint.cursor)).toBe(false);
+      seen.add(checkpoint.cursor);
+      t.f.engineering.advance(60_000);
+    }
+    expect(t.modelFetch).not.toHaveBeenCalled();
+    expect(t.readApiKey).not.toHaveBeenCalled();
+  });
+  it('keeps a known paid candidate after platform retry/ACK callbacks fail without another generation', async () => {
+    const t = await normalEntry();
+    const { key, runtime, job } = await t.eligible();
+    for (let physical = 0; physical < 160; physical++) {
+      const result = await job.runTick();
+      if (result.outcome === 'scanned' && result.selected) break;
+      if (physical === 159)
+        throw new Error('Expected bounded actual discovery');
+    }
+    const failed = queueDelivery(1, t.f.engineering.clock.now(), true);
+    await t.worker.queue(failed.batch, t.environment, t.context);
+    expect(t.modelFetch).toHaveBeenCalledOnce();
+    expect(
+      (
+        await runtime.application.readEngineeringWork(
+          t.f.engineering.actors.security,
+          key,
+        )
+      ).candidate,
+    ).toBeDefined();
+    for (let attempts = 2; attempts <= 8; attempts++) {
+      const duplicate = queueDelivery(attempts, t.f.engineering.clock.now());
+      await t.worker.queue(duplicate.batch, t.environment, t.context);
+    }
+    expect(t.modelFetch).toHaveBeenCalledOnce();
+    expect(
+      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
+    ).toBe(true);
+  });
+  it.each(['deployment', 'configuration', 'authority'] as const)(
+    'denies late %s change through the registered queue before paid generation',
+    async (change) => {
+      const t = await normalEntry();
+      const { job } = await t.eligible();
+      for (let physical = 0; physical < 160; physical++) {
+        const result = await job.runTick();
+        if (result.outcome === 'scanned' && result.selected) break;
+        if (physical === 159) throw new Error('Expected bounded discovery');
+      }
+      let begin = () => {};
+      let release = () => {};
+      const entered = new Promise<void>((resolve) => {
+        begin = resolve;
+      });
+      const proceed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const original = t.configuration.serviceAccess.resolve.bind(
+        t.configuration.serviceAccess,
+      );
+      vi.spyOn(t.configuration.serviceAccess, 'resolve').mockImplementation(
+        async (signal) => {
+          const current = await original(signal);
+          begin();
+          await proceed;
+          return current;
+        },
+      );
+      const delivery = queueDelivery(1, t.f.engineering.clock.now());
+      const running = t.worker.queue(delivery.batch, t.environment, t.context);
+      await entered;
+      if (change === 'deployment')
+        Reflect.set(
+          t.environment,
+          'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED',
+          'false',
+        );
+      if (change === 'configuration')
+        Reflect.set(t.options.engineeringProduction, 'configuration', {
+          ...t.configuration,
+        });
+      if (change === 'authority') await t.f.engineering.revoke('processor');
+      release();
+      await running;
+      expect(t.modelFetch).not.toHaveBeenCalled();
+      expect(t.readApiKey).not.toHaveBeenCalled();
+      expect(delivery.message.ack).toHaveBeenCalledOnce();
+      expect(delivery.message.retry).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['absent', 'off'] as const)(
+    'keeps an %s production installation before all queue and D1 work',
+    async (mode) => {
+      const unavailable = vi.fn(() => {
+        throw new Error('OFF binding read');
+      });
+      const worker = createWorker(
+        mode === 'absent'
+          ? {}
+          : { engineeringProduction: { enabled: () => true } },
+      );
+      const env = {
+        PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED:
+          mode === 'absent' ? 'true' : 'false',
+        get IDENTITY_DB() {
+          return unavailable();
+        },
+        get SUPPORT_ENGINEERING_JOBS() {
+          return unavailable();
+        },
+      } as unknown as Parameters<typeof worker.fetch>[1];
+      const delivery = queueDelivery(1, new Date().toISOString());
+      await worker.queue(delivery.batch, env, {
+        waitUntil() {},
+      } as unknown as ExecutionContext);
+      expect(delivery.message.ack).toHaveBeenCalledOnce();
+      expect(unavailable).not.toHaveBeenCalled();
+    },
+  );
+  it('sends one body-free cleanup wake while retaining the actual preexisting cleanup job', async () => {
+    const t = await normalEntry();
+    const maintenance = vi.spyOn(identityMaintenance, 'runIdentityMaintenance');
+    const send = vi.fn(async () => ({
+      metadata: { metrics: { backlogCount: 1, backlogBytes: 55 } },
+    }));
+    Reflect.set(t.environment, 'SUPPORT_ENGINEERING_JOBS', { send });
+    let at =
+      Math.floor(Date.parse(t.f.engineering.clock.now()) / 60_000) * 60_000;
+    for (let minutes = 0; minutes < 60; minutes++, at += 60_000) {
+      const lane = cleanupLaneAt(at);
+      if (
+        new Date(at).getUTCMinutes() !== 59 &&
+        lane.kind === 'identity' &&
+        lane.task === 'challenges'
+      )
+        break;
+    }
+    await t.worker.scheduled(
+      { cron: CLEANUP_CRON, scheduledTime: at, noRetry() {} },
+      t.environment,
+      t.context,
+    );
+    await t.call(new Request('https://pegma.dev/api/health'));
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      { version: 1, kind: 'support-engineering-wake' },
+      { contentType: 'json' },
+    );
+    expect(maintenance).toHaveBeenCalledOnce();
+    expect(maintenance.mock.calls[0]?.[2]).toEqual({ tasks: ['challenges'] });
+    expect(t.jobs).not.toHaveBeenCalled();
+    expect(t.modelFetch).not.toHaveBeenCalled();
+    expect(t.readApiKey).not.toHaveBeenCalled();
+  });
+  it('advances real normal-root SDK work in separate deliveries and stops at the human approval boundary', async () => {
+    const t = await normalEntry();
+    const { key, runtime } = await t.eligible();
+    const forbiddenSend = vi.fn(() => {
+      throw new Error('Consumer must not send after an SDK stage');
+    });
+    Reflect.set(t.environment, 'SUPPORT_ENGINEERING_JOBS', {
+      send: forbiddenSend,
+    });
+    const acceptedAt = Date.parse(t.f.engineering.clock.now());
+    const physical = await queuePhase(
+      t,
+      async () =>
+        (
+          await runtime.application.readEngineeringWork(
+            t.f.engineering.actors.security,
+            key,
+          )
+        ).proposal !== undefined,
+      async () => {
+        const work = await runtime.application.readEngineeringWork(
+          t.f.engineering.actors.security,
+          key,
+        );
+        return {
+          stage: work.stage,
+          status: work.status,
+          deadline: work.deadline,
+          candidatePresent: work.candidateHash !== undefined,
+          proposalPresent: work.proposal !== undefined,
+          modelAttempts: work.modelAttempts.length,
+        };
+      },
+    );
+    const work = await runtime.application.readEngineeringWork(
+      t.f.engineering.actors.security,
+      key,
+    );
+    expect(work.candidateHash).toBeDefined();
+    expect(work.proposal).toBeDefined();
+    expect(work.approval).toBeUndefined();
+    expect(work.dispatch).toBeUndefined();
+    expect(Date.parse(t.f.engineering.clock.now()) - acceptedAt).toBeLessThan(
+      300_000,
+    );
+    expect(physical.every((attempts) => attempts >= 1 && attempts <= 8)).toBe(
+      true,
+    );
+    expect(t.modelFetch).toHaveBeenCalledOnce();
+    expect(forbiddenSend).not.toHaveBeenCalled();
+    expect(
+      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
+    ).toBe(true);
+  });
 });

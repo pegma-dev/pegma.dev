@@ -15,6 +15,11 @@ import {
 } from './support-engineering-repository';
 import type { SupportEngineeringProcessingComposition } from './support-engineering-processing';
 import type { SupportEngineeringReviewProofs } from './support-engineering';
+import type { SupportRuntime } from './support-desk';
+import {
+  createSupportIndependentChecks,
+  type SupportIndependentChecksOptions,
+} from './support-independent-checks';
 import { supportEngineeringApplicationOptions } from './support-engineering';
 import {
   array,
@@ -68,7 +73,19 @@ export interface SupportEngineeringProductionOptions {
     readonly serviceAccess: Processing['ports']['serviceAccess'];
     readonly reconciliationAccess: Processing['ports']['reconciliationAccess'];
     readonly routing: Processing['ports']['routing'];
-    readonly checks: Processing['ports']['checks'];
+    readonly checks?: Processing['ports']['checks'];
+    /** Source-owned checker composition, never an HTTP-supplied bundle. It wins
+     * over legacy checks when supplied; unready configuration cannot fall back. */
+    readonly independentChecks?: Omit<
+      SupportIndependentChecksOptions,
+      | 'store'
+      | 'clock'
+      | 'application'
+      | 'repositories'
+      | 'knowledge'
+      | 'knowledgeAccess'
+      | 'deferred'
+    >;
     readonly model: Processing['model'];
     readonly usagePolicy: Processing['usagePolicy'];
     /** The existing connector owns current installation/immutable-ID checks. */
@@ -80,6 +97,14 @@ export interface SupportEngineeringProductionComposition {
   readonly application: EngineeringOptions;
   readonly processing: SupportEngineeringProcessingComposition;
   readonly reviewProofs?: SupportEngineeringReviewProofs;
+  /** One-time Store binding before constructing the existing App. App access
+   * stays lazy and resolves that exact runtime application after construction. */
+  readonly attachRuntime?: (
+    runtime: Pick<SupportRuntime, 'store' | 'clock'> & {
+      readonly application: () => SupportRuntime['application'];
+    },
+  ) => boolean;
+  readonly discardChecks?: (ticketId: string) => Promise<void>;
 }
 const markerPattern = /^pegma-engineering:[a-f0-9]{48}$/u;
 const markers =
@@ -457,6 +482,27 @@ export function createProductionSupportEngineering(
   const supplied = options.configuration;
   if (supplied === undefined) return off();
   try {
+    const checkerOptions = supplied.independentChecks;
+    let checker: ReturnType<typeof createSupportIndependentChecks> | undefined;
+    let attached = false;
+    const checks: Processing['ports']['checks'] =
+      checkerOptions === undefined
+        ? supplied.checks!
+        : Object.freeze({
+            resolvePolicy: (
+              ...args: Parameters<
+                Processing['ports']['checks']['resolvePolicy']
+              >
+            ) =>
+              checker?.resolvePolicy(...args) ??
+              Promise.resolve({ outcome: 'unavailable' as const }),
+            check: async () => ({ outcome: 'held' as const }),
+            verify: (
+              ...args: Parameters<Processing['ports']['checks']['verify']>
+            ) =>
+              checker?.engineeringSdkVerifier.verify(...args) ??
+              Promise.resolve(null),
+          });
     if (
       ![
         supplied.serviceAccess?.resolve,
@@ -465,9 +511,9 @@ export function createProductionSupportEngineering(
         supplied.routing?.resolve,
         supplied.routing?.check,
         supplied.routing?.verify,
-        supplied.checks?.resolvePolicy,
-        supplied.checks?.check,
-        supplied.checks?.verify,
+        checks?.resolvePolicy,
+        checks?.check,
+        checks?.verify,
         supplied.repository?.authentication?.resolve,
         supplied.proposals?.readDuplicateQuery,
         supplied.proposals?.readSettings,
@@ -486,7 +532,9 @@ export function createProductionSupportEngineering(
     const enabled = () => {
       try {
         return (
-          options.configuration === supplied && options.enabled?.() === true
+          options.configuration === supplied &&
+          options.enabled?.() === true &&
+          (checkerOptions === undefined || !attached || checker !== undefined)
         );
       } catch {
         return false;
@@ -496,7 +544,7 @@ export function createProductionSupportEngineering(
       serviceAccess: supplied.serviceAccess,
       reconciliationAccess: supplied.reconciliationAccess,
       routing: supplied.routing,
-      checks: supplied.checks,
+      checks,
       github: repository.github,
       proposals,
     });
@@ -505,7 +553,7 @@ export function createProductionSupportEngineering(
         ...supplied.application,
         productContext: supplied.productContext,
         routing: supplied.routing,
-        checks: supplied.checks,
+        checks,
         repositoryMetadata: repository.repositoryMetadata,
         dispatchResults: repository.dispatchResults,
       }),
@@ -515,6 +563,43 @@ export function createProductionSupportEngineering(
           model: supplied.model,
           usagePolicy: supplied.usagePolicy,
           ports,
+          ...(checkerOptions === undefined
+            ? {}
+            : ({
+                checksFor: (scope, onDurablyDeferred) =>
+                  checker?.engineeringFor(scope, {
+                    onDurablyDeferred(hint) {
+                      if (hint.kind !== 'engineering')
+                        throw new TypeError('Wrong independent check purpose');
+                      onDurablyDeferred({
+                        kind: 'checks',
+                        operationId: hint.operationId,
+                        ticketId: hint.scope.ticketId,
+                        sourceGeneration: hint.scope.sourceGeneration,
+                        expiresAt: hint.expiresAt,
+                      });
+                    },
+                  }) ?? checks,
+                precomputeChecks: async (hint, run) => {
+                  if (!checker) return { outcome: 'held' as const };
+                  const result = await checker.precomputePending(
+                    hint.operationId,
+                    run,
+                    {
+                      ticketId: hint.ticketId,
+                      sourceGeneration: hint.sourceGeneration,
+                    },
+                    run.current,
+                  );
+                  return { outcome: result.outcome };
+                },
+                discardChecks: async (ticketId) => {
+                  await checker?.discardTicket('engineering', ticketId);
+                },
+              } satisfies Pick<
+                Processing,
+                'checksFor' | 'precomputeChecks' | 'discardChecks'
+              >)),
         }),
       }),
       reviewProofs: Object.freeze({
@@ -523,6 +608,37 @@ export function createProductionSupportEngineering(
         checks: ports.checks,
         github: ports.github,
       }),
+      ...(checkerOptions === undefined
+        ? {}
+        : ({
+            attachRuntime(runtime) {
+              if (attached) return false;
+              attached = true;
+              try {
+                checker = createSupportIndependentChecks({
+                  ...checkerOptions,
+                  store: runtime.store,
+                  clock: runtime.clock,
+                  application: runtime.application,
+                  repositories: repository.repositoryMetadata,
+                  deferred: true,
+                  enabled: () =>
+                    supplied.independentChecks === checkerOptions &&
+                    checkerOptions.enabled?.() === true,
+                });
+                return true;
+              } catch {
+                checker = undefined;
+                return false;
+              }
+            },
+            discardChecks: async (ticketId: string) => {
+              await checker?.discardTicket('engineering', ticketId);
+            },
+          } satisfies Pick<
+            SupportEngineeringProductionComposition,
+            'attachRuntime' | 'discardChecks'
+          >)),
     });
   } catch {
     return off();

@@ -4,7 +4,9 @@ import { runSupportAssistantTimer } from './support-assistant-timer';
 import { usageText } from './support-model-usage-ledger';
 import { createSupportAssistantStageDatabase as createSupportAssistantInvocationDatabase } from './support-assistant-stage-budget';
 import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
-import { composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
+import { SUPPORT_ENGINEERING_QUEUE, seedSupportEngineeringWake, consumeSupportEngineeringWake, type SupportEngineeringWake } from './support-engineering-queue';
+import { createProductionSupportEngineering, type SupportEngineeringProductionOptions } from './support-engineering-production';
+import { composeSupportEngineeringDriver, composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
   type SupportEngineeringHumanComposition } from './support-engineering-composition';
 import { composeSupportReleaseFollowup } from './support-release-followup-composition';
 import { supportReleaseFollowupApplicationOptions, supportReleaseFollowupEnabled, type SupportReleaseFollowupComposition } from './support-release-followup-ports';
@@ -53,6 +55,7 @@ import {
   type SupportRuntimeEnv,
 } from './support-desk';
 import { runSupportMaintenance } from './support-maintenance';
+import { purgeSupportIndependentCheckRequests } from './support-independent-checks';
 import { runKnowledgeMaintenance } from './knowledge-maintenance';
 import { createKnowledgeRetrievalMaintenance } from './knowledge-retrieval-maintenance';
 import { createKnowledgeRetrievalReady } from './knowledge-retrieval-ready';
@@ -72,7 +75,7 @@ import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 import { handleKnowledgeRequest, isKnowledgeRequest } from './knowledge-host';
 import type { createSupportLearningReviewQueue, SupportLearningReviewQueueMessage } from './support-learning-review-queue';
 
-type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON'> &
+type AppEnv = Omit<Env, 'SUPPORT_ENGINEERING_JOBS' | 'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED' | 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON'> &
   LoggerEnv &
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
@@ -80,14 +83,17 @@ type AppEnv = Omit<Env, 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPOR
   CatalogFetchEnv & SupportAssistantProductionEnvironment & {
     readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
     readonly PEGMA_SUPPORT_ASSISTANT_ENABLED?: string;
+    readonly PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED?: string;
     readonly SUPPORT_LEARNING_REVIEWS?: Queue<SupportLearningReviewQueueMessage>;
+    readonly SUPPORT_ENGINEERING_JOBS?: Queue<SupportEngineeringWake>;
   };
 
 /** Trusted source composition only; no product/check/source ports are invented here. */
 export interface SupportLearningReviewWorkerComposition {
   readonly enabled: () => boolean;
   create(environment: AppEnv, logger: ReturnType<typeof createAppLogger>,
-    engineering?: SupportEngineeringHumanComposition, answering?: SupportAnsweringComposition): {
+    engineering?: SupportEngineeringHumanComposition, answering?: SupportAnsweringComposition,
+    engineeringProduction?: SupportEngineeringProductionOptions): {
     /** The actual configured Support API, including its fresh staff-detail hints. */
     readonly api: (request: Request) => Promise<Response>;
     readonly queue: ReturnType<typeof createSupportLearningReviewQueue>;
@@ -133,7 +139,7 @@ function answeringInvocationEnvironment(environment: AppEnv): AppEnv {
  * without logging credentials, configuration, provider payloads or exceptions. */
 function logSupportCompositionFailure(
   logger: ReturnType<typeof createAppLogger>,
-  stage: 'answering_validation' | 'support_runtime' | 'answering_runtime',
+  stage: 'answering_validation' | 'support_runtime' | 'answering_runtime' | 'engineering_checks',
   surfaces?: { readonly engineering: boolean; readonly answering: boolean },
 ): void {
   try {
@@ -182,22 +188,31 @@ function createSupportHandler(
   engineering: SupportEngineeringHumanComposition = {},
   answering: SupportAnsweringComposition = {},
   releaseFollowup: SupportReleaseFollowupComposition = {},
+  engineeringProduction: SupportEngineeringProductionOptions = {},
 ) {
+  const production = createProductionSupportEngineering(engineeringProduction);
+  const workerConfigured = production.processing.configuration !== undefined;
   let selectedEngineering = engineering;
   let selectedAnswering = checkedAnswering(answering, logger);
-  let configured = supportEngineeringHumanEnabled(selectedEngineering);
+  let configured = workerConfigured || supportEngineeringHumanEnabled(selectedEngineering);
   const answerConfigured = selectedAnswering.configuration !== undefined || selectedAnswering.recoveryOnly === true;
   let followupConfigured = supportReleaseFollowupEnabled(releaseFollowup);
   const shared = configured || answerConfigured || followupConfigured;
   const identityRuntime = createProductionIdentityRuntime(env, logger, shared ? 512 : undefined);
+  let supportRuntime: ReturnType<typeof createSupportRuntime>;
+  if (production.attachRuntime?.({ store: identityRuntime.store,
+    clock: engineeringProduction.clock ?? systemClock, application: () => supportRuntime.application }) === false)
+    logSupportCompositionFailure(logger, 'engineering_checks');
   function construct(withEngineering: boolean, withAnswering: boolean) {
     try {
-      const intake = withEngineering ? supportEngineeringIntakeOptions(selectedEngineering) : undefined;
+      const intake = !withEngineering ? undefined : workerConfigured
+        ? production.application : supportEngineeringIntakeOptions(selectedEngineering);
       const dependencies = {
         sessions: identityRuntime.sessions,
         identity: identityRuntime.identity,
         identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
         logger,
+        ...(workerConfigured ? { clock: engineeringProduction.clock ?? systemClock } : {}),
         ...(intake === undefined ? {} : { engineering: intake }),
         ...(followupConfigured ? { engineeringFollowup: supportReleaseFollowupApplicationOptions(releaseFollowup) } : {}),
         ...(!withAnswering || selectedAnswering.configuration === undefined
@@ -213,7 +228,6 @@ function createSupportHandler(
     }
   }
   let withAnswering = selectedAnswering.configuration !== undefined;
-  let supportRuntime;
   try { supportRuntime = construct(configured, withAnswering); }
   catch (error) {
     if (!configured && !withAnswering && !followupConfigured) throw error;
@@ -233,6 +247,15 @@ function createSupportHandler(
     }
   }
   if (!configured) selectedEngineering = {};
+  else if (workerConfigured && selectedEngineering.configuration !== undefined) {
+    // HTTP and worker proof checks observe the same trusted verifier ports.
+    selectedEngineering = { ...selectedEngineering, configuration: {
+      ...selectedEngineering.configuration,
+      application: production.application,
+      reviewProofs: production.reviewProofs,
+      ...(production.discardChecks === undefined ? {} : { discardChecks: production.discardChecks }),
+    } };
+  }
   if (!withAnswering) selectedAnswering = answerConfigured ? { recoveryOnly: true } : {};
   let answeringRuntime;
   if (answerConfigured) {
@@ -277,13 +300,16 @@ function createSupportHandler(
   });
   return { supportRuntime, api, adminApi,
     answering: answeringRuntime,
+    engineeringDriver: configured && workerConfigured
+      ? composeSupportEngineeringDriver(supportRuntime, { ...production.processing, logger }) : undefined,
   };
 }
 
 /** Request-local optional human composition used by the registered Worker route. */
 export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {},
-  releaseFollowup: SupportReleaseFollowupComposition = {}) {
+  releaseFollowup: SupportReleaseFollowupComposition = {},
+  engineeringProduction: SupportEngineeringProductionOptions = {}) {
   return async (request: Request): Promise<Response> => {
     const selectedAnswering = checkedAnswering(answering, logger);
     if (isSupportReleaseFollowupRequest(new URL(request.url).pathname) && !supportReleaseFollowupEnabled(releaseFollowup))
@@ -301,12 +327,12 @@ export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<type
         return Response.json({ enabled: false }, { headers: { 'Cache-Control': 'no-store' } });
       // One counter spans the entire dedicated request, including every fresh
       // Identity/Role/Support/KB read and any late unknown-outcome continuation.
-      const composed = createSupportHandler(answeringInvocationEnvironment(env), logger, engineering, selectedAnswering);
+      const composed = createSupportHandler(answeringInvocationEnvironment(env), logger, engineering, selectedAnswering, {}, engineeringProduction);
       return createSupportAnsweringIngress(composed.supportRuntime, logger, composed.answering!)(request);
     }
     // Receipt-only installation must not change ordinary human Store composition.
     return createSupportHandler(env, logger, engineering,
-      selectedAnswering.configuration === undefined ? {} : selectedAnswering, releaseFollowup).api(request);
+      selectedAnswering.configuration === undefined ? {} : selectedAnswering, releaseFollowup, engineeringProduction).api(request);
   };
 }
 
@@ -318,12 +344,30 @@ export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<type
 export function createWorker(options: {
   readonly learningReviews?: SupportLearningReviewWorkerComposition;
   readonly engineering?: SupportEngineeringHumanComposition;
+  /** Trusted executable ports only; missing configuration keeps processing OFF. */
+  readonly engineeringProduction?: SupportEngineeringProductionOptions;
   readonly answering?: SupportAnsweringComposition;
   readonly releaseFollowup?: SupportReleaseFollowupComposition;
 } = {}) {
 const answeringFor = (env: AppEnv) => options.answering === undefined
   ? createProductionSupportAnswering(env)
   : Promise.resolve(options.answering);
+// Capture one source configuration per physical invocation, while observing
+// its original enablement/configuration and the separate deployment flag live.
+const engineeringFor = (env: AppEnv): SupportEngineeringProductionOptions => {
+  try {
+  const supplied = options.engineeringProduction;
+  if (supplied === undefined) return {};
+  const configuration = supplied.configuration;
+  return { ...supplied, enabled: () => {
+    try {
+      return env.PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED === 'true' &&
+        options.engineeringProduction === supplied && supplied.configuration === configuration &&
+        supplied.enabled?.() === true;
+    } catch { return false; }
+  } };
+  } catch { return {}; }
+};
 return {
   async fetch(
     request: Request,
@@ -580,15 +624,15 @@ return {
       try {
         const answering = await answeringFor(env);
         if (path.startsWith(SUPPORT_ANSWERING_NAMESPACE))
-          return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
+          return await createSupportRequestHandler(env, logger, options.engineering, answering, {}, engineeringFor(env))(request);
         if (isSupportReleaseFollowupRequest(path))
-          return await createSupportRequestHandler(env, logger, options.engineering, answering, options.releaseFollowup)(request);
+          return await createSupportRequestHandler(env, logger, options.engineering, answering, options.releaseFollowup, engineeringFor(env))(request);
         if (isSupportEngineeringRequest(path))
-          return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
+          return await createSupportRequestHandler(env, logger, options.engineering, answering, {}, engineeringFor(env))(request);
         const reviews = options.learningReviews;
         if (reviews !== undefined && learningReviewsEnabled(env, reviews))
-          return await reviews.create(env, logger, options.engineering, answering).api(request);
-        return await createSupportRequestHandler(env, logger, options.engineering, answering)(request);
+          return await reviews.create(env, logger, options.engineering, answering, engineeringFor(env)).api(request);
+        return await createSupportRequestHandler(env, logger, options.engineering, answering, {}, engineeringFor(env))(request);
       } catch (error) {
         logger.log('error', 'support.runtime_unavailable', {
           error: error instanceof Error ? error.name : 'unknown',
@@ -624,7 +668,7 @@ return {
           isEnabled: () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true',
           load: async () => checkedAnswering(await answeringFor(env), logger),
           create: (answering) => createSupportHandler(answeringInvocationEnvironment(env), logger,
-            options.engineering, answering).answering,
+            options.engineering, answering, {}, engineeringFor(env)).answering,
           logger,
         });
         return;
@@ -684,6 +728,16 @@ return {
         })(),
       );
       return;
+    }
+
+    if (controller.cron === CLEANUP_CRON && env.PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED === 'true') {
+      const source = engineeringFor(env);
+      const production = createProductionSupportEngineering(source);
+      ctx.waitUntil(seedSupportEngineeringWake({
+        clock: source.clock ?? systemClock, logger,
+        enabled: () => production.processing.configuration !== undefined && production.processing.enabled?.() === true,
+        producer: () => env.SUPPORT_ENGINEERING_JOBS,
+      }));
     }
 
     const cleanup =
@@ -785,8 +839,9 @@ return {
       ctx.waitUntil(
         (async () => {
           try {
+            const runtime = createProductionSupportMaintenanceRuntime(env);
             await runSupportMaintenance(
-              createProductionSupportMaintenanceRuntime(env),
+              { ...runtime, independentChecksPurge: () => purgeSupportIndependentCheckRequests(runtime).then(() => undefined) },
               logger,
               {
                 tasks: [cleanup.task],
@@ -804,6 +859,17 @@ return {
       );
   },
   async queue(batch: MessageBatch<unknown>, env: AppEnv, ctx: ExecutionContext): Promise<void> {
+    if (batch.queue === SUPPORT_ENGINEERING_QUEUE) {
+      const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
+      const source = engineeringFor(env);
+      const production = createProductionSupportEngineering(source);
+      await consumeSupportEngineeringWake(batch, {
+        clock: source.clock ?? systemClock, logger,
+        enabled: () => production.processing.configuration !== undefined && production.processing.enabled?.() === true,
+        create: () => createSupportHandler(env, logger, options.engineering, {}, {}, source).engineeringDriver,
+      });
+      return;
+    }
     // The consumer configuration is max_batch_size:1. Refuse accidental other
     // queues and leave durable SDK requests available for rediscovery.
     const reviews = options.learningReviews;

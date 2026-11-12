@@ -10,6 +10,7 @@ import {
   createSupportDeskStagedLearningReviews,
   createSupportDeskLearningSourceVerifier,
   type LearningProcessResult,
+  type LearningRunOptions,
   type LearningScanBounds,
   type LearningReviewCommand,
   type ProcessLearningWorkCommand,
@@ -33,6 +34,7 @@ import {
   type WithdrawResolutionLearningSourceCommand,
 } from '@pegma/support-desk-application';
 import type { Clock } from '@pegma/spine';
+import type { IndependentCheckCapture } from './support-independent-checks';
 import {
   createSupportLearningKnowledgePort,
   supportLearningCommandIdentity,
@@ -104,6 +106,10 @@ export interface SupportLearningRuntimeOptions {
   readonly staffOperationMilliseconds?: number;
   readonly processingEnabled?: () => boolean;
   readonly ports?: Partial<SupportLearningProcessingPorts>;
+  readonly processingPortsFor?: (
+    key: ResolutionLearningKey,
+    capture?: IndependentCheckCapture,
+  ) => SupportLearningProcessingPorts | undefined;
   readonly stagedReviews?: SupportLearningStagedReviewOptions;
   /** Explicit only for the known real SDK read graph; custom ports remain serial. */
   readonly readScheduling?: SupportDeskLearningOptions['readScheduling'];
@@ -372,12 +378,18 @@ function createLearningRuntime(
       });
   }
 
-  function processingReady(): 'disabled' | 'readiness_unavailable' | 'unavailable' | 'ready' {
+  function processingState(): 'disabled' | 'readiness_unavailable' | 'ready' {
     try { if (!processingEnabled()) return 'disabled'; }
     catch { return 'readiness_unavailable'; }
-    return [ports.serviceAccess, ports.knowledgeAccess, ports.retirementAccess,
-      ports.configuration, ports.checks, ports.model, ports.usage, ports.targets,
-      ports.tokenCounter].some((port) => port === undefined) ? 'unavailable' : 'ready';
+    return 'ready';
+  }
+
+  function processingReady(selected: Partial<SupportLearningProcessingPorts> = ports): 'disabled' | 'readiness_unavailable' | 'unavailable' | 'ready' {
+    const state = processingState();
+    if (state !== 'ready') return state;
+    return [selected.serviceAccess, selected.knowledgeAccess, selected.retirementAccess,
+      selected.configuration, selected.checks, selected.model, selected.usage, selected.targets,
+      selected.tokenCounter].some((port) => port === undefined) ? 'unavailable' : 'ready';
   }
 
   async function reviewCommand<Result>(
@@ -572,14 +584,52 @@ function createLearningRuntime(
       if (state !== 'ready') return { outcome: 'held' as const, reason: `learning_${state}` };
       return processingCoordinator.scanCandidates(structuredClone(bounds));
     },
-    async processWork(input: ProcessLearningWorkCommand): Promise<LearningProcessResult> {
-      const state = processingReady();
+    // Discovery uses current source authority even when paid processing is OFF.
+    scanMaintenanceCandidates: (bounds: LearningScanBounds) =>
+      coordinator.scanCandidates(structuredClone(bounds)),
+    async processWork(input: ProcessLearningWorkCommand, run?: LearningRunOptions,
+      capture?: IndependentCheckCapture): Promise<LearningProcessResult> {
+      const packet = structuredClone(input);
+      let scoped: SupportLearningProcessingPorts | undefined;
+      if (options.processingPortsFor !== undefined) {
+        // Readiness precedes scoped construction; no Work claim occurs on failure.
+        const state = processingState();
+        if (state !== 'ready') return { outcome: 'held', reason: `learning_${state}` };
+        try {
+          scoped = options.processingPortsFor({ ticketId: packet.ticketId,
+            sourceGeneration: packet.sourceGeneration }, capture);
+        } catch {
+          return { outcome: 'held', reason: 'learning_unavailable' };
+        }
+        if (scoped === undefined) return { outcome: 'held', reason: 'learning_unavailable' };
+      }
+      const state = processingReady(scoped ?? ports);
       if (state !== 'ready') return { outcome: 'held', reason: `learning_${state}` };
-      return processingCoordinator.processWork(structuredClone(input));
+      if (scoped === undefined) return processingCoordinator.processWork(packet, run);
+      const selected = scoped;
+      const operation = createSupportDeskLearning({
+        ...coordinatorOptions,
+        ...selected,
+        serviceAccess: {
+          async resolve(signal) {
+            if (!processingEnabled()) return { outcome: 'inactive' };
+            const result = await selected.serviceAccess.resolve(signal);
+            return processingEnabled() ? result : { outcome: 'inactive' };
+          },
+        },
+        configuration: {
+          async resolve(expected, signal) {
+            if (!processingEnabled()) return { outcome: 'disabled' };
+            const result = await selected.configuration.resolve(expected, signal);
+            return processingEnabled() ? result : { outcome: 'disabled' };
+          },
+        },
+      });
+      return operation.processWork(packet, run);
     },
     // Privacy and source reconciliation stay available independently of the
     // generation switch and provider configuration. The SDK checks authority.
-    reconcileSource: (ticketId: string) => coordinator.reconcileSource(ticketId),
+    reconcileSource: (ticketId: string, run?: LearningRunOptions) => coordinator.reconcileSource(ticketId, run),
   });
 }
 
