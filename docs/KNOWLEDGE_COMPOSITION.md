@@ -2,7 +2,7 @@
 
 The KB host integration is merged in
 [PR #59](https://github.com/pegma-dev/pegma.dev/pull/59). The checked-in profile
-enables controlled staff authoring qualification with three explicit public client
+enables controlled staff authoring qualification with four explicit public client
 registrations for testing against closed collections. Merging to `main` starts
 the existing deployment workflow, which deploys the Worker before the Pages
 site. Confirm that run and the metadata readback below before client tests.
@@ -111,7 +111,7 @@ collections. Broader rollout, customer AI and pilot qualification remain pending
 ## Configuration and activation
 
 [`worker/wrangler.jsonc`](../worker/wrangler.jsonc) sets
-`PEGMA_KNOWLEDGE_ENABLED=true` and three explicit public client registrations
+`PEGMA_KNOWLEDGE_ENABLED=true` and four explicit public client registrations
 for controlled staff qualification. The prior profile was disabled with an empty
 list. A push to `main` runs the [deployment workflow](../.github/workflows/deploy.yml)
 and applies these variables after its checks pass.
@@ -140,6 +140,7 @@ them against the installed client.
 | `pg-kb-codex-accept-v1` | Codex CLI, authorization code with PKCE | `http://127.0.0.1/callback`; Agent Access `0.1.1` permits only the IP-loopback port substitution |
 | `pg-kb-claude-accept-v1` | Claude Code, authorization code with PKCE | `http://localhost:48772/callback`; configure the client to use that exact port |
 | `pg-kb-device-accept-v1` | Separate RFC 8628 host control | No redirect URI; device-code grant only |
+| `pg-kb-grok-accept-v1` | Hosted Grok Bot, authorization code with PKCE | `https://www.cursor.com/agents/mcp/oauth/callback`; exact HTTPS callback |
 
 Port `48772` was available on both IPv4 and IPv6 loopback during the local
 2026-11-11 availability check, which closed both listeners immediately. Recheck
@@ -147,8 +148,9 @@ availability when starting the client. Record the actual callback, installed
 version and provider mode during each test. Require the
 registered hostname and path, with only the declared IP-loopback port
 substitution. The RFC 8628 host control has its own result, separate from native
-CLI proof. Codex CLI and Claude Code acceptance remain pending. Hosted Grok Bot
-and T3 Code registrations and acceptance remain pending.
+CLI proof. Codex CLI, Claude Code and hosted Grok Bot acceptance remain pending.
+The Grok registration uses the HTTPS callback observed from the hosted client.
+T3 Code registration and acceptance remain pending.
 
 Each registration permits only `knowledge.article.draft.read`,
 `knowledge.article.draft.write` and `knowledge.article.evidence.submit`.
