@@ -223,6 +223,65 @@ function deferred() {
 }
 
 describe('Support assistant durable usage port', () => {
+  it('reads the literal pre-extraction row and preserves its exact hashes, replay and conservative accounting', async () => {
+    const f = fixture();
+    const old = {
+      partition: 'support_answer',
+      id: 'budget',
+      format: 1,
+      payload: JSON.stringify({
+        policyHash:
+          'eb1539ac27abdb9ff818a7ac85bb84441b8af0075206a20b821d25929ec555d8',
+        accountingHold: false,
+        spentMicros: '0',
+        observedAt: START,
+        reservations: [
+          {
+            reservationHash:
+              'a7a33af35ead4d760b8011d5a5497e0b5e51c5befc6eb794b65b57395577eb0e',
+            attemptHash:
+              '6ed6f29de6b62ccfe9856a94875d1444b51dcd4f858276e3db64cb1fed705ed4',
+            identityHash:
+              'e1915b5c3f443f5b5d1e2daeb10bfcdfd5fe6da242f0a5cb221cb2f2f36d3865',
+            bindingHash:
+              'e2b2d1952687259eced370e207fcb454387b94b90ae4f4237c57fac8ecf2d97b',
+            reservedMicros: 10,
+            deadline: '2026-11-10T00:00:25.000Z',
+            createdAt: START,
+            state: 'reserved',
+            terminalAt: null,
+            usage: null,
+          },
+        ],
+      }),
+    };
+    // These literal hashes/JSON were frozen before extracting the shared code.
+    await f.backing.collection(rawRecords).put(old);
+    expect(await f.create().reserve(context())).toEqual({
+      outcome: 'reserved',
+      usageReservationId: 'reservation-a',
+    });
+    expect(await f.backing.collection(rawRecords).get(KEY)).toEqual(old);
+    expect(
+      await f.port.reconcile(identity(context()), {
+        state: 'known',
+        usage: usage(150),
+      }),
+    ).toBe('reconciled');
+    const settled = await f.backing.collection(rawRecords).get(KEY);
+    expect((await ledger(f.backing))?.spentMicros).toBe('150');
+    expect(
+      await f
+        .create()
+        .reconcile(identity(context()), { state: 'known', usage: usage(150) }),
+    ).toBe('reconciled');
+    expect(
+      await f.create().reconcile(identity(context()), { state: 'unknown' }),
+    ).toBe('reconciled');
+    expect(await f.backing.collection(rawRecords).get(KEY)).toEqual(settled);
+    expect((await f.create().reserve(context('b'))).outcome).toBe('denied');
+  });
+
   it.each([0, -1, 1.5, NaN, Infinity, 11])(
     'refuses an unfunded or invalid context cost before storage: %s',
     async (maxCostMicros) => {
