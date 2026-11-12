@@ -217,12 +217,13 @@ Idle runs do not import an unused HMAC key; secret validation remains eager. A s
 email-operation repair, Mail retention, expired Sessions, each of the four
 Identity rate-limit policies, Support queue repair/inactive sweep, and each of
 the six Support/Admin/engineering rate-limit policies, Knowledge maintenance and the
-separately gated learning-review discovery lane. The 18 lanes rotate through
+separately gated learning-review discovery lane. With answering OFF, the 18 lanes rotate through
 eligible scheduled UTC ticks, including across hour boundaries, so each runs
 every 18 ticks (a nominal 18-19 minutes because minute 59 is omitted). This gives cleanup its own invocation CPU budget instead of
 combining every task under the Workers Free 10 ms limit. Authentication and
 rate-limit checks still enforce expiry on access; cleanup only reclaims or
-repairs stored data. Paged Identity and Support cleanup also consumes at most
+repairs stored data. The [answering-enabled schedule](../docs/SUPPORT_COMPOSITION.md#maintenance-and-health)
+uses its own all-minute invocation and 20 cleanup lanes without adding a cron entry. Paged Identity and Support cleanup also consumes at most
 one record per invocation. Support cleanup composes only storage, its clock,
 and limiters; it does not build Identity, roles, or HTTP handlers.
 

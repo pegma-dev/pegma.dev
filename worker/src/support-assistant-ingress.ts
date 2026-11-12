@@ -26,6 +26,7 @@ export function createSupportAnsweringIngress(
 ) {
   const resolve = createAgentPrincipalResolver(runtime);
   return async (request: Request): Promise<Response> => {
+    const correlationId = crypto.randomUUID();
     const url = new URL(request.url);
     if (
       url.search !== '' ||
@@ -97,6 +98,7 @@ export function createSupportAnsweringIngress(
         if (capability) {
           const available = await answering.admission(initial.access.principalId);
           const final = await current();
+          available?.assertCurrent(final.access);
           return json({
             enabled: available !== null,
             ...(available === null ? {} : { disclosureVersion: answering.disclosureVersion }),
@@ -214,8 +216,10 @@ export function createSupportAnsweringIngress(
             },
           );
         const mapped = mapSupportError(error);
+        if (mapped.status >= 500)
+          logger.log('error', 'support.answering_ingress_unavailable', { correlationId });
         return json(
-          { error: mapped.code },
+          { error: mapped.code, ...(mapped.status >= 500 ? { correlationId } : {}) },
           { status: mapped.status === 500 ? 503 : mapped.status },
         );
       }
@@ -223,7 +227,8 @@ export function createSupportAnsweringIngress(
     try {
       return await Promise.race([execute(), stopped]);
     } catch {
-      return json({ error: 'acknowledgement_unknown' }, { status: 503 });
+      logger.log('warn', 'support.answering_ingress_unavailable', { correlationId });
+      return json({ error: 'acknowledgement_unknown', correlationId }, { status: 503 });
     } finally {
       clearTimeout(timer);
       request.signal.removeEventListener('abort', stop);

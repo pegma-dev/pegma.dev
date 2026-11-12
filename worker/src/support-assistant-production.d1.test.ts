@@ -10,7 +10,7 @@ import {
   createSupportAssistantStageDatabase,
   type SupportAssistantStageBudget,
 } from './support-assistant-stage-budget';
-import { CLEANUP_CRON, CLEANUP_LANE_COUNT, cleanupLaneAt } from './maintenance-schedule';
+import { RATE_LIMIT_CRON } from './maintenance-schedule';
 import { humanSecret } from './support-human-control-fixtures';
 
 const profiles: { phase: string; budget: SupportAssistantStageBudget }[] = [];
@@ -55,34 +55,18 @@ function physical(f: Awaited<ReturnType<typeof productionAnsweringFixture>>, pha
     },
   };
 }
-function lane() {
-  const start = Math.floor(Date.now() / 60_000) * 60_000;
-  for (let step = 0; step < 128; ++step) {
-    const time = start + step * 60_000;
-    if (
-      cleanupLaneAt(time).kind === 'learning_reviews' &&
-      Math.floor(
-        (Math.floor(time / 60_000) - Math.floor((Math.floor(time / 60_000) + 1) / 60)) /
-          CLEANUP_LANE_COUNT,
-      ) %
-        2 ===
-        0
-    )
-      return time;
-  }
-  throw new Error('Missing physical answering lane.');
-}
 async function invoke(
   f: Awaited<ReturnType<typeof productionAnsweringFixture>>,
   phase: string,
   request?: Request,
+  scheduledTime = Date.now(),
 ) {
   const measured = physical(f, phase);
   const ctx = createExecutionContext();
   const response =
     request === undefined
       ? await worker.scheduled(
-          { cron: CLEANUP_CRON, scheduledTime: lane(), noRetry() {} },
+          { cron: RATE_LIMIT_CRON, scheduledTime, noRetry() {} },
           measured.environment,
           ctx,
         )
@@ -154,7 +138,7 @@ describe('normal default root with the production bundle and actual tokenizer', 
     profiles.push({ phase: 'deliberate-parameter101-refusal', budget: guarded.snapshot() });
   });
 
-  it('keeps the physical scheduled invocation inert when processing is OFF', async () => {
+  it('keeps newly eligible minute58 inert when processing is OFF', async () => {
     const f = await productionAnsweringFixture(
       createCloudflareD1Store({
         database: env.IDENTITY_DB,
@@ -164,7 +148,9 @@ describe('normal default root with the production bundle and actual tokenizer', 
     );
     f.environment.PEGMA_SUPPORT_ASSISTANT_ENABLED = 'false';
     f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON = '';
-    await invoke(f, 'processing-off');
+    const time = new Date();
+    time.setUTCMinutes(58, 0, 0);
+    await invoke(f, 'processing-off', undefined, time.valueOf());
     expect(profiles.at(-1)?.budget.physicalQueries).toBe(0);
     expect(f.wires).toHaveLength(0);
   });

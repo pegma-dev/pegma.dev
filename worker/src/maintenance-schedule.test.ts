@@ -276,17 +276,21 @@ describe('maintenance dispatch', () => {
   });
 
   it('isolates 39 rate pages and 19 ready pages per hour across a UTC day boundary', async () => {
-    const range = /^(\d+)-(\d+) \* \* \* \*$/.exec(RATE_LIMIT_CRON);
-    expect(range).not.toBeNull();
+    expect(RATE_LIMIT_CRON).toBe('*/1 * * * *');
     const start = Date.parse('2026-10-15T23:00:00Z');
     let pages = 0;
     let readyPages = 0;
     for (let minute = 0; minute < 120; minute++) {
       const time = start + minute * 60_000;
       const utcMinute = new Date(time).getUTCMinutes();
-      if (utcMinute < Number(range![1]) || utcMinute > Number(range![2]))
-        continue;
       vi.clearAllMocks();
+      if (utcMinute >= 58) {
+        expect(await scheduled(RATE_LIMIT_CRON, time)).toBe(0);
+        expect(createCloudflareD1Store).not.toHaveBeenCalled();
+        expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+        expect(createKnowledgeRetrievalReady).not.toHaveBeenCalled();
+        continue;
+      }
       expect(
         await scheduled(RATE_LIMIT_CRON, time, {
           PEGMA_KNOWLEDGE_ENABLED: 'true',
@@ -313,12 +317,56 @@ describe('maintenance dispatch', () => {
       expect(runIdentityMaintenance).not.toHaveBeenCalled();
       expect(runSupportMaintenance).not.toHaveBeenCalled();
       expect(runReleaseReconciliation).not.toHaveBeenCalled();
-      if (utcMinute === Number(range![2])) {
+      if (utcMinute === 57) {
         const hours = Math.floor(minute / 60) + 1;
         expect(pages).toBe(hours * 39);
         expect(readyPages).toBe(hours * 19);
       }
     }
+  });
+
+  it('preserves all20 enabled cleanup lanes in order across minute59 and a UTC day boundary', async () => {
+    const start = Date.parse('2026-11-12T23:50:00Z');
+    const observed: string[] = [];
+    for (let minute = 0; minute < 2 * 24 * 60; ++minute) {
+      const time = start + minute * 60_000;
+      if (new Date(time).getUTCMinutes() === 59) continue;
+      observed.push(JSON.stringify(cleanupLaneAt(time, true)));
+    }
+    const cycle = observed.slice(0, 20);
+    expect(new Set(cycle).size).toBe(20);
+    expect(cycle).toContain(JSON.stringify({ kind: 'knowledge_rate_limits' }));
+    expect(cycle).toContain(JSON.stringify({ kind: 'knowledge_ready' }));
+    for (let index = 0; index < observed.length; ++index)
+      expect(observed[index]).toBe(cycle[index % cycle.length]);
+
+    const seen = new Set<string>();
+    for (let minute = 0; seen.size < 20; ++minute) {
+      const time = start + minute * 60_000;
+      if (new Date(time).getUTCMinutes() === 59) continue;
+      const lane = cleanupLaneAt(time, true);
+      seen.add(JSON.stringify(lane));
+      vi.clearAllMocks();
+      await scheduled(CLEANUP_CRON, time, {
+        PEGMA_SUPPORT_ASSISTANT_ENABLED: 'true', PEGMA_KNOWLEDGE_ENABLED: 'true',
+      });
+      expect(runReleaseReconciliation).not.toHaveBeenCalled();
+      if (lane.kind === 'knowledge_rate_limits') {
+        expect(runKnowledgeMaintenance).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(), expect.anything(), { tasks: ['rate_limits'] },
+        );
+        expect(createKnowledgeRetrievalReady).not.toHaveBeenCalled();
+      } else if (lane.kind === 'knowledge_ready') {
+        expect(createKnowledgeRetrievalReady).toHaveBeenCalledTimes(1);
+        expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+      } else {
+        expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+        expect(createKnowledgeRetrievalReady).not.toHaveBeenCalled();
+      }
+    }
+    expect(MAIL_CRON).toBe('* * * * *');
+    expect(MAIL_RECONCILE_CRON).toBe('1-59 * * * *');
+    expect(RELEASE_RECONCILIATION_CRON).toBe('0-59 */6 * * *');
   });
 
   it('isolates a failed rate invocation from later identity and support cleanup invocations', async () => {

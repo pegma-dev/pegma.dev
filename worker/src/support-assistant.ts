@@ -23,7 +23,9 @@ import { createAgentPrincipalResolver, type AgentAuthorityOptions } from './agen
 import { PEGMA_ACCESS_POLICY } from './support-access';
 
 export const SUPPORT_ASSISTANT_WORKER_ID = 'pegma.dev-support-answer-worker';
-export const SUPPORT_ASSISTANT_SCAN_LIMIT = 1;
+export const SUPPORT_ASSISTANT_SCAN_LIMIT = 32;
+const MAX_SCAN_RESPONSE_BYTES = 98_304;
+const MAX_SCAN_MILLISECONDS = 4_000;
 const MAX_CURSOR = 16_384;
 const MAX_TICK_MILLISECONDS = 25_000;
 const COMMIT_RESERVE_MILLISECONDS = 1_000;
@@ -114,6 +116,11 @@ export type SupportAssistantAudience = Pick<
   AssistantCustomerAuthority,
   'audienceVersion' | 'usageScopeRef' | 'collectionIds' | 'applicability'
 >;
+
+export interface SupportAssistantRun {
+  readonly signal?: AbortSignal;
+  readonly budgetMilliseconds?: number;
+}
 
 export interface SupportAssistantOptions extends AgentAuthorityOptions {
   readonly store: Store;
@@ -246,6 +253,7 @@ export type SupportAssistantTick =
 
 function validPage(page: AssistantTurnScanResult): boolean {
   return (
+    new TextEncoder().encode(JSON.stringify(page)).byteLength <= MAX_SCAN_RESPONSE_BYTES &&
     page.pages === 1 &&
     Number.isSafeInteger(page.physicalRows) &&
     page.physicalRows >= 0 &&
@@ -286,15 +294,23 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
     );
   }
   return Object.freeze({
-    async runTick(run: { readonly signal?: AbortSignal } = {}): Promise<SupportAssistantTick> {
+    async runTick(run: SupportAssistantRun = {}): Promise<SupportAssistantTick> {
       if (!enabled()) return { outcome: 'disabled', checkpointSaved: false };
       if (options.selectAudience === undefined)
         return { outcome: 'unavailable', checkpointSaved: false };
+      if (
+        run.budgetMilliseconds !== undefined &&
+        (!Number.isSafeInteger(run.budgetMilliseconds) ||
+          run.budgetMilliseconds < 1 ||
+          run.budgetMilliseconds > MAX_TICK_MILLISECONDS)
+      )
+        return { outcome: 'unavailable', checkpointSaved: false };
       if (run.signal?.aborted) return { outcome: 'unavailable', checkpointSaved: false };
       const started = performance.now();
+      const budget = run.budgetMilliseconds ?? MAX_TICK_MILLISECONDS;
       const controller = new AbortController();
       const abort = () => controller.abort();
-      const remaining = () => MAX_TICK_MILLISECONDS - (performance.now() - started);
+      const remaining = () => budget - (performance.now() - started);
       let rejectDeadline: (reason: Error) => void = () => {};
       const boundary = new Promise<never>((_, reject) => {
         rejectDeadline = reject;
@@ -303,7 +319,7 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
       const timer = setTimeout(() => {
         abort();
         rejectDeadline(new Error('Support assistant tick expired.'));
-      }, MAX_TICK_MILLISECONDS);
+      }, budget);
       const cancel = () => {
         abort();
         rejectDeadline(new Error('Support assistant tick cancelled.'));
@@ -315,7 +331,13 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
       }
       async function within<T>(operation: () => Promise<T>): Promise<T> {
         if (!current()) throw new Error('Support assistant tick is not current.');
-        const value = await Promise.race([Promise.resolve().then(operation), boundary]);
+        const value = await Promise.race([
+          Promise.resolve().then(() => {
+            if (!current()) throw new Error('Support assistant tick is not current.');
+            return operation();
+          }),
+          boundary,
+        ]);
         if (!current()) throw new Error('Support assistant tick is not current.');
         return value;
       }
@@ -396,13 +418,20 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
           // Pegma requires a physical handoff between retrieval and paid work.
           stagedRetrieval: true,
         });
-        const page = await within(() =>
-          assistant.scanCandidates({
-            limit: SUPPORT_ASSISTANT_SCAN_LIMIT,
-            ...(prior.cursor === null ? {} : { cursor: prior.cursor }),
-          }),
-        );
-        if (!validPage(page)) throw new TypeError('Invalid Support assistant scan page.');
+        const scanTimer = setTimeout(cancel, Math.min(MAX_SCAN_MILLISECONDS, remaining()));
+        let page: AssistantTurnScanResult;
+        try {
+          page = await within(() =>
+            assistant.scanCandidates({
+              limit: SUPPORT_ASSISTANT_SCAN_LIMIT,
+              ...(prior.cursor === null ? {} : { cursor: prior.cursor }),
+            }),
+          );
+        } finally {
+          clearTimeout(scanTimer);
+        }
+        if (!validPage(page) || (page.nextCursor !== null && page.nextCursor === prior.cursor))
+          throw new TypeError('Invalid Support assistant scan page.');
         const ready = await within(() => options.configuration.resolve(version));
         if (ready.outcome !== 'ready' || ready.configuration.version !== version)
           return { outcome: 'unavailable', checkpointSaved: false };
@@ -473,7 +502,9 @@ export function createSupportAssistantRuntime(options: SupportAssistantOptions) 
             checkpointSaved: false,
           };
         }
-        const saved = await within(() => saveProgress(page.nextCursor));
+        const saved = await within(() =>
+          saveProgress(page.candidates.length > 1 ? prior.cursor : page.nextCursor),
+        );
         return {
           outcome: 'scanned',
           physicalRows: page.physicalRows,

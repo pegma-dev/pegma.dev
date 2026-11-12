@@ -4,8 +4,9 @@ Public host composition notes for authenticated product feedback on
 [pegma.dev](https://pegma.dev). This is the ecosystem's Cloudflare reference
 environment for Support Desk customer create / list / read / reply and a small
 staff operator surface over the same application services, including human
-requests, takeover and private handoff context. The human HTTP handlers keep
-assistant handling disabled.
+requests, takeover and private handoff context. Ordinary human HTTP handlers keep
+assistant handling disabled; the optional production composition uses a separate
+explicitly admitted browser route and defaults to OFF.
 
 The separate synthetic stage source defines its own Worker, Queue and D1
 binding with a scripted local model. It starts disabled and has no production
@@ -386,14 +387,38 @@ provider or activation result.
 ## Maintenance and health
 
 The separate cleanup cron (`0-58 * * * *`) runs one rotating task per
-invocation, including Support Desk queue repair, inactive projection sweep,
-each Support/Admin rate-limit policy and the separately gated learning-review
-discovery lane, for 18 exclusive lanes. Each task runs once per 18 eligible
-ticks, a nominal 18-19 minutes because minute 59 is omitted, with independent
-queue cursors and no writes for unchanged bookmarks.
-Identity Mail send and reconciliation have separate invocations
-(`* * * * *` and `1-59 * * * *`); KB ready hints and their isolated rate cleanup
-use the existing `0-57 * * * *` lane. No cron is added for human controls.
+invocation. With answering OFF, its 18 lanes cover Support queue repair,
+inactive projection sweep, each Support/Admin/engineering rate policy,
+Identity and Knowledge maintenance, and separately gated learning-review
+work. Each runs once per 18 eligible ticks (nominally 18-19 minutes because
+minute 59 is omitted). Unchanged bookmarks do not cause writes.
+
+The distinct all-minute trigger (`*/1 * * * *`) belongs exclusively to
+answering while processing is enabled. One physical invocation performs at
+most one preparation or paid stage, under the same 25-second bound including
+qualification; it never runs another maintenance job on that D1 allowance.
+This gives two simultaneous admitted turns four minute-spaced stages within
+the SDK's 300-second window, including across UTC midnight. The real Worker
+[composition tests](../worker/src/support-assistant-root-composition.test.ts)
+exercise this chronology with genuine Memory services and fictional provider
+responses. The [Native tests](../worker/src/support-assistant-production.d1.test.ts)
+separately meter every physical invocation at 50 D1 calls and 100 parameters.
+These local proofs do not establish deployed CPU or provider acceptance.
+
+While answering is enabled, its former global rate-window cleanup and
+retrieval-readiness jobs each become one of 20 exhaustive cleanup lanes.
+Their background throughput changes from roughly 90 seconds/3 minutes to
+20-21 minutes; all other cleanup work remains in the rotation. Request-time
+expiry and source/role proofs remain authoritative. With answering OFF, the
+all-minute trigger retains the original 39 rate and 19 readiness pages per
+hour and performs no Store work at minutes 58/59.
+
+Identity Mail send and reconciliation keep their separate invocations
+(`* * * * *` and `1-59 * * * *`), and release reconciliation retains its
+six-hour window. The configuration still has five cron entries. Local parser and Native
+validation cover the changed source separately;
+Cloudflare backend acceptance of the distinct all-minute expression and
+deployment remain operational checks.
 Mail send for support
 notifications is deferred (templates are defined; create/reply/staff reply omit
 notification for this host surface).

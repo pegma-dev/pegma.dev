@@ -1,5 +1,6 @@
-import { composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, supportAnsweringAdmissionEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
+import { SUPPORT_ANSWERING_DISCLOSURE_VERSION, composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, supportAnsweringAdmissionEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
 import { createProductionSupportAnswering, type SupportAssistantProductionEnvironment } from './support-assistant-production';
+import { runSupportAssistantTimer } from './support-assistant-timer';
 import { createSupportAssistantStageDatabase as createSupportAssistantInvocationDatabase } from './support-assistant-stage-budget';
 import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
 import { composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
@@ -57,7 +58,6 @@ import {
   MAIL_CRON,
   MAIL_RECONCILE_CRON,
   CLEANUP_CRON,
-  CLEANUP_LANE_COUNT,
   RATE_LIMIT_CRON,
   cleanupLaneAt,
   rateKnowledgeLaneAt,
@@ -124,27 +124,91 @@ function answeringInvocationEnvironment(environment: AppEnv): AppEnv {
   });
 }
 
+/** Reject incomplete source-injected bundles before optional ports are used.
+ * The component validators still own route/policy/usage semantics. A previously
+ * installed surface retains only exact accepted receipt recovery when OFF. */
+function checkedAnswering(options: SupportAnsweringComposition = {}): SupportAnsweringComposition {
+  try {
+    const recovery = options.recoveryOnly === true || Object.hasOwn(options, 'configuration')
+      ? { recoveryOnly: true as const } : {};
+    if (options.enabled?.() !== true) return recovery;
+    const value = options.configuration;
+    if (value === undefined) return recovery;
+    const attempts = value.turns?.maxAttempts;
+    if (typeof attempts !== 'number' || !Number.isSafeInteger(attempts) || attempts < 2 || attempts > 4 ||
+      value.disclosureVersion !== SUPPORT_ANSWERING_DISCLOSURE_VERSION ||
+      typeof value.readApiKey !== 'function' || typeof value.selectAudience !== 'function' ||
+      value.customerPolicy === null || typeof value.customerPolicy !== 'object' ||
+      Array.isArray(value.customerPolicy) || typeof value.customerPolicy.version !== 'string' ||
+      value.usagePolicy === null || typeof value.usagePolicy !== 'object' ||
+      typeof value.route?.readRoute !== 'function' || typeof value.route.counter?.count !== 'function' ||
+      !Array.isArray(value.route.allowlist) || value.route.allowlist.length < 1 || value.route.allowlist.length > 8)
+      return recovery;
+    return options;
+  } catch {
+    return { recoveryOnly: true };
+  }
+}
+
 function createSupportHandler(
   env: AppEnv,
   logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {},
   answering: SupportAnsweringComposition = {},
 ) {
-  const configured = supportEngineeringHumanEnabled(engineering);
-  const answerConfigured = answering.configuration !== undefined || answering.recoveryOnly === true;
-  const identityRuntime = createProductionIdentityRuntime(env, logger, configured || answerConfigured ? 512 : undefined);
-  const intake = supportEngineeringIntakeOptions(engineering);
-  const dependencies = {
-    sessions: identityRuntime.sessions,
-    identity: identityRuntime.identity,
-    identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
-    logger,
-    ...(intake === undefined ? {} : { engineering: intake }),
-    ...(answering.configuration === undefined ? {} : { assistantTurns: supportAnsweringTurns(answering) }),
-  };
-  const supportRuntime = configured || answerConfigured
-    ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
-    : createProductionSupportRuntime(env, dependencies);
+  let selectedEngineering = engineering;
+  let selectedAnswering = checkedAnswering(answering);
+  let configured = supportEngineeringHumanEnabled(selectedEngineering);
+  const answerConfigured = selectedAnswering.configuration !== undefined || selectedAnswering.recoveryOnly === true;
+  const shared = configured || answerConfigured;
+  const identityRuntime = createProductionIdentityRuntime(env, logger, shared ? 512 : undefined);
+  function construct(withEngineering: boolean, withAnswering: boolean) {
+    const intake = withEngineering ? supportEngineeringIntakeOptions(selectedEngineering) : undefined;
+    const dependencies = {
+      sessions: identityRuntime.sessions,
+      identity: identityRuntime.identity,
+      identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+      logger,
+      ...(intake === undefined ? {} : { engineering: intake }),
+      ...(!withAnswering || selectedAnswering.configuration === undefined
+        ? {} : { assistantTurns: supportAnsweringTurns(selectedAnswering) }),
+    };
+    return shared
+      ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
+      : createProductionSupportRuntime(env, dependencies);
+  }
+  let withAnswering = selectedAnswering.configuration !== undefined;
+  let supportRuntime;
+  try { supportRuntime = construct(configured, withAnswering); }
+  catch (error) {
+    if (!configured && !withAnswering) throw error;
+    if (configured && withAnswering) {
+      try { supportRuntime = construct(false, true); configured = false; }
+      catch {
+        withAnswering = false;
+        try { supportRuntime = construct(true, false); }
+        catch { configured = false; supportRuntime = construct(false, false); }
+      }
+    } else {
+      configured = false;
+      withAnswering = false;
+      supportRuntime = construct(false, false);
+    }
+  }
+  if (!configured) selectedEngineering = {};
+  if (!withAnswering) selectedAnswering = answerConfigured ? { recoveryOnly: true } : {};
+  let answeringRuntime;
+  if (answerConfigured) {
+    try {
+      answeringRuntime = composeSupportAnswering(supportRuntime, logger, selectedAnswering,
+        () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true');
+    } catch {
+      selectedAnswering = { recoveryOnly: true };
+      supportRuntime = construct(configured, false);
+      answeringRuntime = composeSupportAnswering(supportRuntime, logger, selectedAnswering,
+        () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true');
+    }
+  }
   const api = createSupportApi({
     application: supportRuntime.application,
     sessions: supportRuntime.sessions,
@@ -153,7 +217,7 @@ function createSupportHandler(
     createLimiter: supportRuntime.createLimiter,
     replyLimiter: supportRuntime.replyLimiter,
     logger,
-    ...(configured ? { engineering: composeSupportEngineeringHuman(supportRuntime, logger, engineering) } : {}),
+    ...(configured ? { engineering: composeSupportEngineeringHuman(supportRuntime, logger, selectedEngineering) } : {}),
     // The stored Support ROLE is the only staff gate (fail closed).
     roleStore: supportRuntime.roleStore,
     bootstrapPrincipals: parseBootstrapPrincipals(env),
@@ -172,8 +236,7 @@ function createSupportHandler(
     bootstrapPrincipals: parseAdminBootstrapPrincipals(env),
   });
   return { supportRuntime, api, adminApi,
-    answering: !answerConfigured ? undefined : composeSupportAnswering(supportRuntime, logger, answering,
-      () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true'),
+    answering: answeringRuntime,
   };
 }
 
@@ -181,25 +244,26 @@ function createSupportHandler(
 export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {}) {
   return async (request: Request): Promise<Response> => {
+    const selectedAnswering = checkedAnswering(answering);
     if (isSupportEngineeringRequest(new URL(request.url).pathname) && !supportEngineeringHumanEnabled(engineering))
       return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     if (new URL(request.url).pathname.startsWith(SUPPORT_ANSWERING_NAMESPACE)) {
       const url = new URL(request.url); const path = url.pathname;
-      if ((answering.configuration === undefined && answering.recoveryOnly !== true) || url.search !== '' || !['/api/support/assistant/capability', '/api/support/assistant/tickets'].includes(path))
+      if ((selectedAnswering.configuration === undefined && selectedAnswering.recoveryOnly !== true) || url.search !== '' || !['/api/support/assistant/capability', '/api/support/assistant/tickets'].includes(path))
         return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
       const method = path.endsWith('/capability') ? 'GET' : 'POST';
       if (request.method !== method)
         return Response.json({ error: 'method_not_allowed' }, { status: 405, headers: { 'Cache-Control': 'no-store', Allow: method } });
-      if (path.endsWith('/capability') && (env.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true' || !supportAnsweringAdmissionEnabled(answering)))
+      if (path.endsWith('/capability') && (env.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true' || !supportAnsweringAdmissionEnabled(selectedAnswering)))
         return Response.json({ enabled: false }, { headers: { 'Cache-Control': 'no-store' } });
       // One counter spans the entire dedicated request, including every fresh
       // Identity/Role/Support/KB read and any late unknown-outcome continuation.
-      const composed = createSupportHandler(answeringInvocationEnvironment(env), logger, engineering, answering);
+      const composed = createSupportHandler(answeringInvocationEnvironment(env), logger, engineering, selectedAnswering);
       return createSupportAnsweringIngress(composed.supportRuntime, logger, composed.answering!)(request);
     }
     // Receipt-only installation must not change ordinary human Store composition.
     return createSupportHandler(env, logger, engineering,
-      answering.configuration === undefined ? {} : answering).api(request);
+      selectedAnswering.configuration === undefined ? {} : selectedAnswering).api(request);
   };
 }
 
@@ -509,6 +573,19 @@ return {
     // Each cron has its own invocation CPU budget. Never combine all cleanup
     // with the time-sensitive mail path on Workers Free.
     if (controller.cron === RATE_LIMIT_CRON) {
+      if (env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true') {
+        await runSupportAssistantTimer({
+          isEnabled: () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true',
+          load: async () => checkedAnswering(await answeringFor(env)),
+          create: (answering) => createSupportHandler(answeringInvocationEnvironment(env), logger,
+            options.engineering, answering).answering,
+          logger,
+        });
+        return;
+      }
+      // Preserve default/OFF throughput and zero Store work on the two newly
+      // eligible minutes. No optional qualification or credential is read.
+      if (new Date(controller.scheduledTime).getUTCMinutes() >= 58) return;
       ctx.waitUntil(
         (async () => {
           try {
@@ -565,7 +642,7 @@ return {
 
     const cleanup =
       controller.cron === CLEANUP_CRON
-        ? cleanupLaneAt(controller.scheduledTime)
+        ? cleanupLaneAt(controller.scheduledTime, env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true')
         : null;
     if (
       controller.cron !== MAIL_CRON &&
@@ -627,20 +704,25 @@ return {
         })(),
       );
 
-    // Use one exclusive physical cleanup invocation. A later tick performs the
-    // next phase; no cleanup job or second phase shares this D1 query allowance.
-    if (cleanup?.kind === 'learning_reviews' &&
-      Math.floor((Math.floor(controller.scheduledTime / 60_000) -
-        Math.floor((Math.floor(controller.scheduledTime / 60_000) + 1) / 60)) / CLEANUP_LANE_COUNT) % 2 === 0 &&
-      env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true') {
-      const answering = await answeringFor(env);
-      if (supportAnsweringEnabled(answering)) {
+    // These two bounded background jobs move into the exhaustive cleanup
+    // rotation only while the all-minute invocation belongs to answering.
+    if (cleanup?.kind === 'knowledge_rate_limits' || cleanup?.kind === 'knowledge_ready') {
+      ctx.waitUntil((async () => {
         try {
-          const composed = createSupportHandler(answeringInvocationEnvironment(env), logger, options.engineering, answering);
-          await composed.answering?.runTick();
-        } catch { logger.log('error', 'support.answering_unavailable', { stage: 'composition' }); }
-        return;
-      }
+          if (cleanup.kind === 'knowledge_rate_limits') {
+            await runKnowledgeMaintenance({ store: createProductionStore(env), clock: systemClock },
+              logger, { tasks: ['rate_limits'] });
+          } else if (knowledgeRetrievalEnabled(env)) {
+            await createKnowledgeRetrievalReady({ store: createKnowledgeProjectionStore(env),
+              clock: systemClock, logger, isEnabled: () => knowledgeRetrievalEnabled(env) }).runPage();
+          }
+        } catch (error) {
+          logger.log('error', 'knowledge.maintenance_unavailable', {
+            error: error instanceof Error ? error.name : 'unknown',
+          });
+        }
+      })());
+      return;
     }
 
     if (cleanup?.kind === 'learning_reviews') {

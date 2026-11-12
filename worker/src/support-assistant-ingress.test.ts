@@ -11,6 +11,7 @@ import {
 import { createSupportRuntime } from './support-desk';
 import { createSupportRequestHandler, createWorker } from './index';
 import { controlledHumanBody } from './support-human-control-fixtures';
+import { APPLICATION_SCOPE } from './support-access';
 import { assistantGate } from './support-assistant-fixtures';
 
 describe('current public SDK receipt-first customer answering ingress', () => {
@@ -54,6 +55,88 @@ describe('current public SDK receipt-first customer answering ingress', () => {
     expect(page.candidates).toHaveLength(1);
     expect(f.state.keys).toBe(0);
     expect(f.state.calls).toBe(0);
+  });
+
+  it('withholds a stale capability after real qualification-role revocation before closing browser resolution', async () => {
+    const f = await supportAnsweringFixture();
+    const configuration = f.composition.configuration;
+    if (!configuration) throw new Error('Actual source composition required.');
+    const role = 'FictionalAnsweringQualification';
+    const composition = {
+      ...f.composition,
+      configuration: {
+        ...configuration,
+        customerPolicy: {
+          ...configuration.customerPolicy,
+          defaults: configuration.customerPolicy.defaults?.filter(
+            (permission) => permission !== supportPermissions.assistantStart,
+          ),
+          roles: {
+            ...configuration.customerPolicy.roles,
+            [role]: [supportPermissions.assistantStart],
+          },
+        },
+      },
+    };
+    const id = 'fictional-capability-qualification';
+    await f.runtime.roleStore.grantRoleAssignmentWithAudit({
+      assignment: {
+        id,
+        principalId: f.human.principals.owner,
+        role,
+        scope: APPLICATION_SCOPE,
+        grantedBy: { kind: 'system', systemId: 'fictional-setup' },
+        grantedAtEpochMs: Date.now(),
+        status: 'active',
+      },
+      auditEventId: crypto.randomUUID(),
+    });
+    const answering = composeSupportAnswering(f.runtime, f.logger, composition, () => true);
+    const ingress = createSupportAnsweringIngress(f.runtime, f.logger, {
+      ...answering,
+      async admission(principalId) {
+        const available = await answering.admission(principalId);
+        expect(available).not.toBeNull();
+        const found = await f.runtime.roleStore.getRoleAssignment(id);
+        if (!found) throw new Error('Real qualification assignment required.');
+        await f.runtime.roleStore.revokeRoleAssignmentWithAudit({
+          assignmentId: id,
+          expectedConcurrencyToken: found.concurrencyToken,
+          revokedBy: { kind: 'system', systemId: 'fictional-revocation' },
+          revokedAtEpochMs: Date.now(),
+          auditEventId: crypto.randomUUID(),
+        });
+        return available;
+      },
+    });
+    const response = await ingress(f.request());
+    expect(response.status).toBe(503);
+    expect(await response.json()).not.toHaveProperty('enabled');
+    expect(f.state.calls).toBe(0);
+    expect(f.state.keys).toBe(0);
+  });
+
+  it('uses a distinct physical request correlation for unexpected intake failures', async () => {
+    const f = await supportAnsweringFixture();
+    const runtime = {
+      ...f.runtime,
+      application: {
+        ...f.runtime.application,
+        async createAdmittedCustomerTicket() {
+          throw new Error('FICTIONAL_PRIVATE_FAILURE');
+        },
+      },
+    };
+    const ingress = createSupportAnsweringIngress(runtime, f.logger, f.answering());
+    const first = await ingress(f.request(f.packet()));
+    const second = await ingress(f.request(f.packet()));
+    expect(first.status).toBe(503);
+    expect(second.status).toBe(503);
+    const a = (await first.json()) as { correlationId: string };
+    const b = (await second.json()) as { correlationId: string };
+    expect(a.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(b.correlationId).not.toBe(a.correlationId);
+    expect(JSON.stringify([a, b])).not.toContain('FICTIONAL_PRIVATE_FAILURE');
   });
 
   it.each(['flag', 'route', 'environment', 'human'] as const)(

@@ -157,9 +157,9 @@ export async function createProductionSupportAnswering(
   clock: Clock = systemClock,
 ): Promise<SupportAnsweringComposition> {
   try {
+    if (environment.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true') return recovery;
     const raw = environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON;
     if (
-      environment.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true' ||
       typeof raw !== 'string' ||
       raw.length > 65_536 ||
       raw.length === 0

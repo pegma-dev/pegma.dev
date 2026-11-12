@@ -8,7 +8,9 @@ export const MAIL_RECONCILE_CRON = '1-59 * * * *';
 // Cleanup skips minute 59 and rotates through 18 exclusive small lanes.
 export const CLEANUP_CRON = '0-58 * * * *';
 // Two ticks clean rate windows, then one advances a ready KB hint.
-export const RATE_LIMIT_CRON = '0-57 * * * *';
+// A distinct all-minute trigger: answering owns this physical invocation when ON.
+// With answering OFF, the dispatcher retains the former minutes0..57 work.
+export const RATE_LIMIT_CRON = '*/1 * * * *';
 
 export type CleanupLane =
   | {
@@ -25,7 +27,9 @@ export type CleanupLane =
       readonly kind: 'knowledge';
       readonly task: KnowledgeMaintenanceTask;
     }
-  | { readonly kind: 'learning_reviews' };
+  | { readonly kind: 'learning_reviews' }
+  | { readonly kind: 'knowledge_rate_limits' }
+  | { readonly kind: 'knowledge_ready' };
 
 const CLEANUP_LANES: readonly CleanupLane[] = [
   { kind: 'identity', task: 'challenges' },
@@ -48,16 +52,23 @@ const CLEANUP_LANES: readonly CleanupLane[] = [
   { kind: 'learning_reviews' },
 ];
 
-/** Shared with optional compositions that alternate an exclusive cleanup lane. */
+const ANSWERING_CLEANUP_LANES: readonly CleanupLane[] = [
+  ...CLEANUP_LANES,
+  { kind: 'knowledge_rate_limits' },
+  { kind: 'knowledge_ready' },
+];
+
+/** Legacy/default rotation; enabling answering adds two bounded background lanes. */
 export const CLEANUP_LANE_COUNT = CLEANUP_LANES.length;
 
 /** Deterministic across cold starts, delayed delivery, and UTC hour boundaries. */
-export function cleanupLaneAt(scheduledTime: number): CleanupLane {
+export function cleanupLaneAt(scheduledTime: number, answeringEnabled = false): CleanupLane {
   const minute = Math.floor(scheduledTime / 60_000);
   // Count only eligible minutes so skipping minute 59 never skips a lane.
   const tick = minute - Math.floor((minute + 1) / 60);
-  const length = CLEANUP_LANE_COUNT;
-  return CLEANUP_LANES[((tick % length) + length) % length]!;
+  const lanes = answeringEnabled ? ANSWERING_CLEANUP_LANES : CLEANUP_LANES;
+  const length = lanes.length;
+  return lanes[((tick % length) + length) % length]!;
 }
 
 /** The two jobs never share an invocation or its D1 query allowance. */
