@@ -307,6 +307,44 @@ const bindings = defineCollection<BindingRow>({
   },
 });
 
+export interface LearningTestReceiptCleanupInput {
+  readonly limit: number;
+  readonly cursor?: string;
+}
+
+/** Nonpaid retention work over the body-free association ledger. No current
+ * Source, model, principal, configuration or application ports are needed. */
+export async function cleanupSupportLearningTestReceipts(
+  options: { readonly store: Store; readonly clock: Clock },
+  input: LearningTestReceiptCleanupInput,
+) {
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 32)
+    refuse('invalid');
+  const records = options.store.collection(bindings);
+  const now = () => instant(options.clock.now());
+  const page = await records.scan(input);
+  let changed = 0;
+  for (const entry of page.records) {
+    const row = entry.value;
+    if (row.partition !== entry.key.partition || row.id !== entry.key.id)
+      refuse('changed');
+    const references = row.references.filter(
+      (ref) => instant(ref.retainUntil) > now(),
+    );
+    if (references.length === row.references.length) continue;
+    const committed =
+      references.length === 0
+        ? await records.deleteIfUnchanged(entry.key, entry.version)
+        : await records.putIfUnchanged({ ...row, references }, entry.version);
+    if (committed) changed += 1;
+  }
+  return {
+    scanned: page.records.length,
+    changed,
+    nextCursor: page.nextCursor,
+  };
+}
+
 /** One immutable association ledger over the existing Support Store. It creates
  * no route, authority, model call or background process. Separate KB/Support
  * observations are not a cross-store transaction. */
@@ -840,37 +878,11 @@ export function createSupportLearningTestReceipts(
     }
   };
 
-  async function cleanup(input: {
-    readonly limit: number;
-    readonly cursor?: string;
-  }) {
-    if (
-      !Number.isSafeInteger(input.limit) ||
-      input.limit < 1 ||
-      input.limit > 32
-    )
-      refuse("invalid");
-    const page = await records.scan(input);
-    let changed = 0;
-    for (const entry of page.records) {
-      const row = entry.value;
-      if (row.partition !== entry.key.partition || row.id !== entry.key.id)
-        refuse("changed");
-      const references = row.references.filter(
-        (ref) => instant(ref.retainUntil) > now(),
-      );
-      if (references.length === row.references.length) continue;
-      const committed =
-        references.length === 0
-          ? await records.deleteIfUnchanged(entry.key, entry.version)
-          : await records.putIfUnchanged({ ...row, references }, entry.version);
-      if (committed) changed += 1;
-    }
-    return {
-      scanned: page.records.length,
-      changed,
-      nextCursor: page.nextCursor,
-    };
+  function cleanup(input: LearningTestReceiptCleanupInput) {
+    return cleanupSupportLearningTestReceipts(
+      { store: options.store, clock: options.clock },
+      input,
+    );
   }
 
   return Object.freeze({ prepare, verify, cleanup });

@@ -8,18 +8,19 @@ import {
  * Host-owned Support Desk maintenance cursors.
  *
  * Independent of Identity mail cursors (`pegma-dev-maintenance`). Never share
- * a cursor across loops or with Identity. Only queue loops persist cursors
- * here; durable rate-limit sweeps are best-effort and do not keep host
+ * a cursor across loops or with Identity. Queue and test-receipt loops persist
+ * cursors here; durable rate-limit sweeps are best-effort and do not keep host
  * bookmarks.
  */
 export type SupportCursorName =
-  'queueRepairCursor' | 'queueInactiveSweepCursor';
+  'queueRepairCursor' | 'queueInactiveSweepCursor' | 'testReceiptCursor';
 
 interface SupportMaintenanceRecord {
   readonly partition: StoredValue;
   readonly id: StoredValue;
   readonly queueRepairCursor: StoredValue;
   readonly queueInactiveSweepCursor: StoredValue;
+  readonly testReceiptCursor: StoredValue;
 }
 
 const KEY = { partition: 'support-desk', id: 'maintenance' } as const;
@@ -37,6 +38,7 @@ const maintenance = defineCollection<SupportMaintenanceRecord>({
       id: record.id ?? null,
       queueRepairCursor: record.queueRepairCursor ?? null,
       queueInactiveSweepCursor: record.queueInactiveSweepCursor ?? null,
+      testReceiptCursor: record.testReceiptCursor ?? null,
     }),
   },
 });
@@ -51,6 +53,7 @@ function emptyRecord(): SupportMaintenanceRecord {
     id: KEY.id,
     queueRepairCursor: null,
     queueInactiveSweepCursor: null,
+    testReceiptCursor: null,
   };
 }
 

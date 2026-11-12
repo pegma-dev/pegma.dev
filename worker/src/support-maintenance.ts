@@ -12,6 +12,7 @@ import {
 } from './support-cursors';
 import { SUPPORT_TERMINAL_RETENTION_MS } from './support-desk';
 import { selectMaintenanceLimiters } from './maintenance-limiters';
+import { cleanupSupportLearningTestReceipts } from './support-learning-test-receipts';
 
 export interface SupportMaintenanceRuntime {
   readonly store: Store;
@@ -24,11 +25,14 @@ export interface SupportMaintenanceRuntime {
 
 // Queue repair can read and update several records for one ticket.
 const PAGE_LIMIT = 1;
+// Leave headroom for cursor CAS and scheduled wake seeding in this invocation.
+const TEST_RECEIPT_PAGE_LIMIT = 8;
 
 export const SUPPORT_MAINTENANCE_TASKS = [
   'queue_repair',
   'queue_inactive_sweep',
   'rate_limits',
+  'test_receipts',
 ] as const;
 export type SupportMaintenanceTask = (typeof SUPPORT_MAINTENANCE_TASKS)[number];
 export interface SupportMaintenanceOptions {
@@ -109,6 +113,14 @@ export async function runSupportMaintenance(
         options.limiterIndex,
       );
       await Promise.all(limiters.map((limiter) => limiter.sweep()));
+    },
+    test_receipts: async () => {
+      const cursor = previous('testReceiptCursor');
+      const result = await cleanupSupportLearningTestReceipts(runtime, {
+        limit: TEST_RECEIPT_PAGE_LIMIT,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      save('testReceiptCursor', result.nextCursor);
     },
   };
 

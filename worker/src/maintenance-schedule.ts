@@ -5,8 +5,8 @@ import type { SupportMaintenanceTask } from './support-maintenance';
 export const MAIL_CRON = '* * * * *';
 // Skip minute zero so every trigger has a distinct schedule.
 export const MAIL_RECONCILE_CRON = '1-59 * * * *';
-// Cleanup skips minute 59 and rotates through 18 lanes when answering is OFF,
-// or 20 lanes when answering is enabled.
+// Cleanup skips minute 59 and rotates through 19 lanes when answering is OFF,
+// or 21 lanes when answering is enabled.
 export const CLEANUP_CRON = '0-58 * * * *';
 // Two ticks clean rate windows, then one advances a ready KB hint.
 // A distinct all-minute trigger: answering owns this physical invocation when ON.
@@ -58,6 +58,7 @@ const CLEANUP_LANES: readonly CleanupLane[] = [
   })),
   { kind: 'knowledge', task: 'rate_limits' },
   { kind: 'learning_reviews' },
+  { kind: 'support', task: 'test_receipts' },
 ];
 
 const ANSWERING_CLEANUP_LANES: readonly CleanupLane[] = [

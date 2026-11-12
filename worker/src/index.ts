@@ -1145,7 +1145,9 @@ return {
       ctx.waitUntil(
         (async () => {
           try {
-            const runtime = createProductionSupportMaintenanceRuntime(env);
+            const runtime = cleanup.task === 'test_receipts'
+              ? { store: createProductionStore(env), clock: systemClock, limiters: [] }
+              : createProductionSupportMaintenanceRuntime(env);
             await runSupportMaintenance(
               { ...runtime, independentChecksPurge: () => purgeSupportIndependentCheckRequests(runtime).then(() => undefined) },
               logger,

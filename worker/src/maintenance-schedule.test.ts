@@ -176,7 +176,7 @@ describe('maintenance dispatch', () => {
       }
     }
     const cycle = observed.slice(0, CLEANUP_LANE_COUNT);
-    expect(new Set(cycle).size).toBe(18);
+    expect(new Set(cycle).size).toBe(19);
     for (let index = 0; index < observed.length; index++) {
       expect(observed[index]).toBe(cycle[index % cycle.length]);
     }
@@ -208,7 +208,7 @@ describe('maintenance dispatch', () => {
     expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
-  it('preserves all 18 cleanup lanes across a UTC day boundary without sharing the global rate job', async () => {
+  it('preserves all 19 cleanup lanes across a UTC day boundary without sharing the global rate job', async () => {
     const lanes = [];
     const start = Date.parse('2026-10-15T23:53:00Z');
     for (let minute = 0; minute < CLEANUP_LANE_COUNT + 1; minute++) {
@@ -240,7 +240,7 @@ describe('maintenance dispatch', () => {
       }
       expect(runReleaseReconciliation).not.toHaveBeenCalled();
     }
-    expect(new Set(lanes).size).toBe(18);
+    expect(new Set(lanes).size).toBe(19);
     expect(
       lanes.filter(
         (lane) =>
@@ -258,6 +258,29 @@ describe('maintenance dispatch', () => {
         );
       }
     }
+  });
+
+  it('runs the isolated receipt retention lane with Source/model flags OFF and removed configuration', async () => {
+    const start = Date.parse('2026-11-12T00:00:00Z');
+    const offset = Array.from({ length: CLEANUP_LANE_COUNT }, (_, minute) => minute).find((minute) => {
+      const lane = cleanupLaneAt(start + minute * 60_000);
+      return lane.kind === 'support' && lane.task === 'test_receipts';
+    });
+    if (offset === undefined) throw new Error('Expected receipt retention lane');
+    expect(await scheduled(CLEANUP_CRON, start + offset * 60_000, {
+      PEGMA_SUPPORT_LEARNING_ENABLED: 'false', PEGMA_SUPPORT_LEARNING_WORKER_ENABLED: 'false',
+      PEGMA_KNOWLEDGE_ENABLED: 'false', PEGMA_SUPPORT_ASSISTANT_ENABLED: 'false',
+      PEGMA_AGENT_CLIENTS_JSON: 'not-json',
+    })).toBe(1);
+    expect(runSupportMaintenance).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ store: {}, clock: expect.anything(), limiters: [] }),
+      expect.anything(), { tasks: ['test_receipts'] },
+    );
+    expect(runIdentityMaintenance).not.toHaveBeenCalled();
+    expect(runKnowledgeMaintenance).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalMaintenance).not.toHaveBeenCalled();
+    expect(createKnowledgeRetrievalReady).not.toHaveBeenCalled();
+    expect(runReleaseReconciliation).not.toHaveBeenCalled();
   });
 
   it('leaves the learning dispatch lane port-free when trusted review composition is absent', async () => {
@@ -325,7 +348,7 @@ describe('maintenance dispatch', () => {
     }
   });
 
-  it('preserves all20 enabled cleanup lanes in order across minute59 and a UTC day boundary', async () => {
+  it('preserves all21 enabled cleanup lanes in order across minute59 and a UTC day boundary', async () => {
     const start = Date.parse('2026-11-12T23:50:00Z');
     const observed: string[] = [];
     for (let minute = 0; minute < 2 * 24 * 60; ++minute) {
@@ -333,15 +356,15 @@ describe('maintenance dispatch', () => {
       if (new Date(time).getUTCMinutes() === 59) continue;
       observed.push(JSON.stringify(cleanupLaneAt(time, true)));
     }
-    const cycle = observed.slice(0, 20);
-    expect(new Set(cycle).size).toBe(20);
+    const cycle = observed.slice(0, 21);
+    expect(new Set(cycle).size).toBe(21);
     expect(cycle).toContain(JSON.stringify({ kind: 'knowledge_rate_limits' }));
     expect(cycle).toContain(JSON.stringify({ kind: 'knowledge_ready' }));
     for (let index = 0; index < observed.length; ++index)
       expect(observed[index]).toBe(cycle[index % cycle.length]);
 
     const seen = new Set<string>();
-    for (let minute = 0; seen.size < 20; ++minute) {
+    for (let minute = 0; seen.size < 21; ++minute) {
       const time = start + minute * 60_000;
       if (new Date(time).getUTCMinutes() === 59) continue;
       const lane = cleanupLaneAt(time, true);
