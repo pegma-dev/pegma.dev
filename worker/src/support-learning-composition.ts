@@ -1,5 +1,8 @@
 import type { PrivateSourcesVerifier } from "@pegma/knowledge-base-application";
-import type { ResolutionLearningKey } from "@pegma/support-desk-application";
+import type {
+  ResolutionLearningKey,
+  ResolutionLearningOptions,
+} from "@pegma/support-desk-application";
 import type {
   LearningCheckPolicyPort,
   LearningChecksPort,
@@ -47,6 +50,8 @@ export interface SupportLearningCompositionOptions {
   > & {
     readonly reviewPolicy: LearningCheckPolicyPort;
   };
+  /** Explicit human intake and current product proof, independent of paid ports. */
+  readonly intake?: Pick<ResolutionLearningOptions, "enabled" | "productContext">;
   readonly production?: Omit<
     SupportLearningProductionOptions,
     "configuration"
@@ -107,6 +112,38 @@ export function createSupportLearningComposition(
             retirementAccess: source.retirementAccess,
           })
         : undefined;
+  const intake = options.intake;
+  function intakeEnabled(): boolean {
+    try {
+      return (
+        !failed &&
+        sourcePorts !== undefined &&
+        options.intake === intake &&
+        intake?.enabled === true &&
+        typeof intake.productContext?.resolve === "function"
+      );
+    } catch {
+      return false;
+    }
+  }
+  // Preserve every existing limit, test receipt and SDK check verifier. An
+  // explicit intake choice replaces only the gate and trusted product binding.
+  const application =
+    intake === undefined
+      ? production.application
+      : Object.freeze<ResolutionLearningOptions>({
+          ...production.application,
+          enabled: intakeEnabled(),
+          productContext: {
+            async resolve(...args) {
+              if (!intakeEnabled() || intake.productContext === undefined)
+                return null;
+              const product = await intake.productContext.resolve(...args);
+              return intakeEnabled() ? product : null;
+            },
+          },
+        });
+
   const unscopedChecks: LearningChecksPort = Object.freeze({
     ...policy,
     check: async () => ({ outcome: "held" as const }),
@@ -172,7 +209,7 @@ export function createSupportLearningComposition(
     };
   }
   return Object.freeze({
-    application: production.application,
+    application,
     sources,
     readChecks,
     ready,
