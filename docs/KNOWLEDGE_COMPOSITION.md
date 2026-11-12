@@ -253,11 +253,13 @@ after the service returns; it does not roll back an approval already committed.
 
 Host-owned JSON POST bodies for portal reads, staff commands, agent test
 reports and consent approvals have a ten-second total read deadline, in
-addition to the byte limit. Trickle input does not restart that deadline.
+addition to the byte limit. Empty-body grant revocations share that deadline:
+nonempty input is rejected, and zero-byte chunks periodically yield to let
+the deadline and cancellation run. Trickle input does not restart the deadline.
 An expired body read returns `408 request_timeout`, cancels the reader and
-starts no KB read or consent/report command. This bounds body reading;
-authentication, storage work and SDK-owned protocol parsing keep their own
-boundaries.
+starts no KB/grant read or consent/report/revocation command. This bounds body
+reading; authentication, storage work and SDK-owned protocol parsing keep their
+own boundaries.
 
 `/api/agent-access/*` composes the released protocol plus browser-only consent
 and known-grant controls. Discovery is at

@@ -16,10 +16,83 @@ import {
   type AgentBrowserOptions,
 } from './agent-authority';
 
+const browserBodyTimeoutMs = 10_000;
+
 export interface AgentAccessApiOptions extends AgentBrowserOptions {
   readonly service: AgentAccessServicePort;
   readonly configuration: AgentAccessConfiguration;
   readonly limit: (request: Request) => Promise<void>;
+}
+
+/** A transport may represent an empty DELETE as a stream rather than null. */
+async function requireEmptyBody(request: Request): Promise<void> {
+  if (request.body === null) return;
+  const reader = request.body.getReader();
+  const invalid = new ApiError(400, 'invalid_request');
+  const timeout = new ApiError(408, 'request_timeout');
+  const expiresAt = performance.now() + browserBodyTimeoutMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  let cancelled = false;
+  const cancel = (reason: unknown): void => {
+    if (cancelled) return;
+    cancelled = true;
+    // A source may never settle cancellation; it cannot hold this route open.
+    try {
+      void reader.cancel(reason).catch(() => {});
+    } catch {
+      /* Best effort. */
+    }
+  };
+  const boundary = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      reject(timeout);
+      cancel(timeout);
+    };
+    timer = setTimeout(onAbort, browserBodyTimeoutMs);
+    request.signal.addEventListener('abort', onAbort, { once: true });
+    if (request.signal.aborted) onAbort();
+  });
+  // Input validation can fail before the race; keep any boundary rejection handled.
+  void boundary.catch(() => {});
+  try {
+    const declared = request.headers.get('Content-Length');
+    if (declared !== null && !/^0+$/u.test(declared)) throw invalid;
+    // No bytes are buffered. Empty chunks periodically yield so deadline/abort
+    // callbacks can run even when a source completes every read immediately.
+    let emptyReads = 0;
+    while (true) {
+      if (performance.now() >= expiresAt) throw timeout;
+      const chunk = await Promise.race([reader.read(), boundary]);
+      if (performance.now() >= expiresAt || request.signal.aborted)
+        throw timeout;
+      if (chunk.done) return;
+      if (chunk.value.byteLength !== 0) throw invalid;
+      emptyReads += 1;
+      if (emptyReads === 16) {
+        emptyReads = 0;
+        let yieldTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            boundary,
+            new Promise<void>((resolve) => {
+              yieldTimer = setTimeout(resolve, 0);
+            }),
+          ]);
+        } finally {
+          if (yieldTimer !== undefined) clearTimeout(yieldTimer);
+        }
+      }
+    }
+  } catch (error) {
+    cancel(error);
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort !== undefined)
+      request.signal.removeEventListener('abort', onAbort);
+    reader.releaseLock();
+  }
 }
 
 /** Existing-login consent and owner-only views. Public OAuth routes live in AA. */
@@ -82,6 +155,21 @@ export function createAgentAccessApi(
       sameBrowserHeaders();
       const principalId = context.access.principalId;
       const sessionId = authenticated.rawSessionId;
+      async function currentMutationContext() {
+        sameBrowserHeaders();
+        const current = await requireAgentBrowserContext(
+          request,
+          options,
+          true,
+        );
+        sameBrowserHeaders();
+        if (
+          current.authenticated.rawSessionId !== sessionId ||
+          current.context.access.principalId !== principalId
+        )
+          throw new ApiError(403, 'browser_credential_changed');
+        return current.context;
+      }
       if (path === '/api/agent-access/state') {
         if (url.search !== '') throw new ApiError(400, 'invalid_request');
         response = json({
@@ -90,16 +178,18 @@ export function createAgentAccessApi(
           scopes: options.configuration.scopes,
         });
       } else if (grant !== null) {
-        if (
-          url.search !== '' ||
-          (request.method === 'DELETE' && request.body !== null)
-        )
-          throw new ApiError(400, 'invalid_request');
+        if (url.search !== '') throw new ApiError(400, 'invalid_request');
         const grantId = boundedString(grant[1], 1, 128);
         if (request.method === 'GET')
           response = json(await options.service.getGrant(context, grantId));
         else {
-          await options.service.revokeGrant(context, grantId);
+          let currentContext = context;
+          if (request.body !== null) {
+            await requireEmptyBody(request);
+            // Empty input still adds an awaited boundary before a protected mutation.
+            currentContext = await currentMutationContext();
+          }
+          await options.service.revokeGrant(currentContext, grantId);
           response = new Response(null, {
             status: 204,
             headers: {
@@ -125,7 +215,7 @@ export function createAgentAccessApi(
       } else {
         if (url.search !== '') throw new ApiError(400, 'invalid_request');
         const body = optionalKeysObject(
-          await readJson(request, { timeoutMs: 10_000 }),
+          await readJson(request, { timeoutMs: browserBodyTimeoutMs }),
           ['requestId', 'decision'],
           ['approvedScopes', 'userCode'],
         );
@@ -152,21 +242,8 @@ export function createAgentAccessApi(
         };
         // Body input is an awaited browser boundary. Account/role authority in
         // AA cannot establish that the original host session is still live.
-        sameBrowserHeaders();
-        const current = await requireAgentBrowserContext(
-          request,
-          options,
-          true,
-        );
-        sameBrowserHeaders();
-        if (
-          current.authenticated.rawSessionId !== sessionId ||
-          current.context.access.principalId !== principalId
-        )
-          throw new ApiError(403, 'browser_credential_changed');
-        response = json(
-          await options.service.approve(current.context, command),
-        );
+        const currentContext = await currentMutationContext();
+        response = json(await options.service.approve(currentContext, command));
       }
       // The service may have awaited private reads or a committed mutation.
       // Withhold its response if the original browser no longer has authority;

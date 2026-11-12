@@ -424,6 +424,211 @@ describe('Agent Access host composition', () => {
     ).rejects.toThrow();
   });
 
+  it.each([
+    'null',
+    'empty-stream',
+    'zero-byte-array',
+    'finite-empty-chunks',
+  ] as const)(
+    'revokes an actual active grant with a %s DELETE body and invalidates access and refresh',
+    async (shape) => {
+      const f = await fixture();
+      const { tokens, requestId } = await f.approved();
+      const path = `/api/agent-access/grants/${requestId}`;
+      expect(await body(await f.runtime.api(f.request(path)))).toMatchObject({
+        status: 'active',
+      });
+      let emptyChunks = 0;
+      const input =
+        shape === 'null'
+          ? undefined
+          : shape === 'zero-byte-array'
+            ? new Uint8Array(0)
+            : new ReadableStream<Uint8Array>(
+                {
+                  pull(controller) {
+                    if (shape === 'finite-empty-chunks' && emptyChunks++ < 33)
+                      controller.enqueue(new Uint8Array(0));
+                    else controller.close();
+                  },
+                },
+                { highWaterMark: 0 },
+              );
+      const init = {
+        method: 'DELETE',
+        ...(input === undefined ? {} : { body: input }),
+        duplex: 'half',
+      };
+      const request = f.request(path, 'admin', init);
+      expect(request.body === null).toBe(shape === 'null');
+      const result = await f.runtime.api(request);
+      expect(result?.status).toBe(204);
+      expect(await body(await f.runtime.api(f.request(path)))).toMatchObject({
+        status: 'revoked',
+      });
+      await expect(
+        f.runtime.service.authenticate({
+          token: tokens.access_token,
+          resource: AGENT_RESOURCE,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        f.runtime.service.refresh({
+          clientId: client.clientId,
+          resource: AGENT_RESOURCE,
+          refreshToken: tokens.refresh_token,
+        }),
+      ).rejects.toThrow();
+    },
+  );
+
+  it.each([
+    'bytes',
+    'large',
+    'chunked',
+    'false-zero-length',
+    'declared-nonempty',
+  ] as const)(
+    'rejects a %s DELETE body, cancels without waiting and leaves the active grant usable',
+    async (shape) => {
+      const f = await fixture();
+      const { tokens, requestId } = await f.approved();
+      let reads = 0;
+      const cancel = vi.fn(() => new Promise<void>(() => {}));
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            reads += 1;
+            if (shape === 'chunked' && reads === 1)
+              controller.enqueue(new Uint8Array(0));
+            else
+              controller.enqueue(
+                shape === 'large'
+                  ? new Uint8Array(64 * 1024)
+                  : new Uint8Array([1]),
+              );
+          },
+          cancel,
+        },
+        { highWaterMark: 0 },
+      );
+      const headers = new Headers();
+      if (shape === 'false-zero-length') headers.set('Content-Length', '0');
+      if (shape === 'declared-nonempty') headers.set('Content-Length', '1');
+      const init = { method: 'DELETE', headers, body: stream, duplex: 'half' };
+      const request = f.request(
+        `/api/agent-access/grants/${requestId}`,
+        'admin',
+        init,
+      );
+      const result = await f.runtime.api(request);
+      expect(result?.status).toBe(400);
+      expect(await body(result)).toEqual({ error: 'invalid_request' });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(request.body?.locked).toBe(false);
+      expect(reads).toBe(
+        shape === 'declared-nonempty' ? 0 : shape === 'chunked' ? 2 : 1,
+      );
+      expect(
+        await body(
+          await f.runtime.api(
+            f.request(`/api/agent-access/grants/${requestId}`),
+          ),
+        ),
+      ).toMatchObject({ status: 'active' });
+      await expect(
+        f.runtime.service.authenticate({
+          token: tokens.access_token,
+          resource: AGENT_RESOURCE,
+        }),
+      ).resolves.toMatchObject({ grantId: requestId });
+    },
+  );
+
+  it.each([
+    'stalled',
+    'empty-trickle',
+    'cancel-rejects',
+    'signal-abort',
+    'immediate-empty',
+  ] as const)(
+    'bounds a %s DELETE body without revoking the active grant',
+    async (shape) => {
+      const f = await fixture();
+      const { requestId } = await f.approved();
+      let entered = () => {};
+      const reading = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const cancel = vi.fn(() =>
+        shape === 'cancel-rejects'
+          ? Promise.reject(new Error('Synthetic cancellation rejected'))
+          : new Promise<void>(() => {}),
+      );
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          start(controller) {
+            source = controller;
+          },
+          pull(controller) {
+            entered();
+            if (shape === 'immediate-empty')
+              controller.enqueue(new Uint8Array(0));
+          },
+          cancel,
+        },
+        { highWaterMark: 0 },
+      );
+      const controller = new AbortController();
+      const init = {
+        method: 'DELETE',
+        body: stream,
+        duplex: 'half',
+        signal: controller.signal,
+      };
+      const request = f.request(
+        `/api/agent-access/grants/${requestId}`,
+        'admin',
+        init,
+      );
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'performance'],
+      });
+      try {
+        let settled = false;
+        const pending = f.runtime.api(request).finally(() => {
+          settled = true;
+        });
+        await reading;
+        if (shape === 'signal-abort') controller.abort();
+        else if (shape === 'immediate-empty')
+          await vi.advanceTimersByTimeAsync(10_000);
+        else {
+          await vi.advanceTimersByTimeAsync(9_000);
+          if (shape === 'empty-trickle') source!.enqueue(new Uint8Array(0));
+          await vi.advanceTimersByTimeAsync(999);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        const result = await pending;
+        expect(result?.status).toBe(408);
+        expect(await body(result)).toEqual({ error: 'request_timeout' });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(request.body?.locked).toBe(false);
+        expect(
+          await body(
+            await f.runtime.api(
+              f.request(`/api/agent-access/grants/${requestId}`),
+            ),
+          ),
+        ).toMatchObject({ status: 'active' });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('honors real stored Admin revocation without caching or reseeding', async () => {
     const f = await fixture();
     const { tokens } = await f.approved();
