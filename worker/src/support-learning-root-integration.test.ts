@@ -19,6 +19,7 @@ import * as retrievalReady from './knowledge-retrieval-ready';
 import * as retrievalMaintenance from './knowledge-retrieval-maintenance';
 import * as identityRuntime from './identity-runtime';
 import { createWorker } from './index';
+import { SUPPORT_LEARNING_SOURCE_SETTING, type SupportLearningSourceConfiguration } from './support-learning-bootstrap';
 import {
   createSupportLearningFixture,
   learningCanary,
@@ -1019,7 +1020,7 @@ describe('normal root learning composition', () => {
   });
 });
 
-async function testEvidenceRootFixture() {
+async function testEvidenceRootFixture(useDefaultBootstrap = false) {
   const t = await rootFixture();
   const resolve = createAgentPrincipalResolver(t.support);
   const reporterId = t.f.actors.runner.principalId;
@@ -1166,7 +1167,12 @@ async function testEvidenceRootFixture() {
     },
   };
   Reflect.set(t.env, "PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED", "true");
-  const worker = createWorker({ learning: options });
+  if (useDefaultBootstrap) {
+    Reflect.set(t.env, SUPPORT_LEARNING_SOURCE_SETTING, sourceConfiguration(t, {
+      testEvidence: { retentionMilliseconds: 120_000 },
+    }));
+  }
+  const worker = useDefaultBootstrap ? createWorker() : createWorker({ learning: options });
   const ticket = await t.f.terminal();
   const enrolled = await t.call(
     worker,
@@ -1405,5 +1411,373 @@ describe("registered staff test association", () => {
       t.request("/api/support/admin/tickets/" + learningTicketId + "/learning"),
     );
     expect(source.status).toBe(200);
+  });
+});
+
+function sourceConfiguration(
+  t: Awaited<ReturnType<typeof rootFixture>>,
+  change: Partial<SupportLearningSourceConfiguration> = {},
+) {
+  return JSON.stringify({
+    version: 1,
+    revision: 'registered-source-v1',
+    namespace: 'registered-source',
+    intakeEnabled: true,
+    product: {
+      productId: t.f.product.productId,
+      version: t.f.product.productVersion,
+      buildId: t.f.product.buildId,
+    },
+    collectionIds: ['learning-guides'],
+    ...change,
+  });
+}
+function selectDefaultSource(
+  t: Awaited<ReturnType<typeof rootFixture>>,
+  change: Partial<SupportLearningSourceConfiguration> = {},
+) {
+  Reflect.set(
+    t.env,
+    SUPPORT_LEARNING_SOURCE_SETTING,
+    sourceConfiguration(t, change),
+  );
+  Reflect.set(t.env, 'PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED', 'true');
+}
+
+describe('default Source bootstrap', () => {
+  it('uses the registered default worker to accept real human evidence into eligible Work without a model or extra graph', async () => {
+    const t = await rootFixture();
+    selectDefaultSource(t);
+    const ticket = await t.f.terminal();
+    const runtimes = vi.spyOn(supportDesk, 'createSupportRuntime');
+    const graphs = vi.spyOn(
+      learningComposition,
+      'createSupportLearningComposition',
+    );
+    const checkers = vi.spyOn(
+      independentChecks,
+      'createSupportIndependentChecks',
+    );
+    const worker = createWorker();
+    const enroll = await t.call(
+      worker,
+      t.request(
+        '/api/support/admin/tickets/' + learningTicketId + '/learning/enroll',
+        {
+          commandId: 'DEFAULT-SOURCE-ENROLL',
+          expectedRevision: ticket.revision,
+        },
+      ),
+    );
+    expect(enroll.status).toBe(200);
+    const enrolled = (await enroll.json()) as {
+      result: { resolutionCycle: number };
+    };
+    expect(graphs).toHaveBeenCalledTimes(1);
+    expect(runtimes).toHaveBeenCalledTimes(1);
+    const graph = graphs.mock.results.at(-1)?.value;
+    expect(graph?.browserRuntime()?.application).toBe(
+      runtimes.mock.results.at(-1)?.value.application,
+    );
+    expect(graph?.browserRuntime()?.knowledge).toBeDefined();
+    expect(graph?.browserRuntime()?.sources).toBe(graph?.sources);
+    const evidence = await t.call(
+      worker,
+      t.request(
+        '/api/support/admin/tickets/' + learningTicketId + '/learning/evidence',
+        {
+          commandId: 'DEFAULT-SOURCE-EVIDENCE',
+          expectedRevision: ticket.revision,
+          resolutionCycle: enrolled.result.resolutionCycle,
+          solutionMessageId: 'learning-solution',
+          verificationReference: 'SYNTHETIC_PRIVATE_VERIFICATION',
+        },
+      ),
+    );
+    expect(evidence.status).toBe(200);
+    const source = await t.f.application.readResolutionLearningSource(
+      t.f.actors.staff,
+      learningTicketId,
+    );
+    expect(source.state).toBe('eligible');
+    expect(
+      (
+        await t.f.application.readResolutionLearningWork(t.f.actors.staff, {
+          ticketId: learningTicketId,
+          sourceGeneration: source.sourceGeneration,
+        })
+      ).status,
+    ).toBe('pending');
+    expect(t.f.state.modelCalls).toBe(0);
+    expect(checkers).not.toHaveBeenCalled();
+    expect(graphs.mock.results.at(-1)?.value.processingEnabled()).toBe(false);
+  });
+
+  it('keeps false intake Source-only and missing or invalid settings on the legacy graph', async () => {
+    const t = await rootFixture();
+    const ticket = await t.f.terminal();
+    const graphs = vi.spyOn(
+      learningComposition,
+      'createSupportLearningComposition',
+    );
+    Reflect.set(t.env, 'PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED', 'true');
+    for (const raw of [undefined, '{"version":1,"permissions":["Admin"]}']) {
+      Reflect.set(t.env, SUPPORT_LEARNING_SOURCE_SETTING, raw);
+      const response = await t.call(
+        createWorker(),
+        t.request(
+          '/api/support/admin/tickets/' + learningTicketId + '/learning',
+        ),
+      );
+      expect(response.status).toBe(404);
+      expect(graphs).not.toHaveBeenCalled();
+    }
+    selectDefaultSource(t, { intakeEnabled: false });
+    const denied = await t.call(
+      createWorker(),
+      t.request(
+        '/api/support/admin/tickets/' + learningTicketId + '/learning/enroll',
+        {
+          commandId: 'FALSE-SOURCE-ENROLL',
+          expectedRevision: ticket.revision,
+        },
+      ),
+    );
+    expect(denied.status).toBe(409);
+    expect(graphs.mock.results.at(-1)?.value.ready()).toBe(true);
+    expect(
+      (await t.f.rows()).some(
+        (row) => row.kind === 'resolution_learning_source',
+      ),
+    ).toBe(false);
+    expect(t.f.state.modelCalls).toBe(0);
+  });
+
+  it.each(['undefined', 'inherited', 'throwing', 'unready'] as const)(
+    'preserves an explicit %s selection without environment-authority fallback',
+    async (kind) => {
+      const t = await rootFixture();
+      selectDefaultSource(t);
+      await t.f.terminal();
+      const graphs = vi.spyOn(
+        learningComposition,
+        'createSupportLearningComposition',
+      );
+      const options: Parameters<typeof createWorker>[0] =
+        kind === 'inherited'
+          ? Object.create({ learning: undefined })
+          : kind === 'unready'
+            ? { learning: {} }
+            : { learning: undefined };
+      if (kind === 'throwing')
+        Object.defineProperty(options, 'learning', {
+          get() {
+            throw new Error('Fictional explicit selection failure');
+          },
+        });
+      const response = await t.call(
+        createWorker(options),
+        t.request(
+          '/api/support/admin/tickets/' + learningTicketId + '/learning',
+        ),
+      );
+      expect(response.status).toBe(404);
+      expect(graphs).not.toHaveBeenCalled();
+      expect(t.f.state.modelCalls).toBe(0);
+    },
+  );
+
+  it('closes captured Source ports after config revision or removal and retains real stored staff-role denial', async () => {
+    const t = await rootFixture();
+    selectDefaultSource(t);
+    const ticket = await t.f.terminal();
+    const graphs = vi.spyOn(
+      learningComposition,
+      'createSupportLearningComposition',
+    );
+    const read = () =>
+      t.call(
+        createWorker(),
+        t.request(
+          '/api/support/admin/tickets/' + learningTicketId + '/learning',
+        ),
+      );
+    const enrolled = await t.call(
+      createWorker(),
+      t.request(
+        '/api/support/admin/tickets/' + learningTicketId + '/learning/enroll',
+        {
+          commandId: 'CAPTURED-SOURCE-ENROLL',
+          expectedRevision: ticket.revision,
+        },
+      ),
+    );
+    expect(enrolled.status).toBe(200);
+    expect((await read()).status).toBe(200);
+    const original = graphs.mock.calls.at(-1)?.[0]?.source;
+    Reflect.set(
+      t.env,
+      SUPPORT_LEARNING_SOURCE_SETTING,
+      sourceConfiguration(t, { revision: 'registered-source-v2' }),
+    );
+    expect(
+      await original?.serviceAccess.resolve(new AbortController().signal),
+    ).toEqual({ outcome: 'inactive' });
+    expect((await read()).status).toBe(200);
+    const changed = graphs.mock.calls.at(-1)?.[0]?.source;
+    Reflect.set(t.env, SUPPORT_LEARNING_SOURCE_SETTING, undefined);
+    expect(
+      await changed?.retirementAccess.resolve(new AbortController().signal),
+    ).toEqual({ outcome: 'inactive' });
+    selectDefaultSource(t);
+    const role = await t.support.roleStore.getRoleAssignment(
+      'root-learning-Support',
+    );
+    if (role === null) throw new Error('Actual stored staff role missing');
+    await t.support.roleStore.revokeRoleAssignmentWithAudit({
+      assignmentId: 'root-learning-Support',
+      expectedConcurrencyToken: role.concurrencyToken,
+      revokedBy: { kind: 'system', systemId: 'default-source-test' },
+      revokedAtEpochMs: Date.now(),
+      auditEventId: 'default-source-revoke',
+    });
+    expect((await read()).status).toBe(403);
+  });
+
+  it('uses actual published provenance and Source privacy while a missing quality policy holds publication', async () => {
+    const t = await rootFixture();
+    const articleId = await t.published();
+    selectDefaultSource(t);
+    const graphs = vi.spyOn(
+      learningComposition,
+      'createSupportLearningComposition',
+    );
+    const worker = createWorker();
+    expect(
+      (
+        await t.call(
+          worker,
+          t.request(
+            '/api/support/admin/tickets/' + learningTicketId + '/learning',
+          ),
+        )
+      ).status,
+    ).toBe(200);
+    const graph = graphs.mock.results.at(-1)?.value;
+    const draft = await t.f.knowledge.getDraft(t.f.actors.staff, { articleId });
+    const provenance = await t.f.knowledge.getProvenance(t.f.actors.staff, {
+      articleId,
+    });
+    expect(
+      await graph?.sources.isCurrent({
+        article: draft.revision,
+        snapshot: provenance.snapshot,
+      }),
+    ).toBe(true);
+    expect(
+      await graph?.sources.canPublish({
+        article: draft.revision,
+        snapshot: provenance.snapshot,
+      }),
+    ).toBe(false);
+    const withdrew = await t.call(
+      worker,
+      t.request(
+        '/api/support/admin/tickets/' + learningTicketId + '/learning/withdraw',
+        {
+          commandId: 'DEFAULT-SOURCE-WITHDRAW',
+          reason: 'privacy_withdrawal',
+        },
+      ),
+    );
+    expect(withdrew.status).toBe(200);
+    expect(
+      await graph?.sources.isCurrent({
+        article: draft.revision,
+        snapshot: provenance.snapshot,
+      }),
+    ).toBe(false);
+    expect(
+      (
+        await t.f.application.readResolutionLearningSource(
+          t.f.actors.staff,
+          learningTicketId,
+        )
+      ).state,
+    ).toBe('withdrawn');
+  });
+
+  it('binds a genuine confirmed report through the optional default governance reader and refuses expired new evidence', async () => {
+    const t = await testEvidenceRootFixture(true);
+    const prepared = await t.call(t.worker, t.request(t.path, t.packet));
+    expect(prepared.status).toBe(200);
+    const reference = (await prepared.json()) as {
+      result: { receipt: string; validUntil: string };
+    };
+    expect(reference.result.receipt.length).toBeLessThanOrEqual(200);
+    expect(t.governance).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date(Date.parse(reference.result.validUntil) + 1));
+    const evidence = await t.call(
+      t.worker,
+      t.request(
+        '/api/support/admin/tickets/' + learningTicketId + '/learning/evidence',
+        {
+          kind: 'successful_test',
+          commandId: 'DEFAULT-EXPIRED-TEST-EVIDENCE',
+          expectedRevision: t.packet.expectedRevision,
+          resolutionCycle: t.packet.resolutionCycle,
+          solutionMessageId: t.packet.solutionMessageId,
+          receipt: reference.result.receipt,
+        },
+      ),
+    );
+    expect(evidence.status).toBe(200);
+    expect(await evidence.json()).toMatchObject({
+      result: { state: 'held', heldReason: 'test_receipt_unverified' },
+    });
+    expect(
+      (
+        await t.f.application.readResolutionLearningSource(
+          t.f.actors.staff,
+          learningTicketId,
+        )
+      ).generationCount,
+    ).toBe(0);
+    expect(t.f.state.modelCalls).toBe(0);
+  });
+
+  it('qualifies fresh successful-test evidence through the default graph without granting governance to staff or jobs', async () => {
+    const t = await testEvidenceRootFixture(true);
+    const prepared = await t.call(t.worker, t.request(t.path, t.packet));
+    expect(prepared.status).toBe(200);
+    const reference = (await prepared.json()) as {
+      result: { receipt: string };
+    };
+    const accepted = await t.call(
+      t.worker,
+      t.request(
+        '/api/support/admin/tickets/' + learningTicketId + '/learning/evidence',
+        {
+          kind: 'successful_test',
+          commandId: 'DEFAULT-FRESH-TEST-EVIDENCE',
+          expectedRevision: t.packet.expectedRevision,
+          resolutionCycle: t.packet.resolutionCycle,
+          solutionMessageId: t.packet.solutionMessageId,
+          receipt: reference.result.receipt,
+        },
+      ),
+    );
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({
+      result: { state: 'eligible' },
+    });
+    expect(t.staff.permissions).not.toContain(
+      knowledgePermissions.validationManage,
+    );
+    expect(t.reporter.permissions).not.toContain(
+      knowledgePermissions.validationManage,
+    );
+    expect(t.governance).not.toHaveBeenCalled();
+    expect(t.f.state.modelCalls).toBe(0);
   });
 });

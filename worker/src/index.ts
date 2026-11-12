@@ -10,6 +10,7 @@ import { createSupportAssistantStageDatabase as createSupportAssistantInvocation
 import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
 import { SUPPORT_ENGINEERING_QUEUE, seedSupportEngineeringWake, consumeSupportEngineeringWake, seedSupportLearningWake, consumeSupportLearningWake, isSupportLearningWake, type SupportEngineeringWake, type SupportLearningWake } from './support-engineering-queue';
 import { createSupportLearningComposition, type SupportLearningCompositionOptions } from './support-learning-composition';
+import { createSupportLearningBootstrap, type SupportLearningSourceEnvironment } from './support-learning-bootstrap';
 import { createSupportLearningDriver, type SupportLearningDeferredCheckHint } from './support-learning-driver';
 import { createProductionSupportEngineering, type SupportEngineeringProductionOptions } from './support-engineering-production';
 import { composeSupportEngineeringDriver, composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
@@ -86,7 +87,7 @@ type AppEnv = Omit<Env, 'SUPPORT_ENGINEERING_JOBS' | 'PEGMA_SUPPORT_ENGINEERING_
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
   SupportRuntimeEnv &
-  CatalogFetchEnv & SupportAssistantProductionEnvironment & {
+  CatalogFetchEnv & SupportAssistantProductionEnvironment & SupportLearningSourceEnvironment & {
     readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
     readonly PEGMA_SUPPORT_ASSISTANT_ENABLED?: string;
     readonly PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED?: string;
@@ -587,9 +588,20 @@ const engineeringFor = (env: AppEnv): SupportEngineeringProductionOptions => {
   } catch { return {}; }
 };
 const learningFor = (env: AppEnv): SupportLearningRootComposition | undefined => {
-  const supplied = options.learning;
-  if (supplied === undefined) return undefined;
+  let failedSelection: SupportLearningRootComposition | undefined;
   try {
+    const explicit = 'learning' in options;
+    const bootstrap = explicit ? undefined : createSupportLearningBootstrap(env, {
+      isSelected: () => !('learning' in options),
+    });
+    const supplied = explicit ? options.learning : bootstrap?.learning;
+    failedSelection = supplied;
+    if (supplied === undefined) return undefined;
+    const currentSelection = () => {
+      try { return explicit ? 'learning' in options && options.learning === supplied
+        : !('learning' in options) && bootstrap?.current() === true; }
+      catch { return false; }
+    };
     const intake = supplied.intake;
     let selected: SupportLearningRootComposition =
       intake === undefined
@@ -607,7 +619,7 @@ const learningFor = (env: AppEnv): SupportLearningRootComposition | undefined =>
     if (evidence !== undefined) {
       const governance = evidence.governanceAccess;
       const current = () =>
-        options.learning === supplied &&
+        currentSelection() &&
         supplied.testEvidence === evidence &&
         evidence.governanceAccess === governance &&
         env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === "true" &&
@@ -632,12 +644,12 @@ const learningFor = (env: AppEnv): SupportLearningRootComposition | undefined =>
     return { ...selected, production: { ...production,
       intakeEnabled: env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === 'true' && production.intakeEnabled === true,
       enabled: () => {
-        try { return options.learning === supplied && supplied.production === production &&
+        try { return currentSelection() && supplied?.production === production &&
           production.configuration === configuration && env.PEGMA_SUPPORT_LEARNING_WORKER_ENABLED === 'true' &&
           production.enabled?.() === true; } catch { return false; }
       },
     } };
-  } catch { return supplied; }
+  } catch { return failedSelection; }
 };
 const retrievalFor = (env: AppEnv, logger: ReturnType<typeof createAppLogger>) => {
   const learning = learningFor(env);
