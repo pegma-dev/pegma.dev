@@ -205,8 +205,9 @@ async function json(response: Response, signal: AbortSignal): Promise<unknown> {
 }
 
 /**
- * Two fixed metadata reads precede each operation. Creation also mints an
- * exact-repository token. No retries/cache; every
+ * Two fixed metadata reads precede each operation. Every issue request mints
+ * an exact-repository token with only its required read or write permission.
+ * No retries/cache; every
  * response is bounded to 64 KiB and the entire operation to ten seconds.
  * App-JWT installation discovery proves membership even for public repositories;
  * a public repository GET with an installation token alone cannot prove that.
@@ -476,6 +477,8 @@ export function createSupportEngineeringRepositoryPorts(
       });
       const issuePermission = installation.permissions.issues;
       const issuesEnabled = repository.has_issues;
+      const defaultBranch = repository.default_branch;
+      const repositoryUpdatedAt = repository.updated_at;
       const appSlug =
         typeof installation.app_slug === 'string' &&
         /^[a-z0-9][a-z0-9-]{0,99}$/u.test(installation.app_slug)
@@ -500,9 +503,9 @@ export function createSupportEngineeringRepositoryPorts(
         sameAuthority(first, latest);
         current();
         writeCurrent();
-        if (body === undefined) return request(url, latest.installationToken);
         // A repository name can be reused after metadata was observed. The
-        // provider must enforce the immutable repository ID on the write token.
+        // provider must enforce the immutable repository ID on every issue call.
+        const requiredPermission = body === undefined ? 'read' : 'write';
         const grant = await request(
           API +
             '/app/installations/' +
@@ -512,7 +515,7 @@ export function createSupportEngineeringRepositoryPorts(
           'POST',
           JSON.stringify({
             repository_ids: [Number(configured!.repositoryId)],
-            permissions: { metadata: 'read', issues: 'write' },
+            permissions: { metadata: 'read', issues: requiredPermission },
           }),
         );
         if (
@@ -523,7 +526,7 @@ export function createSupportEngineeringRepositoryPorts(
           !record(grant.permissions) ||
           Object.keys(grant.permissions).length !== 2 ||
           grant.permissions.metadata !== 'read' ||
-          grant.permissions.issues !== 'write' ||
+          grant.permissions.issues !== requiredPermission ||
           !Array.isArray(grant.repositories) ||
           grant.repositories.length !== 1
         )
@@ -542,7 +545,9 @@ export function createSupportEngineeringRepositoryPorts(
           selected.private !== (configured!.visibility === 'private') ||
           selected.archived !== false ||
           selected.disabled !== false ||
-          selected.has_issues !== true
+          selected.has_issues !== issuesEnabled ||
+          selected.default_branch !== defaultBranch ||
+          selected.updated_at !== repositoryUpdatedAt
         )
           throw new Error('Unavailable metadata');
         const tokenExpires = Date.parse(grant.expires_at);
@@ -557,7 +562,7 @@ export function createSupportEngineeringRepositoryPorts(
         sameAuthority(first, afterMint);
         current();
         writeCurrent();
-        return request(url, token, 'POST', body);
+        return request(url, token, body === undefined ? 'GET' : 'POST', body);
       }
       const value = await use({
         repository: observation,

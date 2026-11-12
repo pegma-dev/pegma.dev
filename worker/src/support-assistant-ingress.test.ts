@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { changeAnsweringContact, supportAnsweringFixture } from './support-answering-fixtures';
-import { supportPermissions } from '@pegma/support-desk-application';
+import { supportPermissions, supportRecords } from '@pegma/support-desk-application';
+import { effectiveTicketHandling } from '@pegma/support-desk-core';
+import { createMemoryStore, type Store } from '@pegma/storage-core';
 import { resolveAccess } from '@pegma/authorization-core';
 import { createSupportAnsweringIngress } from './support-assistant-ingress';
 import {
@@ -12,7 +14,7 @@ import { createSupportRuntime } from './support-desk';
 import { createSupportRequestHandler, createWorker } from './index';
 import { controlledHumanBody } from './support-human-control-fixtures';
 import { APPLICATION_SCOPE } from './support-access';
-import { assistantGate } from './support-assistant-fixtures';
+import { assistantGate, waitForAssistantGate } from './support-assistant-fixtures';
 
 describe('current public SDK receipt-first customer answering ingress', () => {
   it('keeps the default root absent before production dependencies and exposes no manual fallback route', async () => {
@@ -361,8 +363,10 @@ describe('current public SDK receipt-first customer answering ingress', () => {
       ticket: { id: packet.command.ticketId },
     });
     const fresh = f.packet();
-    expect((await handler(f.request(fresh))).status).toBe(409);
-    expect(await f.human.rows(fresh.command.ticketId)).toEqual([]);
+    const human = await handler(f.request(fresh));
+    expect(human.status).toBe(201);
+    expect(await human.json()).toMatchObject({ initialMode: 'human' });
+    expect((await f.human.rows(fresh.command.ticketId)).filter((row) => row.kind === 'assistant_turn')).toEqual([]);
     expect(f.state.keys).toBe(0);
     expect(f.state.calls).toBe(0);
   });
@@ -411,4 +415,122 @@ describe('current public SDK receipt-first customer answering ingress', () => {
     expect(f.state.keys).toBe(0);
     expect(f.state.calls).toBe(0);
   });
+});
+
+
+it.each(['human', 'assistant_if_available'] as const)('refuses stale contact during the closing actual role lookup for %s', async (preference) => {
+  const f = await supportAnsweringFixture();
+  const packet = f.packet(preference);
+  let checking = false;
+  let changed = false;
+  const actual = f.runtime.application;
+  const runtime = {
+    ...f.runtime,
+    roleStore: {
+      ...f.runtime.roleStore,
+      async listActiveRoleAssignments(...args: Parameters<typeof f.runtime.roleStore.listActiveRoleAssignments>) {
+        const result = await f.runtime.roleStore.listActiveRoleAssignments(...args);
+        if (checking && !changed) {
+          changed = true;
+          await changeAnsweringContact(f, 'closing-role-contact@example.test');
+        }
+        return result;
+      },
+    },
+    application: {
+      ...actual,
+      async createAdmittedCustomerTicket(...args: Parameters<typeof actual.createAdmittedCustomerTicket>) {
+        const [access, command, options] = args;
+        return actual.createAdmittedCustomerTicket(access, command, options === undefined ? undefined : {
+          ...options,
+          async verifyBeforeCommit(mode) {
+            checking = true;
+            try { return await options.verifyBeforeCommit(mode); }
+            finally { checking = false; }
+          },
+        });
+      },
+    },
+  };
+  const response = await createSupportAnsweringIngress(runtime, f.logger, f.answering())(f.request(packet));
+  expect(changed).toBe(true);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ error: 'contact_changed' });
+  expect(await f.human.rows(packet.command.ticketId)).toEqual([]);
+  expect(f.state.calls).toBe(0);
+  expect(f.state.keys).toBe(0);
+});
+
+it('creates one human ticket from the same uncommitted assistant packet after admission is disabled', async () => {
+  const f = await supportAnsweringFixture();
+  const packet = f.packet();
+  f.state.enabled = false;
+  const response = await f.ingress()(f.request(packet));
+  expect(response.status).toBe(201);
+  expect(await response.json()).toMatchObject({ initialMode: 'human', ticket: { id: packet.command.ticketId } });
+  const rows = await f.human.rows(packet.command.ticketId);
+  expect(rows.filter((row) => row.kind === 'ticket')).toHaveLength(1);
+  expect(rows.filter((row) => row.kind === 'assistant_turn')).toEqual([]);
+  const ticket = rows.find((row) => row.kind === 'ticket');
+  if (ticket?.kind !== 'ticket') throw new Error('Expected real human ticket.');
+  expect(effectiveTicketHandling(ticket.ticket).state).toBe('human-pending');
+  expect((await f.ingress()(f.request(packet))).status).toBe(201);
+  expect(await f.human.rows(packet.command.ticketId)).toEqual(rows);
+  expect(f.state.calls).toBe(0);
+  expect(f.state.keys).toBe(0);
+});
+
+
+it.each(['assistant', 'human'] as const)('preserves the exact %s winner when human fallback races an older in-flight ticket transaction', async (winner) => {
+  const backing = createMemoryStore();
+  const firstEntered = assistantGate(); const secondEntered = assistantGate();
+  const firstRelease = assistantGate(); const secondRelease = assistantGate();
+  let target: string | undefined; let commits = 0;
+  const store: Store = { collection(definition) {
+    const actual = backing.collection(definition);
+    return { ...actual, async transact(partition, actions) {
+      if (definition.name === supportRecords.name && partition === target) {
+        const attempt = ++commits;
+        if (attempt === 1) { firstEntered.release(); await firstRelease.ready; }
+        if (attempt === 2) { secondEntered.release(); await secondRelease.ready; }
+      }
+      return actual.transact(partition, actions);
+    } };
+  } };
+  const f = await supportAnsweringFixture(store);
+  const packet = f.packet(); target = packet.command.ticketId;
+  let originalMode: string | undefined;
+  const original = createSupportAnsweringIngress({ ...f.runtime, application: {
+    ...f.runtime.application,
+    async createAdmittedCustomerTicket(...args: Parameters<typeof f.runtime.application.createAdmittedCustomerTicket>) {
+      const result = await f.runtime.application.createAdmittedCustomerTicket(...args);
+      originalMode = result.initialMode;
+      throw new Error('Fictional lost original HTTP acknowledgement.');
+    },
+  } }, f.logger, f.answering())(f.request(packet));
+  let fallback: Promise<Response> | undefined;
+  try {
+    await waitForAssistantGate(firstEntered.ready, original);
+    f.state.enabled = false;
+    fallback = f.ingress()(f.request(packet));
+    await waitForAssistantGate(secondEntered.ready, fallback);
+    if (winner === 'assistant') { firstRelease.release(); expect((await original).status).toBe(503); secondRelease.release(); }
+    else secondRelease.release();
+    const acknowledged = await fallback;
+    expect(acknowledged.status).toBe(201);
+    expect(await acknowledged.json()).toMatchObject({ initialMode: winner, ticket: { id: packet.command.ticketId } });
+    firstRelease.release();
+    expect((await original).status).toBe(503);
+    expect(originalMode).toBe(winner);
+    const rows = await f.human.rows(packet.command.ticketId);
+    expect(rows.filter((row) => row.kind === 'ticket')).toHaveLength(1);
+    expect(rows.filter((row) => row.kind === 'message')).toHaveLength(1);
+    expect(rows.filter((row) => row.kind === 'command')).toHaveLength(1);
+    expect(rows.filter((row) => row.kind === 'assistant_turn')).toHaveLength(winner === 'assistant' ? 1 : 0);
+    const replay = await f.ingress()(f.request(packet));
+    expect(replay.status).toBe(201);
+    expect(await replay.json()).toMatchObject({ initialMode: winner });
+    expect(await f.human.rows(packet.command.ticketId)).toEqual(rows);
+    expect(f.state.calls).toBe(0); expect(f.state.keys).toBe(0);
+  } finally { firstRelease.release(); secondRelease.release(); await Promise.allSettled([original, ...(fallback ? [fallback] : [])]); }
 });

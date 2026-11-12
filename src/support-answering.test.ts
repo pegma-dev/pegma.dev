@@ -17,8 +17,13 @@ async function fixture() {
   const f = await supportAnsweringFixture();
   const api = createSupportApi({ ...f.runtime, logger: f.logger });
   let actor: 'owner' | 'peer' = 'owner';
+  let failNextAssistantCreate = false;
   let capabilityFault: 'http' | 'network' | 'malformed' | 'missing-csrf' | 'foreign-csrf' | 'unauthenticated' | 'forbidden' | null = null;
   const page = supportBrowser('create', async (call: BrowserCall) => {
+    if (call.path === '/api/support/assistant/tickets' && failNextAssistantCreate) {
+      failNextAssistantCreate = false;
+      return { status: 503, body: { error: 'Fictional transport failure before server acceptance.' } };
+    }
     if (call.path === '/api/identity/account') {
       // Browser transport fixture only; the mutation handlers still validate
       // the actual cookie, CSRF, live Identity and roles on every request.
@@ -81,6 +86,7 @@ async function fixture() {
     page,
     edit,
     reload,
+    failNextAssistantCreate() { failNextAssistantCreate = true; },
     switchActor(value: typeof actor) {
       actor = value;
     },
@@ -256,4 +262,28 @@ describe('optional current customer answering browser entry', () => {
     expect(rows.filter((row) => row.kind === 'message')).toHaveLength(1);
     expect(f.state.calls).toBe(0);
   });
+});
+
+
+it('keeps the original unknown assistant packet and obtains human support after a precommit outage and lost admission', async () => {
+  const { f, page, edit, reload, failNextAssistantCreate } = await fixture();
+  edit(); page.node('assistant-preference').checked = true;
+  failNextAssistantCreate();
+  page.nativeSubmit('create-ticket');
+  await until(() => page.node('feedback-status').textContent.includes('Could not confirm ticket creation.'));
+  const first = page.calls.find((call) => call.method === 'POST')!;
+  const packet = JSON.parse(first.body!);
+  expect(await f.human.rows(packet.command.ticketId)).toEqual([]);
+  f.state.enabled = false;
+  page.node('ticket-body').value = 'Fictional separate later draft';
+  await reload(); page.nativeSubmit('create-ticket');
+  await until(() => page.node('feedback-status').textContent.includes('Ticket created for human support.'));
+  const posts = page.calls.filter((call) => call.method === 'POST');
+  expect(posts).toHaveLength(2); expect(posts[1]!.path).toBe(first.path); expect(posts[1]!.body).toBe(first.body);
+  expect(page.node('ticket-body').value).toBe('Fictional separate later draft');
+  const rows = await f.human.rows(packet.command.ticketId);
+  expect(rows.filter((row) => row.kind === 'ticket')).toHaveLength(1);
+  expect(rows.filter((row) => row.kind === 'message')).toHaveLength(1);
+  expect(rows.filter((row) => row.kind === 'assistant_turn')).toEqual([]);
+  expect(f.state.calls).toBe(0); expect(f.state.keys).toBe(0);
 });

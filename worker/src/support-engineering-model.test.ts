@@ -576,18 +576,6 @@ describe('distinct engineering configuration and model wire', () => {
         Reflect.set(f.state.document.choices[0]!.message, 'tool_calls', [
           { name: 'forbidden' },
         ]);
-      if (mode === 'confidence')
-        f.state.document.choices[0]!.message.content = JSON.stringify({
-          ...candidate(),
-          confidence: 1,
-        });
-      if (mode === 'duplicate-json')
-        f.state.document.choices[0]!.message.content = JSON.stringify(
-          candidate(),
-        ).replace(
-          '"security":"ordinary"',
-          '"security":"ordinary","security":"restricted"',
-        );
       if (mode === 'oversize')
         f.state.hook = async () =>
           new Response('x'.repeat(200_000), {

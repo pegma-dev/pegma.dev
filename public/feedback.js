@@ -359,7 +359,9 @@ createForm.addEventListener('submit', async (event) => {
     const refreshed = await loadTickets();
     if (isCurrent(refreshed.generation))
       showStatus(refreshed.loaded
-        ? 'Ticket created. Open it from the list below. Your current draft is kept if it changed.'
+        ? packet.answering && ack.initialMode === 'human'
+          ? 'Ticket created for human support. Open it from the list below. Your current draft is kept if it changed.'
+          : 'Ticket created. Open it from the list below. Your current draft is kept if it changed.'
         : 'Ticket creation accepted. Current ticket refresh failed; reload before another submission.', !refreshed.loaded);
   } catch (error) { failure(error, generation); }
   finally { finishOperation(operation); }

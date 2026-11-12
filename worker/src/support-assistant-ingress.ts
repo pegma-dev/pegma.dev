@@ -4,6 +4,7 @@ import {
 } from './support-assistant';
 import { supportPermissions } from '@pegma/support-desk-application';
 import type { Logger } from '@pegma/spine';
+import type { IdentityUser } from './identity-contracts';
 import {
   ApiError,
   authenticate,
@@ -35,7 +36,6 @@ export function createSupportAnsweringIngress(
   logger: Logger,
   answering: SupportAnsweringRuntime,
 ) {
-  const resolve = createAgentPrincipalResolver(runtime);
   return async (request: Request): Promise<Response> => {
     const correlationId = crypto.randomUUID();
     const url = new URL(request.url);
@@ -83,6 +83,27 @@ export function createSupportAnsweringIngress(
       return true as const;
     };
     let email: string | undefined;
+    // This slot belongs to one current() call in this request. Contact is read
+    // after the resolver's actual role await, beside its verified claims read,
+    // and before the browser's closing SessionStore read. It is never a cache.
+    let contactObservation: { user?: IdentityUser | null } | undefined;
+    const resolve = createAgentPrincipalResolver({
+      ...runtime,
+      identity: {
+        ...runtime.identity,
+        async claimsFor(principalId) {
+          const observed = contactObservation;
+          if (observed === undefined)
+            return runtime.identity.claimsFor(principalId);
+          const [claims, user] = await Promise.all([
+            runtime.identity.claimsFor(principalId),
+            runtime.identity.getUser(principalId),
+          ]);
+          observed.user = user;
+          return claims;
+        },
+      },
+    });
     const browser = supportHumanBrowser(request, {
       sessions: runtime.sessions,
       mutation: !capability,
@@ -99,10 +120,17 @@ export function createSupportAnsweringIngress(
         return access;
       },
     });
-    async function current() {
-      const value = await browser.current();
-      sync();
-      return value;
+    async function current(withContact = false) {
+      const observation: { user?: IdentityUser | null } | undefined =
+        withContact ? {} : undefined;
+      contactObservation = observation;
+      try {
+        const value = await browser.current();
+        sync();
+        return { ...value, contact: observation?.user };
+      } finally {
+        if (contactObservation === observation) contactObservation = undefined;
+      }
     }
     async function execute() {
       try {
@@ -157,8 +185,7 @@ export function createSupportAnsweringIngress(
           throw new ApiError(400, 'invalid_request');
         // A changed contact admits only exact accepted recovery. Do not pre-read
         // the target or renew route/disclosure before the SDK receipt lookup.
-        const fresh =
-          answering.admissionEnabled() && expectedRequesterEmail === email;
+        const fresh = expectedRequesterEmail === email;
         let admission: Awaited<
           ReturnType<SupportAnsweringRuntime['admission']>
         > = null;
@@ -180,7 +207,10 @@ export function createSupportAnsweringIngress(
             ? {
                 signal: controller.signal,
                 async resolveAssistantStart() {
-                  if (disclosureVersion !== answering.disclosureVersion)
+                  if (
+                    !answering.admissionEnabled() ||
+                    disclosureVersion !== answering.disclosureVersion
+                  )
                     return null;
                   admission = await answering.admission(
                     actor.access.principalId,
@@ -202,13 +232,13 @@ export function createSupportAnsweringIngress(
                       throw new ApiError(409, 'admission_changed');
                     finalAdmission = latest;
                   }
-                  // Only fresh SDK creates reach this guard. Re-observe the
-                  // public Identity contact after the body and admission waits;
-                  // an exact accepted receipt never depends on today's email.
-                  const user = await runtime.identity.getUser(
-                    actor.access.principalId,
-                  );
+                  // Only fresh SDK creates reach this guard. The same existing
+                  // contact read now joins the closing Identity wave AFTER roles;
+                  // exact accepted receipts never depend on today's contact.
+                  const finalBrowser = await current(true);
+                  const user = finalBrowser.contact;
                   if (
+                    user === undefined ||
                     user === null ||
                     user.principalId !== actor.access.principalId ||
                     user.status !== 'active' ||
@@ -219,12 +249,10 @@ export function createSupportAnsweringIngress(
                     throw new ApiError(503, 'service_unavailable');
                   if (user.email !== expectedRequesterEmail)
                     throw new ApiError(409, 'contact_changed');
-                  // Close the original browser fence after all route/audience awaits.
-                  const finalBrowser = await current();
                   sync();
                   return () => {
                     sync();
-                    if (!answering.admissionEnabled())
+                    if (mode === 'assistant' && !answering.admissionEnabled())
                       throw new ApiError(409, 'admission_changed');
                     finalAdmission?.assertCurrent(finalBrowser.access);
                     return true;

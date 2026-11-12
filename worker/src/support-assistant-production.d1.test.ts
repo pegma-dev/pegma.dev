@@ -155,7 +155,7 @@ describe('normal default root with the production bundle and actual tokenizer', 
     expect(f.wires).toHaveLength(0);
   });
 
-  it('keeps customer admission OFF and reconstructs separate bounded preparation and paid invocations', async () => {
+  it('keeps assistant admission OFF and reconstructs separate bounded preparation and paid invocations', async () => {
     const f = await productionAnsweringFixture(
       createCloudflareD1Store({
         database: env.IDENTITY_DB,
@@ -188,7 +188,8 @@ describe('normal default root with the production bundle and actual tokenizer', 
         f.request(f.packet(preference)),
       );
       expect(refused).toBeInstanceOf(Response);
-      expect((refused as Response).status).toBe(409);
+      expect((refused as Response).status).toBe(201);
+      expect(await (refused as Response).json()).toMatchObject({ initialMode: 'human' });
     }
     expect(f.wires).toHaveLength(1);
   });
@@ -212,7 +213,8 @@ describe('normal default root with the production bundle and actual tokenizer', 
     expect((recovered as Response).status).toBe(201);
     expect(await (recovered as Response).json()).toMatchObject({ initialMode: 'assistant' });
     const refused = await invoke(f, 'fresh-config-removed', f.request(f.packet()));
-    expect((refused as Response).status).toBe(409);
+    expect((refused as Response).status).toBe(201);
+    expect(await (refused as Response).json()).toMatchObject({ initialMode: 'human' });
     expect(f.wires).toHaveLength(0);
   });
 });

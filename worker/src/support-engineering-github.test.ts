@@ -38,6 +38,16 @@ const json = (value: unknown, status = 200) =>
     status,
     headers: { 'content-type': 'application/json' },
   });
+function expectReadOnlyIssueRequests(calls: readonly (readonly [string, RequestInit])[]) {
+  for (const [url, init] of calls.filter(([, request]) => request.method !== 'GET')) {
+    expect(url).toBe(mintPath);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      repository_ids: [101],
+      permissions: { metadata: 'read', issues: 'read' },
+    });
+  }
+}
 function fixture() {
   const state = {
     now: epoch,
@@ -72,8 +82,11 @@ function fixture() {
     },
     routeRepositoryId: 101,
     mintedRepositoryIds: [] as number[],
+    mintedIssuePermission: undefined as unknown,
     wrongRepositoryWrites: [] as number[],
     deniedRepositoryWrites: [] as number[],
+    wrongRepositoryReads: [] as number[],
+    deniedRepositoryReads: [] as number[],
     rows: [] as Record<string, unknown>[],
     searchTotal: undefined as number | undefined,
     incomplete: false,
@@ -129,6 +142,9 @@ function fixture() {
             return value;
           })
         : [101, 202];
+      const permissions: unknown = Reflect.get(body, 'permissions');
+      state.mintedIssuePermission = typeof permissions === 'object' && permissions !== null
+        ? Reflect.get(permissions, 'issues') : undefined;
       return json(
         {
           token: scopedToken,
@@ -143,6 +159,20 @@ function fixture() {
         },
         201,
       );
+    }
+    if (init.method === 'GET' &&
+      (url.startsWith('https://api.github.com/search/issues?') || url.startsWith(path + '/issues/'))) {
+      const authorization = new Headers(init.headers).get('Authorization');
+      const allowed = authorization === 'Bearer FICTIONAL_INSTALLATION_TOKEN' ||
+        (authorization === 'Bearer ' + scopedToken &&
+          state.mintedRepositoryIds.includes(state.routeRepositoryId) &&
+          ['read', 'write'].includes(String(state.mintedIssuePermission)));
+      if (!allowed) {
+        state.deniedRepositoryReads.push(state.routeRepositoryId);
+        return json({ message: 'Fictional repository read scope denied' }, 403);
+      }
+      if (state.routeRepositoryId !== 101)
+        state.wrongRepositoryReads.push(state.routeRepositoryId);
     }
     if (url.startsWith('https://api.github.com/search/issues?')) {
       const requested = new URL(url).searchParams.get('q')!;
@@ -279,6 +309,128 @@ afterEach(() => {
 });
 
 describe('bounded public SDK GitHub issue transport', () => {
+  it.each(['duplicates', 'existing', 'transferred-after-search'] as const)(
+    'withholds %s issue content when a formerly approved repository name routes to another numeric repository',
+    async (operation) => {
+      const f = fixture();
+      f.state.rows.push(remoteIssue({ body: 'Fictional out-of-scope issue content.\n' + marker }));
+      f.state.onRequest = async (url, init) => {
+        if (init.method === 'GET' &&
+          (operation === 'duplicates'
+            ? url.startsWith('https://api.github.com/search/issues?')
+            : url === path + '/issues/7'))
+          f.state.routeRepositoryId = 202;
+        return undefined;
+      };
+      const result = operation === 'duplicates'
+        ? await f.ports.github.searchDuplicates(
+          { repositoryId: '101', query: 'workspace export', limit: 5 }, f.context(),
+        ).catch(() => null)
+        : await f.ports.github.reconcile(
+          operation === 'existing'
+            ? { ...f.identity(), operation: 'link_existing_issue', issueId: '501', issueNumber: 7 }
+            : f.identity(),
+          f.context(),
+        );
+      expect(result).toEqual(operation === 'duplicates' ? null : { outcome: 'unknown' });
+      expect(f.state.wrongRepositoryReads).toEqual([]);
+      expect(f.state.deniedRepositoryReads).toEqual([202]);
+      expect(f.state.wrongRepositoryWrites).toEqual([]);
+      const reads = f.transport.mock.calls.filter(([url, init]) => init.method === 'GET' &&
+        (url.startsWith('https://api.github.com/search/issues?') || url.startsWith(path + '/issues/')));
+      expect(reads.length).toBe(operation === 'transferred-after-search' ? 2 : 1);
+      for (const [, init] of reads)
+        expect(new Headers(init.headers).get('Authorization')).toBe('Bearer ' + scopedToken);
+    },
+  );
+  it.each(['duplicates', 'existing'] as const)(
+    'uses one exact-ID read-only credential for a successful %s lookup',
+    async (operation) => {
+      const f = fixture();
+      f.state.write = false;
+      f.state.installation.permissions.issues = 'read';
+      f.state.rows.push(remoteIssue());
+      if (operation === 'duplicates') {
+        const found = await f.ports.github.searchDuplicates(
+          { repositoryId: '101', query: 'workspace export', limit: 5 }, f.context(),
+        );
+        expect(found.issues).toMatchObject([{ repositoryId: '101', issueId: '501' }]);
+      } else {
+        expect(await f.ports.github.reconcile({
+          ...f.identity(), operation: 'link_existing_issue', issueId: '501', issueNumber: 7,
+        }, f.context())).toMatchObject({ outcome: 'accepted', acknowledgement: { repositoryId: '101', issueId: '501' } });
+      }
+      const mints = f.transport.mock.calls.filter(([url, init]) => url === mintPath && init.method === 'POST');
+      expect(mints).toHaveLength(1);
+      expect(JSON.parse(String(mints[0]![1].body))).toEqual({
+        repository_ids: [101], permissions: { metadata: 'read', issues: 'read' },
+      });
+      const issueRead = f.transport.mock.calls.at(-1)!;
+      expect(new Headers(issueRead[1].headers).get('Authorization')).toBe('Bearer ' + scopedToken);
+      expect(f.transport).toHaveBeenCalledTimes(4);
+      expect(f.state.rows).toHaveLength(1);
+    },
+  );
+  it.each(['authority', 'version', 'abort', 'token-expiry', 'caller-deadline'] as const)(
+    'withholds a read after scoped credential mint when %s changes',
+    async (mode) => {
+      const f = fixture();
+      const controller = new AbortController();
+      f.state.rows.push(remoteIssue());
+      f.state.onRequest = async (url, init) => {
+        if (url !== mintPath || init.method !== 'POST') return undefined;
+        if (mode === 'authority') f.state.authority = false;
+        if (mode === 'version') f.state.authVersion = 'fictional-v2';
+        if (mode === 'abort') controller.abort();
+        if (mode === 'token-expiry' || mode === 'caller-deadline') {
+          f.state.onAuth = () => { f.state.now += 1_001; };
+          return json({
+            token: scopedToken,
+            expires_at: '2026-11-10T12:00:01Z',
+            repository_selection: 'selected',
+            permissions: { metadata: 'read', issues: 'read' },
+            repositories: [f.state.repository],
+          }, 201);
+        }
+        return undefined;
+      };
+      await expect(f.ports.github.searchDuplicates(
+        { repositoryId: '101', query: 'workspace export', limit: 5 },
+        { ...f.context(), signal: controller.signal,
+          ...(mode === 'caller-deadline' ? { deadline: new Date(epoch + 500).toISOString() } : {}) },
+      )).rejects.toThrow('unavailable');
+      expect(f.transport.mock.calls.filter(([url]) => url === mintPath)).toHaveLength(1);
+      expect(f.transport.mock.calls.filter(([url]) => url.includes('/search/issues?'))).toHaveLength(0);
+    },
+  );
+  it.each([
+    'foreign-id', 'extra-repository', 'write-permission', 'visibility', 'repository-updated', 'branch-changed',
+  ] as const)('refuses a scoped read grant with %s before fetching any issue content', async (mode) => {
+    const f = fixture();
+    f.state.onRequest = async (url, init) => {
+      if (url !== mintPath || init.method !== 'POST') return undefined;
+      const selected = structuredClone(f.state.repository);
+      if (mode === 'foreign-id') selected.id = 202;
+      if (mode === 'visibility') {
+        selected.visibility = 'private';
+        selected.private = true;
+      }
+      if (mode === 'repository-updated') selected.updated_at = '2026-11-10T11:00:01Z';
+      if (mode === 'branch-changed') selected.default_branch = 'changed';
+      return json({
+        token: scopedToken,
+        expires_at: '2026-11-10T13:00:00Z',
+        repository_selection: 'selected',
+        permissions: { metadata: 'read', issues: mode === 'write-permission' ? 'write' : 'read' },
+        repositories: mode === 'extra-repository' ? [selected, { ...selected, id: 202 }] : [selected],
+      }, 201);
+    };
+    await expect(f.ports.github.searchDuplicates(
+      { repositoryId: '101', query: 'workspace export', limit: 5 }, f.context(),
+    )).rejects.toThrow('unavailable');
+    expect(f.transport.mock.calls.filter(([url]) => url === mintPath)).toHaveLength(1);
+    expect(f.transport.mock.calls.filter(([url]) => url.includes('/search/issues?'))).toHaveLength(0);
+  });
   it('keeps creation separately OFF by default while metadata and reconciliation are readable', async () => {
     const f = fixture();
     const { issueCreationEnabled: _write, ...readOptions } = f.options;
@@ -312,8 +464,8 @@ describe('bounded public SDK GitHub issue transport', () => {
     );
     expect(result.physicalResults).toBe(5);
     expect(result.issues).toHaveLength(5);
-    expect(f.transport).toHaveBeenCalledTimes(3);
-    const url = new URL(f.transport.mock.calls[2]![0]);
+    expect(f.transport).toHaveBeenCalledTimes(4);
+    const url = new URL(f.transport.mock.calls[3]![0]);
     expect(url.pathname).toBe('/search/issues');
     expect(url.searchParams.get('q')).toBe(
       'repo:fictional-org/workspace-core is:issue in:title,body workspace export',
@@ -392,7 +544,7 @@ describe('bounded public SDK GitHub issue transport', () => {
         f.context(),
       ),
     ).rejects.toThrow();
-    expect(f.transport).toHaveBeenCalledTimes(3);
+    expect(f.transport).toHaveBeenCalledTimes(4);
   });
   it('uses a repository-scoped token to prevent a write after repository name reuse', async () => {
     const f = fixture();
@@ -812,11 +964,9 @@ describe('bounded public SDK GitHub issue transport', () => {
     expect(await f.ports.github.reconcile(f.identity(), f.context())).toEqual({
       outcome: 'unknown',
     });
-    expect(
-      f.transport.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expectReadOnlyIssueRequests(f.transport.mock.calls);
   });
-  it('links an existing issue by exact numeric identity with no marker, comment, edit or POST', async () => {
+  it('links an existing issue by exact numeric identity without adding a marker, comment or issue mutation', async () => {
     const f = fixture();
     f.state.rows.push(
       remoteIssue({
@@ -834,13 +984,11 @@ describe('bounded public SDK GitHub issue transport', () => {
     expect((await f.ports.github.reconcile(input, f.context())).outcome).toBe(
       'accepted',
     );
-    expect(f.transport).toHaveBeenCalledTimes(3);
+    expect(f.transport).toHaveBeenCalledTimes(4);
     expect(
       await f.ports.github.reconcile({ ...input, issueId: '502' }, f.context()),
     ).toEqual({ outcome: 'unknown' });
-    expect(
-      f.transport.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expectReadOnlyIssueRequests(f.transport.mock.calls);
   });
   it('normalizes a null issue description in the actual bounded duplicate search', async () => {
     const f = fixture();
@@ -859,10 +1007,8 @@ describe('bounded public SDK GitHub issue transport', () => {
         body: '',
       },
     ]);
-    expect(f.transport).toHaveBeenCalledTimes(3);
-    expect(
-      f.transport.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(f.transport).toHaveBeenCalledTimes(4);
+    expectReadOnlyIssueRequests(f.transport.mock.calls);
   });
   it('reconciles an exact existing issue with a null description without creating or editing it', async () => {
     const f = fixture();
@@ -886,10 +1032,8 @@ describe('bounded public SDK GitHub issue transport', () => {
         issueNumber: 7,
       },
     });
-    expect(f.transport).toHaveBeenCalledTimes(3);
-    expect(
-      f.transport.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(f.transport).toHaveBeenCalledTimes(4);
+    expectReadOnlyIssueRequests(f.transport.mock.calls);
   });
   it.each([
     'revoked-before',
@@ -1007,7 +1151,9 @@ describe('bounded public SDK GitHub issue transport', () => {
     );
     expect(verified?.binding).toEqual(binding);
     expect(verified?.verifierReceiptId).toMatch(/^github-observation:/u);
-    expect(f.transport).toHaveBeenCalledTimes(4);
+    // Two metadata reads plus one exact-ID credential/read pair for search and issue.
+    expect(f.transport).toHaveBeenCalledTimes(6);
+    expectReadOnlyIssueRequests(f.transport.mock.calls);
     expect(verified?.validUntil).toBe(new Date(epoch + 10_000).toISOString());
     f.state.rows.push(
       remoteIssue({

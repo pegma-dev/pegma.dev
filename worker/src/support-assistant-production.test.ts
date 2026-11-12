@@ -201,7 +201,7 @@ describe('source-owned normal production answering bundle', () => {
     expect(configured.readApiKey('unknown')).toBeUndefined();
   });
 
-  it('keeps new human and assistant customer admission OFF while real scheduled work can prepare and complete', async () => {
+  it('keeps new assistant admission OFF while real scheduled work can prepare and complete', async () => {
     const f = await productionAnsweringFixture();
     const response = await (await ingress(f))(f.request());
     expect(await response.json()).toMatchObject({ enabled: false });
@@ -244,19 +244,21 @@ describe('source-owned normal production answering bundle', () => {
   });
 
   it.each(['human', 'assistant_if_available'] as const)(
-    'refuses a fresh %s packet with processing ON and admission OFF',
+    'routes a fresh %s packet to human support with processing ON and assistant admission OFF',
     async (preference) => {
       const f = await productionAnsweringFixture();
       const packet = f.packet(preference);
       expect(supportAnsweringEnabled(await f.bundle())).toBe(true);
-      expect((await (await ingress(f))(f.request(packet))).status).toBe(409);
-      expect(await f.f.human.rows(packet.command.ticketId)).toEqual([]);
+      const response = await (await ingress(f))(f.request(packet));
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ initialMode: 'human' });
+      expect((await f.f.human.rows(packet.command.ticketId)).filter((row) => row.kind === 'assistant_turn')).toEqual([]);
       expect(f.wires).toHaveLength(0);
     },
   );
 
   it.each(['human', 'assistant_if_available'] as const)(
-    'recovers the accepted %s packet after configuration removal and blocks fresh intake',
+    'recovers the accepted %s packet after configuration removal and routes fresh intake to human support',
     async (preference) => {
       const f = await productionAnsweringFixture();
       f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
@@ -279,9 +281,9 @@ describe('source-owned normal production answering bundle', () => {
       expect(await recovered.json()).toMatchObject({
         initialMode: preference === 'human' ? 'human' : 'assistant',
       });
-      expect(
-        (await (await ingress(f))(f.request(f.packet(preference)))).status,
-      ).toBe(409);
+      const human = await (await ingress(f))(f.request(f.packet(preference)));
+      expect(human.status).toBe(201);
+      expect(await human.json()).toMatchObject({ initialMode: 'human' });
       expect(f.wires).toHaveLength(0);
     },
   );

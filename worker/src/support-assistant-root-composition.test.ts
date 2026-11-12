@@ -311,7 +311,7 @@ describe('normal Worker optional answering composition', () => {
     },
   );
 
-  it('retains explicit admission OFF when the injected callback is omitted', async () => {
+  it('retains assistant admission OFF and human fallback when the injected callback is omitted', async () => {
     const f = await fixture();
     const supplied = await f.bundle();
     const answering = { ...supplied };
@@ -319,8 +319,12 @@ describe('normal Worker optional answering composition', () => {
     const capability = await f.call(f.request(), { answering });
     expect(await capability.json()).toMatchObject({ enabled: false });
     const packet = f.packet();
-    expect((await f.call(f.request(packet), { answering })).status).toBe(409);
-    expect(await f.f.human.rows(packet.command.ticketId)).toEqual([]);
+    const response = await f.call(f.request(packet), { answering });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ initialMode: 'human' });
+    const rows = await f.f.human.rows(packet.command.ticketId);
+    expect(rows.filter((row) => row.kind === 'ticket')).toHaveLength(1);
+    expect(rows.filter((row) => row.kind === 'assistant_turn')).toEqual([]);
     expect((await f.call(f.ordinary(), { answering })).status).toBe(201);
     expect(f.network).not.toHaveBeenCalled();
   });
