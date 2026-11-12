@@ -329,7 +329,8 @@ export function createSupportEngineeringIssueOperations(
         async (session) => {
           if (!sameRepository(request.repository, session.repository))
             throw error();
-          const response = await session.create(body); // Exactly one POST, never retried.
+          // The transport mints an exact-ID credential and makes one issue POST.
+          const response = await session.create(body);
           const created = issue(response, session);
           if (
             created.title !== request.bundle.title ||

@@ -205,7 +205,8 @@ async function json(response: Response, signal: AbortSignal): Promise<unknown> {
 }
 
 /**
- * Two fixed metadata reads precede each operation. No retries/cache; every
+ * Two fixed metadata reads precede each operation. Creation also mints an
+ * exact-repository token. No retries/cache; every
  * response is bounded to 64 KiB and the entire operation to ten seconds.
  * App-JWT installation discovery proves membership even for public repositories;
  * a public repository GET with an installation token alone cannot prove that.
@@ -402,6 +403,8 @@ export function createSupportEngineeringRepositoryPorts(
         !githubTimestamp(installation.updated_at)
       )
         throw new Error('Unavailable metadata');
+      const installationAccountId = installation.account.id;
+      const installationAccountType = installation.account.type;
       const permissions = Object.entries(installation.permissions).sort(
         ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
       );
@@ -497,12 +500,64 @@ export function createSupportEngineeringRepositoryPorts(
         sameAuthority(first, latest);
         current();
         writeCurrent();
-        return request(
-          url,
-          latest.installationToken,
-          body === undefined ? 'GET' : 'POST',
-          body,
+        if (body === undefined) return request(url, latest.installationToken);
+        // A repository name can be reused after metadata was observed. The
+        // provider must enforce the immutable repository ID on the write token.
+        const grant = await request(
+          API +
+            '/app/installations/' +
+            configured!.installationId +
+            '/access_tokens',
+          latest.appJwt,
+          'POST',
+          JSON.stringify({
+            repository_ids: [Number(configured!.repositoryId)],
+            permissions: { metadata: 'read', issues: 'write' },
+          }),
         );
+        if (
+          !record(grant) ||
+          !credential(grant.token) ||
+          !githubTimestamp(grant.expires_at) ||
+          grant.repository_selection !== 'selected' ||
+          !record(grant.permissions) ||
+          Object.keys(grant.permissions).length !== 2 ||
+          grant.permissions.metadata !== 'read' ||
+          grant.permissions.issues !== 'write' ||
+          !Array.isArray(grant.repositories) ||
+          grant.repositories.length !== 1
+        )
+          throw new Error('Unavailable metadata');
+        const selected: unknown = grant.repositories[0];
+        if (
+          !record(selected) ||
+          remoteId(selected.id) !== configured!.repositoryId ||
+          selected.name !== configured!.name ||
+          selected.full_name !== configured!.owner + '/' + configured!.name ||
+          !record(selected.owner) ||
+          selected.owner.login !== configured!.owner ||
+          selected.owner.id !== installationAccountId ||
+          selected.owner.type !== installationAccountType ||
+          selected.visibility !== configured!.visibility ||
+          selected.private !== (configured!.visibility === 'private') ||
+          selected.archived !== false ||
+          selected.disabled !== false ||
+          selected.has_issues !== true
+        )
+          throw new Error('Unavailable metadata');
+        const tokenExpires = Date.parse(grant.expires_at);
+        if (tokenExpires <= (now() ?? Infinity))
+          throw new Error('Unavailable metadata');
+        const token = grant.token;
+        authorityExpires = Math.min(authorityExpires, tokenExpires);
+        expires = Math.min(expires, tokenExpires);
+        schedule();
+        current();
+        const afterMint = await authority();
+        sameAuthority(first, afterMint);
+        current();
+        writeCurrent();
+        return request(url, token, 'POST', body);
       }
       const value = await use({
         repository: observation,

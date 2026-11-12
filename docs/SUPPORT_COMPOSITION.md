@@ -470,11 +470,17 @@ identity, visibility, installation and current host authority must agree.
 The existing runtime accepts `adapter.github` through its `ports` option; pass
 `adapter.repositoryMetadata` and `adapter.dispatchResults` to the existing
 Application engineering options. Creation also requires a separate current
-`issueCreationEnabled` callback, false when omitted. It sends the exact
-SDK-approved title, body and labels in one [issue POST](https://docs.github.com/en/rest/issues/issues#create-an-issue),
-after the SDK has durably started dispatch. It appends no private correlation
-fields or extra marker and never retries a POST. Linking an existing issue is
-only a private Support association, with no GitHub comment or edit.
+`issueCreationEnabled` callback, false when omitted. After the SDK durably starts
+dispatch, creation [mints an installation token](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
+with the exact numeric repository ID and only metadata-read and issues-write
+permissions. The bounded response must identify that single repository, selected
+scope, exact permissions and a live expiry. Fresh trusted authority is checked
+after minting. That ephemeral token supplies the exact SDK-approved title, body
+and labels in one [issue POST](https://docs.github.com/en/rest/issues/issues#create-an-issue).
+Credential minting and issue creation share the same operation deadline. The
+issue payload contains the approved fields and marker. An uncertain write stays
+with read-only reconciliation. Linking an existing issue records the private
+Support association.
 
 [Duplicate search](https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests)
 uses trusted ordinary search terms scoped to the configured repository and

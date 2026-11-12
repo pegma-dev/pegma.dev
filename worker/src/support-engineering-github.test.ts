@@ -30,6 +30,8 @@ const repository = {
   installationId: '201',
 };
 const path = 'https://api.github.com/repos/fictional-org/workspace-core';
+const mintPath = 'https://api.github.com/app/installations/201/access_tokens';
+const scopedToken = 'FICTIONAL_SCOPED_INSTALLATION_TOKEN';
 const marker = 'pegma-engineering:' + 'a'.repeat(48);
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), {
@@ -68,6 +70,10 @@ function fixture() {
       default_branch: 'main',
       updated_at: '2026-11-10T11:00:00Z',
     },
+    routeRepositoryId: 101,
+    mintedRepositoryIds: [] as number[],
+    wrongRepositoryWrites: [] as number[],
+    deniedRepositoryWrites: [] as number[],
     rows: [] as Record<string, unknown>[],
     searchTotal: undefined as number | undefined,
     incomplete: false,
@@ -99,6 +105,45 @@ function fixture() {
     if (overridden !== undefined) return overridden;
     if (url === path + '/installation') return json(state.installation);
     if (url === path) return json(state.repository);
+    if (url === mintPath && init.method === 'POST') {
+      if (
+        new Headers(init.headers).get('Authorization') !==
+        'Bearer FICTIONAL_APP_JWT'
+      )
+        return json({ message: 'Fictional issuer denied' }, 403);
+      const body: unknown = JSON.parse(String(init.body));
+      if (typeof body !== 'object' || body === null) return json({}, 422);
+      const requested = Reflect.get(body, 'repository_ids');
+      if (
+        Array.isArray(requested) &&
+        requested.some(
+          (value: unknown) =>
+            typeof value !== 'number' || !Number.isSafeInteger(value),
+        )
+      )
+        return json({}, 422);
+      state.mintedRepositoryIds = Array.isArray(requested)
+        ? requested.map((value: unknown) => {
+            if (typeof value !== 'number')
+              throw new Error('Invalid fictional repository ID');
+            return value;
+          })
+        : [101, 202];
+      return json(
+        {
+          token: scopedToken,
+          expires_at: '2026-11-10T13:00:00Z',
+          repository_selection: Array.isArray(requested) ? 'selected' : 'all',
+          permissions:
+            Reflect.get(body, 'permissions') ?? state.installation.permissions,
+          repositories: state.mintedRepositoryIds.map((id) => ({
+            ...state.repository,
+            id,
+          })),
+        },
+        201,
+      );
+    }
     if (url.startsWith('https://api.github.com/search/issues?')) {
       const requested = new URL(url).searchParams.get('q')!;
       const rows = requested.includes('pegma-engineering:')
@@ -116,6 +161,17 @@ function fixture() {
       });
     }
     if (url === path + '/issues' && init.method === 'POST') {
+      const authorization = new Headers(init.headers).get('Authorization');
+      const allowed =
+        authorization === 'Bearer FICTIONAL_INSTALLATION_TOKEN' ||
+        (authorization === 'Bearer ' + scopedToken &&
+          state.mintedRepositoryIds.includes(state.routeRepositoryId));
+      if (!allowed) {
+        state.deniedRepositoryWrites.push(state.routeRepositoryId);
+        return json({ message: 'Fictional repository scope denied' }, 403);
+      }
+      if (state.routeRepositoryId !== 101)
+        state.wrongRepositoryWrites.push(state.routeRepositoryId);
       if (typeof init.body !== 'string')
         throw new Error('Expected exact fictional JSON');
       const body: unknown = JSON.parse(init.body);
@@ -336,6 +392,36 @@ describe('bounded public SDK GitHub issue transport', () => {
     ).rejects.toThrow();
     expect(f.transport).toHaveBeenCalledTimes(3);
   });
+  it('uses a repository-scoped token to prevent a write after repository name reuse', async () => {
+    const f = fixture();
+    const request = await f.request();
+    f.transport.mockClear();
+    f.state.onRequest = async (url, init) => {
+      if (url === path + '/issues' && init.method === 'POST') {
+        // The provider changes the name-to-ID mapping after the last observation.
+        // A broad installation token can write 202; the 101-only token cannot.
+        f.state.routeRepositoryId = 202;
+      }
+      return undefined;
+    };
+    const acknowledgement = await f.ports.github
+      .createIssue(request, f.dispatch())
+      .catch(() => null);
+    expect(f.state.wrongRepositoryWrites).toEqual([]);
+    expect(f.state.deniedRepositoryWrites).toEqual([202]);
+    expect(f.state.rows).toEqual([]);
+    expect(acknowledgement).toBeNull();
+    expect(
+      f.transport.mock.calls.filter(
+        ([url, init]) => url === mintPath && init.method === 'POST',
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.transport.mock.calls.filter(
+        ([url, init]) => url === path + '/issues' && init.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
   it('posts only the exact approved issue fields once and returns exact acknowledgement', async () => {
     const f = fixture();
     const request = await f.request();
@@ -347,7 +433,7 @@ describe('bounded public SDK GitHub issue transport', () => {
       issueNumber: 7,
     });
     const writes = f.transport.mock.calls.filter(
-      ([, init]) => init.method === 'POST',
+      ([url, init]) => url === path + '/issues' && init.method === 'POST',
     );
     expect(writes).toHaveLength(1);
     const [url, init] = writes[0]!;
@@ -362,9 +448,185 @@ describe('bounded public SDK GitHub issue transport', () => {
     expect(String(init.body)).not.toContain('fictional-ticket');
     expect(String(init.body)).not.toContain('fictional-approved-reference');
     expect(new Headers(init.headers).get('Authorization')).toBe(
-      'Bearer FICTIONAL_INSTALLATION_TOKEN',
+      'Bearer ' + scopedToken,
     );
-    expect(f.transport).toHaveBeenCalledTimes(3);
+    const mints = f.transport.mock.calls.filter(
+      ([url, init]) => url === mintPath && init.method === 'POST',
+    );
+    expect(mints).toHaveLength(1);
+    expect(JSON.parse(String(mints[0]![1].body))).toEqual({
+      repository_ids: [101],
+      permissions: { metadata: 'read', issues: 'write' },
+    });
+    expect(new Headers(mints[0]![1].headers).get('Authorization')).toBe(
+      'Bearer FICTIONAL_APP_JWT',
+    );
+    expect(f.transport).toHaveBeenCalledTimes(4);
+  });
+  it.each([
+    'missing-token',
+    'token-control',
+    'missing-expiry',
+    'expired',
+    'not-selected',
+    'missing-repositories',
+    'foreign-id',
+    'unsafe-id',
+    'extra-repository',
+    'wrong-name',
+    'wrong-owner',
+    'extra-permission',
+    'missing-issues',
+    'write-metadata',
+  ])(
+    'refuses invalid minted credential %s before any issue POST',
+    async (mode) => {
+      const f = fixture();
+      const request = await f.request();
+      f.transport.mockClear();
+      f.state.onRequest = async (url, init) => {
+        if (url !== mintPath || init.method !== 'POST') return undefined;
+        const selected: Record<string, unknown> = structuredClone(
+          f.state.repository,
+        );
+        const grant: Record<string, unknown> = {
+          token: scopedToken,
+          expires_at: '2026-11-10T13:00:00Z',
+          repository_selection: 'selected',
+          permissions: { metadata: 'read', issues: 'write' },
+          repositories: [selected],
+        };
+        if (mode === 'missing-token') delete grant.token;
+        if (mode === 'token-control') grant.token = 'FICTIONAL\nTOKEN';
+        if (mode === 'missing-expiry') delete grant.expires_at;
+        if (mode === 'expired') grant.expires_at = '2026-11-10T12:00:00Z';
+        if (mode === 'not-selected') grant.repository_selection = 'all';
+        if (mode === 'missing-repositories') delete grant.repositories;
+        if (mode === 'foreign-id') selected.id = 202;
+        if (mode === 'unsafe-id') selected.id = Number.MAX_SAFE_INTEGER + 1;
+        if (mode === 'extra-repository')
+          grant.repositories = [selected, { ...selected, id: 202 }];
+        if (mode === 'wrong-name') selected.name = 'other';
+        if (mode === 'wrong-owner')
+          selected.owner = { ...f.state.repository.owner, id: 402 };
+        if (mode === 'extra-permission')
+          grant.permissions = {
+            metadata: 'read',
+            issues: 'write',
+            contents: 'write',
+          };
+        if (mode === 'missing-issues') grant.permissions = { metadata: 'read' };
+        if (mode === 'write-metadata')
+          grant.permissions = { metadata: 'write', issues: 'write' };
+        return json(grant, 201);
+      };
+      await expect(
+        f.ports.github.createIssue(request, f.dispatch()),
+      ).rejects.toThrow('unavailable');
+      expect(
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === mintPath && init.method === 'POST',
+        ),
+      ).toHaveLength(1);
+      expect(
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === path + '/issues' && init.method === 'POST',
+        ),
+      ).toHaveLength(0);
+      expect(f.state.rows).toEqual([]);
+    },
+  );
+  it.each([
+    'authority',
+    'version',
+    'write-gate',
+    'abort',
+    'token-expiry',
+    'caller-deadline',
+  ])(
+    'refreshes authority and the earliest deadline after minting: %s',
+    async (mode) => {
+      const f = fixture();
+      const request = await f.request();
+      f.transport.mockClear();
+      const controller = new AbortController();
+      f.state.onRequest = async (url, init) => {
+        if (url !== mintPath || init.method !== 'POST') return undefined;
+        if (mode === 'authority') f.state.authority = false;
+        if (mode === 'version') f.state.authVersion = 'fictional-v2';
+        if (mode === 'write-gate') f.state.write = false;
+        if (mode === 'abort') controller.abort();
+        if (mode === 'token-expiry' || mode === 'caller-deadline') {
+          f.state.onAuth = () => {
+            f.state.now += 1_001;
+          };
+          return json(
+            {
+              token: scopedToken,
+              expires_at: '2026-11-10T12:00:01Z',
+              repository_selection: 'selected',
+              permissions: { metadata: 'read', issues: 'write' },
+              repositories: [f.state.repository],
+            },
+            201,
+          );
+        }
+        return undefined;
+      };
+      await expect(
+        f.ports.github.createIssue(request, {
+          ...f.dispatch(),
+          signal: controller.signal,
+          ...(mode === 'caller-deadline'
+            ? { deadline: new Date(epoch + 500).toISOString() }
+            : {}),
+        }),
+      ).rejects.toThrow('unavailable');
+      expect(
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === mintPath && init.method === 'POST',
+        ),
+      ).toHaveLength(1);
+      expect(
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === path + '/issues' && init.method === 'POST',
+        ),
+      ).toHaveLength(0);
+      expect(f.state.rows).toEqual([]);
+    },
+  );
+  it('bounds an ignored-abort credential mint with the original operation deadline', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const request = await f.request();
+    let entered: () => void = () => {};
+    const minting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    f.state.onRequest = async (url, init) => {
+      if (url !== mintPath || init.method !== 'POST') return undefined;
+      entered();
+      return new Promise<Response>(() => {});
+    };
+    const result = f.ports.github.createIssue(request, {
+      ...f.dispatch(),
+      deadline: new Date(epoch + 1_000).toISOString(),
+    });
+    const rejected = expect(result).rejects.toThrow('unavailable');
+    await minting;
+    await vi.advanceTimersByTimeAsync(1_001);
+    await rejected;
+    expect(
+      f.transport.mock.calls.filter(
+        ([url, init]) => url === mintPath && init.method === 'POST',
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.transport.mock.calls.filter(
+        ([url, init]) => url === path + '/issues' && init.method === 'POST',
+      ),
+    ).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
   it.each([401, 403, 404, 410, 422, 429, 500, 503])(
     'does not retry or claim rejection after POST status %s',
@@ -372,15 +634,17 @@ describe('bounded public SDK GitHub issue transport', () => {
       const f = fixture();
       const request = await f.request();
       f.transport.mockClear();
-      f.state.onRequest = async (_url, init) =>
-        init.method === 'POST'
+      f.state.onRequest = async (url, init) =>
+        url === path + '/issues' && init.method === 'POST'
           ? json({ message: 'Fictional failure' }, status)
           : undefined;
       await expect(
         f.ports.github.createIssue(request, f.dispatch()),
       ).rejects.toThrow();
       expect(
-        f.transport.mock.calls.filter(([, init]) => init.method === 'POST'),
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === path + '/issues' && init.method === 'POST',
+        ),
       ).toHaveLength(1);
     },
   );
@@ -399,8 +663,9 @@ describe('bounded public SDK GitHub issue transport', () => {
       const f = fixture();
       const request = await f.request();
       f.transport.mockClear();
-      f.state.onRequest = async (_url, init) => {
-        if (init.method !== 'POST') return undefined;
+      f.state.onRequest = async (url, init) => {
+        if (url !== path + '/issues' || init.method !== 'POST')
+          return undefined;
         const row = remoteIssue({
           title: request.bundle.title,
           body: request.bundle.body,
@@ -430,7 +695,9 @@ describe('bounded public SDK GitHub issue transport', () => {
         f.ports.github.createIssue(request, f.dispatch()),
       ).rejects.toThrow();
       expect(
-        f.transport.mock.calls.filter(([, init]) => init.method === 'POST'),
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === path + '/issues' && init.method === 'POST',
+        ),
       ).toHaveLength(1);
     },
   );
@@ -468,8 +735,8 @@ describe('bounded public SDK GitHub issue transport', () => {
   it('recovers an accepted lost POST acknowledgement by read-only exact marker, without another write', async () => {
     const f = fixture();
     const request = await f.request();
-    f.state.onRequest = async (_url, init) => {
-      if (init.method !== 'POST') return undefined;
+    f.state.onRequest = async (url, init) => {
+      if (url !== path + '/issues' || init.method !== 'POST') return undefined;
       f.state.rows.push(
         remoteIssue({ title: request.bundle.title, body: request.bundle.body }),
       );
@@ -488,7 +755,9 @@ describe('bounded public SDK GitHub issue transport', () => {
       acknowledgement: { issueId: '501', issueNumber: 7 },
     });
     expect(
-      f.transport.mock.calls.filter(([, init]) => init.method === 'POST'),
+      f.transport.mock.calls.filter(
+        ([url, init]) => url === path + '/issues' && init.method === 'POST',
+      ),
     ).toHaveLength(1);
   });
   it.each([
@@ -598,8 +867,8 @@ describe('bounded public SDK GitHub issue transport', () => {
   it('withholds a post-commit revoked acknowledgement but permits later read-only reconciliation', async () => {
     const f = fixture();
     const request = await f.request();
-    f.state.onRequest = async (_url, init) => {
-      if (init.method !== 'POST') return undefined;
+    f.state.onRequest = async (url, init) => {
+      if (url !== path + '/issues' || init.method !== 'POST') return undefined;
       const row = remoteIssue({
         title: request.bundle.title,
         body: request.bundle.body,
@@ -636,8 +905,8 @@ describe('bounded public SDK GitHub issue transport', () => {
     const posted = new Promise<void>((resolve) => {
       started = resolve;
     });
-    f.state.onRequest = async (_url, init) => {
-      if (init.method !== 'POST') return undefined;
+    f.state.onRequest = async (url, init) => {
+      if (url !== path + '/issues' || init.method !== 'POST') return undefined;
       started();
       return new Promise<Response>(() => {});
     };
@@ -650,7 +919,9 @@ describe('bounded public SDK GitHub issue transport', () => {
     await vi.advanceTimersByTimeAsync(1_001);
     await rejected;
     expect(
-      f.transport.mock.calls.filter(([, init]) => init.method === 'POST'),
+      f.transport.mock.calls.filter(
+        ([url, init]) => url === path + '/issues' && init.method === 'POST',
+      ),
     ).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -794,8 +1065,9 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
         decision: 'approve',
       });
       if (mode.startsWith('lost-ack'))
-        f.state.onRequest = async (_url, init) => {
-          if (init.method !== 'POST') return undefined;
+        f.state.onRequest = async (url, init) => {
+          if (url !== path + '/issues' || init.method !== 'POST')
+            return undefined;
           const before = await application.readEngineeringWork(
             sdk.actors.security,
             sdk.key(),
@@ -846,12 +1118,16 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
         issueNumber: 7,
       });
       expect(
-        f.transport.mock.calls.filter(([, init]) => init.method === 'POST'),
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === path + '/issues' && init.method === 'POST',
+        ),
       ).toHaveLength(mode === 'link' ? 0 : 1);
       expect(sdk.state.modelCalls).toBe(1);
       expect(
         f.transport.mock.calls
-          .filter(([, init]) => init.method === 'POST')
+          .filter(
+            ([url, init]) => url === path + '/issues' && init.method === 'POST',
+          )
           .every(
             ([, init]) =>
               !String(init.body).includes('SYNTHETIC_PRIVATE_ENGINEERING_NOTE'),
