@@ -17,6 +17,7 @@ import {
   createSupportEngineeringModelPorts,
   SupportEngineeringModelError,
 } from './support-engineering-model';
+import { createSupportOpenRouterModel } from './support-openrouter-model';
 import { createSupportEngineeringRuntime } from './support-engineering';
 import {
   createSupportEngineeringFixture,
@@ -543,8 +544,6 @@ describe('distinct engineering configuration and model wire', () => {
     'audio',
     'unknown-detail',
     'tool',
-    'confidence',
-    'duplicate-json',
     'oversize',
   ])(
     'refuses unsafe native result %s with finite errors and one request',
@@ -743,5 +742,134 @@ describe('actual public SDK engineering coordinator with fictional HTTP', () => 
     expect(outbound).not.toContain(engineeringCanary);
     expect(outbound).not.toContain(engineeringProofReference);
     expect(outbound).not.toContain('synthetic-engineering-budget');
+  });
+});
+
+describe('validated engineering accounting and destination regressions', () => {
+  it.each([
+    'confidence',
+    'duplicate-json',
+    'aggregate-limit',
+    'output-token-limit',
+  ] as const)(
+    'preserves known native cost for unusable %s output',
+    async (mode) => {
+      const f = await fixture();
+      await f.ready();
+      const value = candidate();
+      if (mode === 'confidence') Reflect.set(value, 'confidence', 1);
+      if (mode === 'aggregate-limit' || mode === 'output-token-limit') {
+        Object.assign(value, {
+          summary: 's'.repeat(4_000),
+          expectedBehavior: 'e'.repeat(2_000),
+        });
+      }
+      if (mode === 'aggregate-limit')
+        Object.assign(value, { actualBehavior: 'a'.repeat(2_000) });
+      let content = JSON.stringify(value);
+      if (mode === 'duplicate-json')
+        content = content.replace(
+          '"security":"ordinary"',
+          '"security":"ordinary","security":"restricted"',
+        );
+      f.state.document = responseDocument(f.config, content);
+      const result = await f.ports.model.generate(f.input, f.context, f.config);
+      expect(result.outputJson).toBe('');
+      expect(result.usage).toEqual({
+        inputTokens: 200,
+        outputTokens: 160,
+        costMicros: 474,
+        currency: 'USD',
+      });
+      expect(f.fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it('binds a generic purpose to its own destination and rejects a mismatched route before fetch', async () => {
+    const f = await fixture();
+    await f.ready();
+    const endpoint = 'https://provider.example.test/engineering';
+    const approved = f.ports.currentRoute(f.config.version);
+    if (!approved) throw new Error('Expected a qualified fixture route');
+    let route = { ...approved, endpoint };
+    let responseEndpoint = endpoint;
+    const fetch = vi.fn(async () => {
+      const response = json(responseDocument());
+      Object.defineProperty(response, 'url', { value: responseEndpoint });
+      return response;
+    });
+    const model = createSupportOpenRouterModel(
+      {
+        clock: f.clock,
+        configuration: {
+          currentRoute: () => route,
+          tokenCounter: f.ports.tokenCounter,
+        },
+        readApiKey: () => 'fictional-key',
+        fetch,
+      },
+      {
+        purpose: 'support_bug_assessment',
+        endpoint,
+        system: 'Fictional engineering test',
+        schemaName: 'fictional_candidate',
+        schema: { type: 'object' },
+        input: (input: EngineeringModelInput) => JSON.stringify(input),
+        output: (content: string) => content,
+        validate() {},
+      },
+    );
+    expect(
+      (await model.generate(f.input, f.context, f.config)).usage.costMicros,
+    ).toBe(474);
+    expect(fetch.mock.calls).toHaveLength(1);
+    expect(fetch).toHaveBeenCalledWith(endpoint, expect.any(Object));
+    responseEndpoint = 'https://provider.example.test/answering';
+    await expect(
+      model.generate(f.input, f.context, f.config),
+    ).rejects.toMatchObject({ code: 'provider_unavailable' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    route = { ...route, endpoint: 'https://provider.example.test/answering' };
+    await expect(
+      model.generate(f.input, f.context, f.config),
+    ).rejects.toMatchObject({ code: 'route_unavailable' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('validated canonical output byte accounting', () => {
+  it('keeps known native usage when conversion exceeds the canonical byte ceiling', async () => {
+    const f = await fixture();
+    await f.ready();
+    const fetch = vi.fn(async () => json(responseDocument()));
+    const model = createSupportOpenRouterModel(
+      {
+        clock: f.clock,
+        configuration: {
+          currentRoute: () => f.ports.currentRoute(f.config.version),
+          tokenCounter: { count: () => 1 },
+        },
+        readApiKey: () => 'fictional-key',
+        fetch,
+      },
+      {
+        purpose: 'support_bug_assessment',
+        endpoint: SUPPORT_ENGINEERING_ENDPOINT,
+        system: 'Fictional byte ceiling',
+        schemaName: 'fictional_candidate',
+        schema: { type: 'object' },
+        input: (input: EngineeringModelInput) => JSON.stringify(input),
+        output: () => 'x'.repeat(f.context.budgets.maxOutputBytes + 1),
+        validate() {},
+      },
+    );
+    const result = await model.generate(f.input, f.context, f.config);
+    expect(result.outputJson).toBe('');
+    expect(result.usage).toEqual({
+      inputTokens: 200,
+      outputTokens: 160,
+      costMicros: 474,
+      currency: 'USD',
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

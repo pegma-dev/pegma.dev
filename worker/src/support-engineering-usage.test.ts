@@ -432,3 +432,17 @@ describe('purpose-isolated durable engineering usage', () => {
     expect(await f.port.reconcile(wrong, { state: 'unknown' })).toBe('pending');
   });
 });
+
+describe('engineering invalid-budget classification', () => {
+  it.each([NaN, 1.5, Infinity, -Infinity])(
+    'retains denied for %s with no mutation',
+    async (budget) => {
+      const f = fixture();
+      const input = context();
+      Reflect.set(input.budgets, 'maxCostMicros', budget);
+      expect(await f.port.reserve(input)).toEqual({ outcome: 'denied' });
+      expect(f.state.updates).toBe(0);
+      expect(await f.row()).toBeNull();
+    },
+  );
+});

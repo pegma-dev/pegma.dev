@@ -942,3 +942,54 @@ describe('observed zero-media provider usage compatibility', () => {
     },
   );
 });
+
+describe('validated answering accounting regressions', () => {
+  it.each(['invalid-json', 'invalid-answer', 'output-tokens'] as const)(
+    'preserves known native accounting for unusable %s output',
+    async (mode) => {
+      const f = await fixture();
+      const content =
+        mode === 'invalid-json'
+          ? '{'
+          : mode === 'invalid-answer'
+            ? JSON.stringify({
+                kind: 'answer',
+                text: 'Fictional answer',
+                reason: null,
+                citations: [],
+              })
+            : JSON.stringify({
+                kind: 'escalate',
+                reason: 'other',
+                text: 'x'.repeat(1_950),
+                citations: [],
+              });
+      const fetch = vi.fn(async () => jsonResponse(document(content)));
+      const configuration =
+        mode === 'output-tokens'
+          ? {
+              ...f.configuration,
+              tokenCounter: {
+                count: (value: string) =>
+                  value.startsWith('{"kind"') ? 3_000 : 1,
+              },
+            }
+          : f.configuration;
+      const model = createSupportAssistantOpenRouterModel({
+        clock: f.clock,
+        configuration,
+        readApiKey: () => 'fictional-key',
+        fetch,
+      });
+      const result = await model.generate(f.input, f.context, f.config);
+      expect(result.outputJson).toBe('');
+      expect(result.usage).toEqual({
+        inputTokens: 200,
+        outputTokens: 40,
+        costMicros: 1,
+        currency: 'USD',
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+});

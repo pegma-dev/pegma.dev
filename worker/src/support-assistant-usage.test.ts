@@ -292,7 +292,12 @@ describe('Support assistant durable usage port', () => {
           ...input,
           budgets: { ...input.budgets, maxCostMicros },
         }),
-      ).toEqual({ outcome: 'denied' });
+      ).toEqual({
+        outcome:
+          Number.isNaN(maxCostMicros) || maxCostMicros === 1.5
+            ? 'unavailable'
+            : 'denied',
+      });
       expect(f.observed.counts.collections).toBe(0);
       expect(await ledger(f.backing)).toBeNull();
     },
@@ -889,4 +894,23 @@ describe('Support assistant durable usage port', () => {
     expect(f.observed.attempts.every((maximum) => maximum === 2)).toBe(true);
     expect(f.observed.counts.enumerations).toBe(0);
   });
+});
+
+describe('legacy answering invalid-budget classification', () => {
+  it.each([
+    { budget: NaN, expected: 'unavailable' },
+    { budget: 1.5, expected: 'unavailable' },
+    { budget: Infinity, expected: 'denied' },
+    { budget: -Infinity, expected: 'denied' },
+  ] as const)(
+    'keeps $budget as $expected without a ledger write',
+    async ({ budget, expected }) => {
+      const f = fixture();
+      const input = context();
+      Reflect.set(input.budgets, 'maxCostMicros', budget);
+      expect(await f.port.reserve(input)).toEqual({ outcome: expected });
+      expect(f.observed.counts.updates).toBe(0);
+      expect(await ledger(f.backing)).toBeNull();
+    },
+  );
 });

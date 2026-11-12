@@ -24,6 +24,7 @@ export function createSupportAssistantUsage(
     AssistantUsageIdentity
   >(options, {
     purpose: 'support_answer',
+    invalidBudgetOutcome: 'unavailable',
     collection: 'pegma.support-assistant-usage.v1',
     key: { partition: 'support_answer', id: 'budget' },
     identity: (input) => input,

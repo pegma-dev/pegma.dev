@@ -1,5 +1,4 @@
 import type { Clock } from '@pegma/spine';
-import { SUPPORT_ASSISTANT_ENDPOINT } from './support-assistant-config';
 
 export type SupportOpenRouterModelFailure =
   | 'route_unavailable'
@@ -51,6 +50,7 @@ export interface SupportOpenRouterContext {
 }
 export interface SupportOpenRouterRoute<Configuration> {
   readonly configuration: Configuration;
+  readonly endpoint: string;
   readonly credentialRef: string;
   readonly usageScopeRef: string;
   readonly endpointTag: string;
@@ -91,6 +91,10 @@ export interface SupportOpenRouterModelResult {
 const encoder = new TextEncoder();
 const badScalar = /[\u0000-\u001F\u007F]/u;
 const badText = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
+
+export function usableCredential(value: unknown): value is string {
+  return typeof value === 'string' && /^[\x21-\x7E]{1,4096}$/u.test(value);
+}
 
 export function fail(code: SupportOpenRouterModelFailure): never {
   throw new SupportOpenRouterModelError(code);
@@ -486,10 +490,18 @@ function responseResult(
     outputTokens > context.budgets.maxOutputTokens ||
     inputTokens + outputTokens > context.budgets.maxContextTokens ||
     actualCostMicros > context.budgets.maxCostMicros;
+  let outputJson = '';
+  if (!overBudget) {
+    try {
+      outputJson = convertOutput(content);
+    } catch {
+      // Unusable output still carries validated native accounting.
+    }
+  }
   return {
     // Preserve valid native accounting for the SDK's usage reconciliation. An
     // over-budget response must never supply an acceptable answer/candidate.
-    outputJson: overBudget ? '' : convertOutput(content),
+    outputJson,
     provider: route.configuration.provider,
     model: route.configuration.model,
     requestId,
@@ -510,6 +522,7 @@ export function createSupportOpenRouterModel<
   options: SupportOpenRouterModelOptions<Configuration>,
   protocol: {
     readonly purpose: string;
+    readonly endpoint: string;
     readonly system: string;
     readonly schemaName: string;
     readonly schema: unknown;
@@ -568,6 +581,7 @@ export function createSupportOpenRouterModel<
         const route = options.configuration.currentRoute(configuration.version);
         if (
           !route ||
+          route.endpoint !== protocol.endpoint ||
           canonical(route.configuration) !== canonical(configuration) ||
           context.purpose !== protocol.purpose ||
           context.configurationVersion !== configuration.version ||
@@ -630,8 +644,7 @@ export function createSupportOpenRouterModel<
         )
           fail('invalid_input');
         const key = options.readApiKey(route.credentialRef);
-        if (typeof key !== 'string' || !/^[\x21-\x7E]{1,4096}$/u.test(key))
-          fail('credential_unavailable');
+        if (!usableCredential(key)) fail('credential_unavailable');
         const body = JSON.stringify({
           model: configuration.model,
           stream: false,
@@ -669,7 +682,7 @@ export function createSupportOpenRouterModel<
           ),
         );
         guard();
-        const pending = request(SUPPORT_ASSISTANT_ENDPOINT, {
+        const pending = request(route.endpoint, {
           method: 'POST',
           redirect: 'error',
           cache: 'no-store',
@@ -697,7 +710,7 @@ export function createSupportOpenRouterModel<
         if (
           response.status !== 200 ||
           response.redirected ||
-          (response.url && response.url !== SUPPORT_ASSISTANT_ENDPOINT) ||
+          (response.url && response.url !== route.endpoint) ||
           !/^application\/json(?:\s*;|$)/iu.test(
             response.headers.get('content-type') ?? '',
           ) ||
@@ -740,15 +753,20 @@ export function createSupportOpenRouterModel<
           context,
           (content) => protocol.output(content, context),
         );
-        if (
-          options.configuration.tokenCounter.count(result.outputJson) >
-            context.budgets.maxOutputTokens ||
-          encoder.encode(result.outputJson).byteLength >
-            context.budgets.maxOutputBytes
-        )
-          fail('response_limit');
+        let outputJson = result.outputJson;
+        try {
+          if (
+            options.configuration.tokenCounter.count(outputJson) >
+              context.budgets.maxOutputTokens ||
+            encoder.encode(outputJson).byteLength >
+              context.budgets.maxOutputBytes
+          )
+            outputJson = '';
+        } catch {
+          outputJson = '';
+        }
         guard();
-        return result;
+        return { ...result, outputJson };
       } catch (error) {
         controller.abort();
         if (error instanceof SupportOpenRouterModelError) throw error;

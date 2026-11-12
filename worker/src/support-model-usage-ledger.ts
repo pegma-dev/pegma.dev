@@ -61,6 +61,7 @@ interface UsagePort<Context, Identity> {
   ): Promise<'reconciled' | 'pending'>;
 }
 interface UsageSchema<Context, Identity> {
+  readonly invalidBudgetOutcome?: 'denied' | 'unavailable';
   readonly purpose: string;
   readonly collection: string;
   readonly key: { readonly partition: string; readonly id: string };
@@ -487,11 +488,12 @@ export function createSupportModelUsageLedger<
           context.configurationVersion !== policy.configurationVersion ||
           context.modelVersion !== policy.modelVersion ||
           context.budgets.currency !== policy.currency ||
-          !Number.isSafeInteger(context.budgets.maxCostMicros) ||
           context.budgets.maxCostMicros < 1 ||
           context.budgets.maxCostMicros > policy.maxReservationCostMicros
         )
           return { outcome: 'denied' };
+        if (!Number.isSafeInteger(context.budgets.maxCostMicros))
+          return { outcome: schema.invalidBudgetOutcome ?? 'denied' };
         const snapshot = schema.binding(context);
         if (snapshot === undefined) return { outcome: 'denied' };
         const [identity, policyHash] = await Promise.all([

@@ -6,6 +6,7 @@ import type {
 } from '@pegma/support-desk-ai';
 import type { Clock } from '@pegma/spine';
 import {
+  SUPPORT_ENGINEERING_ENDPOINT,
   createSupportEngineeringConfiguration,
   type SupportEngineeringConfiguration,
   type SupportEngineeringConfigurationOptions,
@@ -22,6 +23,7 @@ import {
   canonical,
   strictJson,
   fail,
+  usableCredential,
 } from './support-openrouter-model';
 
 export class SupportEngineeringModelError extends Error {
@@ -242,6 +244,7 @@ export function createSupportEngineeringOpenRouterModel(
     },
     {
       purpose: 'support_bug_assessment',
+      endpoint: SUPPORT_ENGINEERING_ENDPOINT,
       system: SYSTEM,
       schemaName: 'support_engineering_v1',
       schema: OUTPUT_SCHEMA,
@@ -285,7 +288,31 @@ export interface SupportEngineeringModelOptions extends SupportEngineeringConfig
 export function createSupportEngineeringModelPorts(
   options: SupportEngineeringModelOptions,
 ) {
-  const configuration = createSupportEngineeringConfiguration(options);
+  const qualified = createSupportEngineeringConfiguration(options);
+  const readiness: SupportEngineeringConfiguration['configuration'] = {
+    async resolve(expected, signal) {
+      const observed = await qualified.configuration.resolve(expected, signal);
+      if (observed.outcome !== 'ready') return observed;
+      try {
+        const route = qualified.currentRoute(observed.configuration.version);
+        if (
+          !route ||
+          !usableCredential(options.readApiKey?.(route.credentialRef))
+        )
+          return { outcome: 'unavailable' };
+        const current = qualified.currentRoute(observed.configuration.version);
+        return current && canonical(current) === canonical(route)
+          ? observed
+          : { outcome: 'unavailable' };
+      } catch {
+        return { outcome: 'unavailable' };
+      }
+    },
+  };
+  const configuration = Object.freeze({
+    ...qualified,
+    configuration: Object.freeze(readiness),
+  });
   const model = createSupportEngineeringOpenRouterModel({
     clock: options.clock,
     configuration,

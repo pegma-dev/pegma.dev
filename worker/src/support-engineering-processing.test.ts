@@ -50,6 +50,7 @@ async function fixture() {
     lostResponse: false,
     security: 'ordinary' as 'ordinary' | 'restricted' | 'uncertain',
     ambiguous: false,
+    content: undefined as string | undefined,
   };
   const base: Omit<ApprovedSupportEngineeringRoute, 'approval'> = {
     host: 'pegma.dev',
@@ -87,7 +88,7 @@ async function fixture() {
       validUntil: config.dataControls.validUntil,
     },
   };
-  const readApiKey = vi.fn(() => 'fictional-no-real-key');
+  const readApiKey = vi.fn((_credentialRef: string) => 'fictional-no-real-key');
   const fetch = vi.fn(async (url: string, init: RequestInit) => {
     expect(url).toBe(SUPPORT_ENGINEERING_ENDPOINT);
     expect(init.redirect).toBe('error');
@@ -134,7 +135,7 @@ async function fixture() {
           finish_reason: 'stop',
           message: {
             role: 'assistant',
-            content: JSON.stringify(candidate),
+            content: state.content ?? JSON.stringify(candidate),
           },
         },
       ],
@@ -295,7 +296,10 @@ describe('explicit source-owned engineering processing composition', () => {
       );
       expect((await t.process()).outcome).not.toBe('candidate');
       expect(t.fetch).not.toHaveBeenCalled();
-      expect(t.readApiKey).not.toHaveBeenCalled();
+      // Credential readiness may read the bound local secret before funding refusal.
+      expect(t.readApiKey.mock.calls.length).toBeLessThanOrEqual(1);
+      for (const call of t.readApiKey.mock.calls)
+        expect(call).toEqual([t.route.credentialRef]);
       expect(await t.row()).toBeNull();
     },
   );
@@ -364,7 +368,7 @@ describe('explicit source-owned engineering processing composition', () => {
     },
   );
 
-  it('settles a genuine engineering026 over-budget native charge with no candidate and no duplicate provider call', async () => {
+  it('settles a released SDK charge of 150,000 micros with no candidate and no duplicate provider call', async () => {
     const t = await fixture();
     t.state.cost = 0.15;
     expect((await t.process()).outcome).toBe('held');
@@ -436,4 +440,185 @@ describe('explicit source-owned engineering processing composition', () => {
     expect(t.fetch).toHaveBeenCalledTimes(1);
     expect(t.f.engineering.state.creates).toHaveLength(1);
   });
+});
+
+describe('validated processing boundary regressions', () => {
+  async function unknownDispatch() {
+    const t = await fixture();
+    expect((await t.process()).outcome).toBe('candidate');
+    expect((await t.process()).outcome).toBe('prepared');
+    const work = await t.f.work();
+    if (!work.proposal) throw new Error('Expected a real SDK proposal');
+    await t.compose().reviewCommand(t.f.engineering.actors.staff, {
+      ...t.f.key(),
+      commandId: 'fictional-boundary-review',
+      correlationId: 'fictional-boundary-review',
+      expectedWorkGeneration: work.workGeneration,
+      proposalHash: work.proposal.proposalHash,
+      decision: 'approve',
+    });
+    t.f.engineering.state.createMode = 'accept_then_lose';
+    expect((await t.process()).outcome).toBe('pending');
+    await t.f.engineering.runtime.withdraw(t.f.engineering.actors.staff, {
+      ticketId: t.f.key().ticketId,
+      clientCommandId: 'fictional-boundary-withdraw',
+      reason: 'privacy_withdrawal',
+    });
+    t.state.enabled = false;
+    return t;
+  }
+  it.each(['ports', 'model', 'usage'] as const)(
+    'retains real unknown-dispatch recovery after %s composition becomes unavailable',
+    async (stage) => {
+      const t = await unknownDispatch();
+      const diagnostic = vi.fn();
+      if (stage === 'ports') Reflect.set(t.settings.ports, 'checks', undefined);
+      if (stage === 'usage')
+        Reflect.set(t.settings.usagePolicy, 'maxCostMicros', NaN);
+      if (stage === 'model')
+        Object.defineProperty(t.settings.model, 'fetch', {
+          get() {
+            throw new Error('fictional-private-composition-cause');
+          },
+        });
+      const retained = await t.row();
+      t.readApiKey.mockClear();
+      const runtime = t.compose({
+        enabled: () => t.state.enabled,
+        configuration: t.settings,
+        logger: { log: diagnostic },
+      });
+      expect((await runtime.reconcileSource(t.f.key().ticketId)).outcome).toBe(
+        'reconciled',
+      );
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+        'error',
+        'support.engineering.composition_unavailable',
+        { stage },
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(
+        'fictional-private-composition-cause',
+      );
+      expect(t.readApiKey).not.toHaveBeenCalled();
+      expect(t.fetch).toHaveBeenCalledTimes(1);
+      expect(t.f.engineering.state.creates).toHaveLength(1);
+      expect(await t.row()).toEqual(retained);
+    },
+  );
+  it('keeps recovery even when its finite diagnostic sink throws', async () => {
+    const t = await unknownDispatch();
+    Reflect.set(t.settings.usagePolicy, 'maxCostMicros', NaN);
+    const log = vi.fn(() => {
+      throw new Error('fictional logger outage');
+    });
+    const runtime = t.compose({ configuration: t.settings, logger: { log } });
+    expect((await runtime.reconcileSource(t.f.key().ticketId)).outcome).toBe(
+      'reconciled',
+    );
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+    expect(t.f.engineering.state.creates).toHaveLength(1);
+  });
+  it('emits only the finite JSON event when no logger is supplied', async () => {
+    const t = await fixture();
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      Reflect.set(t.settings.ports, 'checks', undefined);
+      expect((await t.process()).outcome).not.toBe('candidate');
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+        JSON.stringify({
+          event: 'support.engineering.composition_unavailable',
+          stage: 'ports',
+        }),
+      );
+    } finally {
+      diagnostic.mockRestore();
+    }
+  });
+  it.each(['initially-off', 'after-service-await'] as const)(
+    'retains the single PG gate at %s before reservation',
+    async (mode) => {
+      const t = await fixture();
+      if (mode === 'initially-off') t.state.enabled = false;
+      else {
+        const resolve = t.settings.ports.serviceAccess.resolve;
+        Reflect.set(
+          t.settings.ports.serviceAccess,
+          'resolve',
+          async (signal: AbortSignal) => {
+            const current = await resolve(signal);
+            t.state.enabled = false;
+            return current;
+          },
+        );
+      }
+      expect((await t.process()).outcome).not.toBe('candidate');
+      expect(await t.row()).toBeNull();
+      expect(t.fetch).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['missing', 'empty', 'malformed', 'throwing', 'revoked'] as const)(
+    'refuses %s credentials before creating a real ledger reservation',
+    async (mode) => {
+      const t = await fixture();
+      const read = vi.fn(() => {
+        if (mode === 'throwing')
+          throw new Error('fictional secret binding outage');
+        if (mode === 'revoked') t.state.enabled = false;
+        return mode === 'missing'
+          ? undefined
+          : mode === 'empty'
+            ? ''
+            : mode === 'malformed'
+              ? 'invalid\nkey'
+              : 'fictional-key';
+      });
+      Reflect.set(t.settings.model, 'readApiKey', read);
+      expect((await t.process()).outcome).not.toBe('candidate');
+      expect(read).toHaveBeenCalled();
+      expect(await t.row()).toBeNull();
+      expect(t.fetch).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['invalid-json', 'aggregate-limit'] as const)(
+    'settles the native charge for %s without a candidate or another paid attempt',
+    async (mode) => {
+      const t = await fixture();
+      t.state.content =
+        mode === 'invalid-json'
+          ? '{'
+          : JSON.stringify({
+              title: 'Fictional export',
+              summary: 's'.repeat(4_000),
+              expectedBehavior: 'e'.repeat(2_000),
+              actualBehavior: 'a'.repeat(2_000),
+              reproductionSteps: ['r'.repeat(1_000)],
+              applicability: {
+                productId: 'workspace',
+                version: '2.3.0',
+                buildId: 'synthetic-build-230',
+              },
+              security: 'ordinary',
+              routing: {
+                outcome: 'selected',
+                repositoryId: engineeringRepositories[0]!.repositoryId,
+                alternativeRepositoryIds: [],
+                rationale: 'A fictional route',
+              },
+            });
+      expect((await t.process()).outcome).not.toBe('candidate');
+      expect(await t.ledger()).toMatchObject({
+        spentMicros: '474',
+        reservations: [
+          { state: 'known', usage: { costMicros: 474, currency: 'USD' } },
+        ],
+      });
+      expect((await t.f.work()).candidate).toBeUndefined();
+      const retained = await t.row();
+      await t.process();
+      expect(t.fetch).toHaveBeenCalledTimes(1);
+      expect(await t.row()).toEqual(retained);
+      expect(t.f.engineering.state.creates).toEqual([]);
+    },
+  );
 });

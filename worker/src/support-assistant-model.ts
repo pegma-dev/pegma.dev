@@ -18,7 +18,10 @@ import type {
   VerifiedAssistantConfiguration,
 } from '@pegma/support-desk-ai';
 import type { Clock } from '@pegma/spine';
-import { type SupportAssistantConfiguration } from './support-assistant-config';
+import {
+  SUPPORT_ASSISTANT_ENDPOINT,
+  type SupportAssistantConfiguration,
+} from './support-assistant-config';
 
 export type SupportAssistantModelFailure =
   | 'route_unavailable'
@@ -185,6 +188,7 @@ export function createSupportAssistantOpenRouterModel(
     },
     {
       purpose: 'support_answer',
+      endpoint: SUPPORT_ASSISTANT_ENDPOINT,
       system: SYSTEM,
       schemaName: 'support_answer_v1',
       schema: OUTPUT_SCHEMA,

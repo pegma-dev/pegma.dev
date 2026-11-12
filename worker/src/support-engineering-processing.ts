@@ -1,3 +1,4 @@
+import type { Logger } from '@pegma/spine';
 import { createAgentPrincipalResolver } from './agent-authority';
 import type { SupportRuntime } from './support-desk';
 import { createSupportEngineeringRuntime } from './support-engineering';
@@ -22,6 +23,7 @@ type RequiredPorts = Pick<
 >;
 export interface SupportEngineeringProcessingComposition {
   readonly enabled?: () => boolean;
+  readonly logger?: Pick<Logger, 'log'>;
   readonly configuration?: {
     readonly model: Omit<SupportEngineeringModelOptions, 'clock' | 'isEnabled'>;
     readonly usagePolicy: SupportEngineeringUsagePolicy;
@@ -74,19 +76,54 @@ export function composeSupportEngineeringProcessing(
       return false;
     }
   };
+  let recovery = createSupportEngineeringRuntime(base);
+  let stage: 'ports' | 'model' | 'usage' | 'composition' = 'ports';
+  const diagnose = (failedStage: typeof stage) => {
+    try {
+      if (options.logger)
+        options.logger.log(
+          'error',
+          'support.engineering.composition_unavailable',
+          { stage: failedStage },
+        );
+      else
+        console.error(
+          JSON.stringify({
+            event: 'support.engineering.composition_unavailable',
+            stage: failedStage,
+          }),
+        );
+    } catch {
+      // Diagnostics cannot disable retained read-only recovery.
+    }
+  };
   try {
-    if (!complete(supplied.ports)) return createSupportEngineeringRuntime(base);
+    // Reconciliation does not depend on generation, model or funding readiness.
+    recovery = createSupportEngineeringRuntime({
+      ...base,
+      ports: {
+        reconciliationAccess: supplied.ports.reconciliationAccess,
+        github: supplied.ports.github,
+      },
+    });
+    if (!complete(supplied.ports)) {
+      diagnose('ports');
+      return recovery;
+    }
     const policy = Object.freeze({ ...supplied.usagePolicy });
+    stage = 'model';
     const model = createSupportEngineeringModelPorts({
       ...supplied.model,
       clock: runtime.clock,
       isEnabled: enabled,
     });
+    stage = 'usage';
     const usage = createSupportEngineeringUsage({
       store: runtime.store,
       clock: runtime.clock,
       policy,
     });
+    stage = 'composition';
     const configuration: SupportEngineeringPorts['configuration'] = {
       async resolve(expected, signal) {
         const observed = await model.configuration.resolve(expected, signal);
@@ -125,7 +162,7 @@ export function composeSupportEngineeringProcessing(
       },
     });
   } catch {
-    // Invalid trusted configuration never invents a usable budget or route.
-    return createSupportEngineeringRuntime(base);
+    diagnose(stage);
+    return recovery;
   }
 }
