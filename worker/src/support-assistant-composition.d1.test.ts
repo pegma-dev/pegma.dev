@@ -15,7 +15,7 @@ import {
   createSupportAssistantStageDatabase,
   type SupportAssistantStageBudget,
 } from './support-assistant-stage-budget';
-import { CLEANUP_CRON, CLEANUP_LANE_COUNT, cleanupLaneAt } from './maintenance-schedule';
+import { RATE_LIMIT_CRON } from './maintenance-schedule';
 import { controlledHumanBody, humanSecret } from './support-human-control-fixtures';
 
 const profiles: { phase: string; budget: SupportAssistantStageBudget }[] = [];
@@ -60,26 +60,7 @@ function physical(phase: string) {
     },
   };
 }
-function answeringLane() {
-  const start = Math.floor(Date.now() / 60_000) * 60_000;
-  for (let step = 0; step < 128; ++step) {
-    const time = start + step * 60_000;
-    if (
-      new Date(time).getUTCMinutes() !== 59 &&
-      cleanupLaneAt(time).kind === 'learning_reviews' &&
-      Math.floor(
-        (Math.floor(time / 60_000) - Math.floor((Math.floor(time / 60_000) + 1) / 60)) /
-          CLEANUP_LANE_COUNT,
-      ) %
-        2 ===
-        0
-    )
-      return time;
-  }
-  throw new Error('No separate answering maintenance lane found.');
-}
-
-describe('normal public025+D1047 answering physical invocation budget', () => {
+describe('normal released-SDK+D1047 answering physical invocation budget', () => {
   it('includes genuine HTTP admission and accepted recovery in the hard50 meter', async () => {
     const f = await supportAnsweringFixture(
       createCloudflareD1Store({
@@ -198,7 +179,7 @@ describe('normal public025+D1047 answering physical invocation budget', () => {
     );
     const { packet } = await completeAnsweringComposition(f);
     const worker = createWorker({ answering: f.composition });
-    const at = answeringLane();
+    const at = Math.floor(Date.now() / 60_000) * 60_000;
     const access = resolveAccess(
       { principalId: f.human.principals.owner },
       { version: 'fixture', defaults: [supportPermissions.readOwn] },
@@ -208,7 +189,7 @@ describe('normal public025+D1047 answering physical invocation budget', () => {
       const measured = physical('scheduled-' + invocation);
       const context = createExecutionContext();
       await worker.scheduled(
-        { cron: CLEANUP_CRON, scheduledTime: at, noRetry() {} },
+        { cron: RATE_LIMIT_CRON, scheduledTime: at, noRetry() {} },
         measured.environment,
         context,
       );

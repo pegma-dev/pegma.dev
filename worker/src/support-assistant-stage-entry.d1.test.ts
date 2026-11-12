@@ -33,7 +33,11 @@ import {
   SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS,
   SUPPORT_ASSISTANT_WAKE_MARKER,
 } from './support-assistant-stage-queue';
-import { supportAssistantCheckpoints, SUPPORT_ASSISTANT_WORKER_ID } from './support-assistant';
+import {
+  supportAssistantCheckpoints,
+  SUPPORT_ASSISTANT_WORKER_ID,
+  SUPPORT_ASSISTANT_SCAN_LIMIT,
+} from './support-assistant';
 import { seedSupportAssistantStage } from './support-assistant-stage-seed';
 import {
   createStageIdentity,
@@ -450,9 +454,9 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     withinBudget(logs.last());
     expect(firstEnv.bindingReads()).toBe(1);
     expect(secondEnv.bindingReads()).toBe(1);
-    // A completed job does not make a one-row physical scan empty. The SDK
-    // can encounter terminal work, messages or receipts and advance its cursor.
-    // Observe that exact public SDK page before each distinct queue invocation.
+    // Preview the same configured public SDK page as the real runtime. A
+    // one-row preview has a different opaque cursor from the bounded 32-row page.
+    // Terminal work, messages and receipts still count as physical rows.
     const scanObservations: unknown[] = [];
     Object.assign(task.meta, { supportAssistantStageDuplicateScans: scanObservations });
     let acknowledged = false;
@@ -475,13 +479,13 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
         },
       );
       const page = await previewApplication.scanAssistantTurnCandidates(scanAccess, {
-        limit: 1,
+        limit: SUPPORT_ASSISTANT_SCAN_LIMIT,
         ...(before.cursor === null ? {} : { cursor: before.cursor }),
       });
       expect(page.candidates).toEqual([]);
       expect(page.pages).toBe(1);
       expect(page.physicalRows).toBeGreaterThanOrEqual(0);
-      expect(page.physicalRows).toBeLessThanOrEqual(1);
+      expect(page.physicalRows).toBeLessThanOrEqual(SUPPORT_ASSISTANT_SCAN_LIMIT);
       const duplicate = delivery({ id: first.id, sentAt, attempts });
       const duplicateEnv = environment(scenario);
       await stageEntry.queue(duplicate.batch, duplicateEnv.options);
@@ -490,8 +494,8 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
         .collection(supportAssistantCheckpoints)
         .get({ partition: 'support-answering', id: 'scan' });
       expect(after).toMatchObject({ generation: before.generation + 1, cursor: page.nextCursor });
-      // Existing Queue policy retries an acknowledged one-row filtered page,
-      // then stops at its existing delivery cap even if physical rows remain.
+      // Keep the existing Queue policy: only its one-row filtered case retries,
+      // and the same delivery cap still bounds all continuation attempts.
       const retry = page.physicalRows === 1 && attempts < SUPPORT_ASSISTANT_WAKE_DELIVERIES;
       scanObservations.push({
         attempts,
