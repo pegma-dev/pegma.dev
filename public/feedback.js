@@ -9,6 +9,7 @@ const ticketList = document.querySelector('#ticket-list');
 const createForm = document.querySelector('#create-ticket');
 const assistantChoice = document.querySelector('#assistant-choice');
 const assistantPreference = document.querySelector('#assistant-preference');
+const assistantStatus = document.querySelector('#assistant-status');
 let assistantCapability = null;
 const recoveryButton = document.createElement('button');
 recoveryButton.type = 'button';
@@ -46,6 +47,11 @@ function showStatus(message, isError = false) {
 function clearPrivate() {
   assistantCapability = null;
   if (assistantChoice) assistantChoice.hidden = true;
+  if (assistantPreference) assistantPreference.checked = false;
+  if (assistantStatus) {
+    assistantStatus.textContent = '';
+    assistantStatus.hidden = true;
+  }
   viewReady = false;
   signedIn.hidden = true;
   signedOut.hidden = true;
@@ -229,6 +235,7 @@ async function loadTickets() {
   const generation = operation.generation;
   clearPrivate();
   showStatus('Checking current access…');
+  let capabilityUnavailable = false;
   try {
     await readViewer(generation, null);
     const result = await api('/api/support/tickets');
@@ -241,11 +248,23 @@ async function loadTickets() {
     if (assistantChoice && assistantPreference) {
       let capability;
       try { capability = await api('/api/support/assistant/capability'); }
-      catch (error) { if (error.status === 401 || error.status === 403) throw error; }
+      catch (error) {
+        if (error.status === 401 || error.status === 403) throw error;
+        capabilityUnavailable = true;
+      }
       guard(generation);
-      if (capability?.enabled === true && capability.csrfToken === viewer?.csrfToken &&
-        capability.disclosureVersion === 'pegma-support-answering-1')
-        assistantCapability = Object.freeze({ disclosureVersion: capability.disclosureVersion });
+      if (!capabilityUnavailable) {
+        if (typeof capability?.enabled !== 'boolean' || capability.csrfToken !== viewer?.csrfToken)
+          capabilityUnavailable = true;
+        else if (capability.enabled) {
+          const displayedVersion = assistantChoice.dataset.disclosureVersion;
+          if (typeof displayedVersion !== 'string' || displayedVersion.length === 0 ||
+            displayedVersion.length > 200 || /[\u0000-\u001f\u007f]/u.test(displayedVersion) ||
+            capability.disclosureVersion !== displayedVersion)
+            capabilityUnavailable = true;
+          else assistantCapability = Object.freeze({ disclosureVersion: displayedVersion });
+        }
+      }
       assistantChoice.hidden = assistantCapability === null;
     }
     await readViewer(generation);
@@ -258,6 +277,14 @@ async function loadTickets() {
       if (assistantPreference) assistantPreference.checked = false;
     }
     authorityReloadRequired = false;
+    if (assistantStatus) {
+      assistantStatus.textContent = capabilityUnavailable
+        ? createPacket !== null
+          ? 'AI assistance is temporarily unavailable. Retry the original ticket request to confirm its result.'
+          : 'AI assistance is temporarily unavailable. You can still submit a ticket for human support.'
+        : '';
+      assistantStatus.hidden = !capabilityUnavailable;
+    }
     viewReady = true;
     renderTickets(result.tickets);
     emailNode.textContent = viewer.email;

@@ -1,41 +1,57 @@
 import type { Clock } from '@pegma/spine';
-import type { SupportAssistantTick, createSupportAssistantRuntime } from './support-assistant';
+import type {
+  SupportAssistantTick,
+  createSupportAssistantRuntime,
+} from './support-assistant';
 
 export interface SupportAssistantStageEnvironment {
   readonly PEGMA_SUPPORT_ASSISTANT_STAGE_TARGET?: string;
   readonly PEGMA_SUPPORT_ASSISTANT_STAGE_ENABLED?: string;
 }
 
-function supportAssistantStageEnabled(env: SupportAssistantStageEnvironment): boolean {
+function supportAssistantStageEnabled(
+  env: SupportAssistantStageEnvironment,
+): boolean {
   return (
     env.PEGMA_SUPPORT_ASSISTANT_STAGE_TARGET === 'isolated-stage' &&
     env.PEGMA_SUPPORT_ASSISTANT_STAGE_ENABLED === 'true'
   );
 }
 
-export const SUPPORT_ASSISTANT_STAGE_QUEUE = 'pegma-support-assistant-stage-wakeup';
+export const SUPPORT_ASSISTANT_STAGE_QUEUE =
+  'pegma-support-assistant-stage-wakeup';
 export const SUPPORT_ASSISTANT_WAKE_MARKER = 'wake-v1';
 export const SUPPORT_ASSISTANT_WAKE_DELIVERIES = 8;
 export const SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS = 15 * 60_000;
 const SCAN_RETRY_SECONDS = 5;
 const MAX_PREPARED_DELAY_SECONDS = 60;
 
-type StageRuntime = Pick<ReturnType<typeof createSupportAssistantRuntime>, 'runTick'>;
+type StageRuntime = Pick<
+  ReturnType<typeof createSupportAssistantRuntime>,
+  'runTick'
+>;
 
 function retryDelay(result: SupportAssistantTick, now: number): number | null {
   if (result.outcome === 'prepared' || result.outcome === 'deferred') {
     const due = Date.parse(result.nextAttemptAt);
     const seconds = Math.max(1, Math.ceil((due - now) / 1000));
-    return Number.isSafeInteger(seconds) && seconds <= MAX_PREPARED_DELAY_SECONDS ? seconds : null;
+    return Number.isSafeInteger(seconds) &&
+      seconds <= MAX_PREPARED_DELAY_SECONDS
+      ? seconds
+      : null;
   }
   if (result.outcome === 'unavailable') return SCAN_RETRY_SECONDS;
-  if (result.outcome === 'scanned' && !result.checkpointSaved && result.turn !== 'pending')
+  if (
+    result.outcome === 'scanned' &&
+    !result.checkpointSaved &&
+    result.turn !== 'pending'
+  )
     return SCAN_RETRY_SECONDS;
   // Let one opaque message advance a bounded number of physical scan pages.
   // Explicit pending/ambiguous SDK work still stops for a manual stage redrive.
   return result.outcome === 'scanned' &&
     result.turn === 'none' &&
-    result.physicalRows === 1 &&
+    result.physicalRows > 0 &&
     result.checkpointSaved
     ? SCAN_RETRY_SECONDS
     : null;
@@ -52,8 +68,14 @@ export function createSupportAssistantStageQueue<
   ) => StageRuntime | null | Promise<StageRuntime | null>,
 ) {
   return Object.freeze({
-    async queue(batch: Pick<MessageBatch, 'queue' | 'messages'>, env: Environment): Promise<void> {
-      if (batch.queue !== SUPPORT_ASSISTANT_STAGE_QUEUE || batch.messages.length > 1)
+    async queue(
+      batch: Pick<MessageBatch, 'queue' | 'messages'>,
+      env: Environment,
+    ): Promise<void> {
+      if (
+        batch.queue !== SUPPORT_ASSISTANT_STAGE_QUEUE ||
+        batch.messages.length > 1
+      )
         throw new Error('Unexpected isolated stage queue delivery.');
       const message = batch.messages[0];
       if (message === undefined) return;
@@ -78,7 +100,8 @@ export function createSupportAssistantStageQueue<
       let result: SupportAssistantTick | null;
       try {
         const runtime = await buildRuntime(env, isEnabled);
-        result = runtime === null || !isEnabled() ? null : await runtime.runTick();
+        result =
+          runtime === null || !isEnabled() ? null : await runtime.runTick();
       } catch {
         // No successful return or explicit ACK after an interrupted tick.
         // The broker may redeliver this same message within its retry policy.

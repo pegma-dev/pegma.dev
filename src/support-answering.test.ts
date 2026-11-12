@@ -17,6 +17,7 @@ async function fixture() {
   const f = await supportAnsweringFixture();
   const api = createSupportApi({ ...f.runtime, logger: f.logger });
   let actor: 'owner' | 'peer' = 'owner';
+  let capabilityFault: 'http' | 'network' | 'malformed' | 'unauthenticated' | 'forbidden' | null = null;
   const page = supportBrowser('create', async (call: BrowserCall) => {
     if (call.path === '/api/identity/account') {
       // Browser transport fixture only; the mutation handlers still validate
@@ -29,6 +30,15 @@ async function fixture() {
           csrfToken: f.human.csrf.get(actor),
         },
       };
+    }
+    if (call.path === '/api/support/assistant/capability' && capabilityFault !== null) {
+      if (capabilityFault === 'network')
+        throw new Error('Fictional private capability failure');
+      if (capabilityFault === 'unauthenticated' || capabilityFault === 'forbidden')
+        return { status: capabilityFault === 'unauthenticated' ? 401 : 403, body: { error: 'Fictional current authority denial' } };
+      return capabilityFault === 'http'
+        ? { status: 503, body: { error: 'Fictional private capability failure' } }
+        : { body: { enabled: 'malformed', csrfToken: f.human.csrf.get(actor), detail: 'Fictional private capability failure' } };
     }
     const headers = new Headers(call.headers);
     headers.set('Cookie', f.human.cookies.get(actor)!);
@@ -71,10 +81,92 @@ async function fixture() {
     switchActor(value: typeof actor) {
       actor = value;
     },
+    capabilityFault(value: typeof capabilityFault) {
+      capabilityFault = value;
+    },
   };
 }
 
 describe('optional current customer answering browser entry', () => {
+  it('clears an unsubmitted AI choice before another account can create a new ticket', async () => {
+    const { f, page, edit, reload, switchActor } = await fixture();
+    page.node('assistant-preference').checked = true;
+    switchActor('peer');
+    await reload();
+    expect(page.node('assistant-choice').hidden).toBe(false);
+    expect(page.node('assistant-preference').checked).toBe(false);
+    edit();
+    page.nativeSubmit('create-ticket');
+    await until(() => page.node('feedback-status').textContent.includes('Ticket created.'));
+    const posts = page.calls.filter((call) => call.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.path).toBe('/api/support/tickets');
+    expect(JSON.parse(posts[0]!.body!)).not.toHaveProperty('preference');
+    expect(f.state.calls).toBe(0);
+    expect(f.state.keys).toBe(0);
+  });
+
+  it.each(['http', 'network', 'malformed'] as const)(
+    'explains a capability %s failure while keeping authenticated human feedback available',
+    async (fault) => {
+      const { f, page, edit, reload, capabilityFault } = await fixture();
+      capabilityFault(fault);
+      await reload();
+      const status = page.document.querySelector('#assistant-status');
+      expect(status?.textContent ?? '').toContain('AI assistance is temporarily unavailable.');
+      expect(status?.hidden).toBe(false);
+      expect(status?.attributes.get('role')).toBe('status');
+      expect(status?.attributes.get('aria-live')).toBe('polite');
+      expect(status?.textContent).not.toContain('Fictional private');
+      expect(page.node('assistant-choice').hidden).toBe(true);
+      edit();
+      page.nativeSubmit('create-ticket');
+      await until(() => page.node('feedback-status').textContent.includes('Ticket created.'));
+      expect(page.calls.filter((call) => call.method === 'POST').map((call) => call.path)).toEqual(['/api/support/tickets']);
+      expect(f.state.calls).toBe(0);
+      expect(f.state.keys).toBe(0);
+    },
+  );
+
+  it('treats the rendered disclosure dataset as the displayed version and holds a mismatch', async () => {
+    const { page, reload } = await fixture();
+    expect(page.node('assistant-choice').dataset.disclosureVersion).toBe(
+      page.node('assistant-choice').attributes.get('data-disclosure-version'),
+    );
+    page.node('assistant-choice').dataset.disclosureVersion = 'fictional-new-disclosure';
+    await reload();
+    expect(page.node('assistant-choice').hidden).toBe(true);
+    expect(page.document.querySelector('#assistant-status')?.textContent ?? '').toContain('AI assistance is temporarily unavailable.');
+    expect(page.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+  });
+
+  it('keeps a normally disabled assistant separate from a capability failure', async () => {
+    const { f, page, reload } = await fixture();
+    f.state.enabled = false;
+    await reload();
+    expect(page.node('assistant-choice').hidden).toBe(true);
+    expect(page.document.querySelector('#assistant-status')?.textContent ?? '').toBe('');
+    expect(page.node('create-ticket').querySelector('button')!.disabled).toBe(false);
+  });
+
+  it.each(['unauthenticated', 'forbidden'] as const)(
+    'keeps capability %s denials outside the human feedback fallback',
+    async (fault) => {
+      const { page, capabilityFault } = await fixture();
+      capabilityFault(fault);
+      page.window.dispatchEvent(new Event('pagehide'));
+      page.window.dispatchEvent(new Event('pageshow'));
+      await until(() => page.node('feedback-status').textContent.includes(
+        fault === 'unauthenticated' ? 'Sign in, then reload' : 'Current account access could not be confirmed',
+      ));
+      expect(page.node('feedback-signed-in').hidden).toBe(true);
+      expect(page.node('assistant-status').hidden).toBe(true);
+      page.node('create-ticket').fire('submit');
+      await page.drain();
+      expect(page.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+    },
+  );
+
   it('requires an explicit unchecked disclosure choice and leaves an ordinary packet on its original route', async () => {
     const { f, page, edit } = await fixture();
     expect(page.node('assistant-choice').hidden).toBe(false);
@@ -90,8 +182,8 @@ describe('optional current customer answering browser entry', () => {
     expect(f.state.keys).toBe(0);
   });
 
-  it('retains the exact disclosed mode/IDs/URL after lost real SDK ACK and config OFF, while preserving a later draft', async () => {
-    const { f, page, edit, reload } = await fixture();
+  it.each(['config OFF', 'capability outage'] as const)('retains the exact disclosed mode/IDs/URL after lost real SDK ACK and %s, while preserving a later draft', async (mode) => {
+    const { f, page, edit, reload, capabilityFault } = await fixture();
     edit();
     page.node('assistant-preference').checked = true;
     f.state.loseAck = true;
@@ -107,9 +199,12 @@ describe('optional current customer answering browser entry', () => {
       disclosureVersion: 'pegma-support-answering-1',
     });
     page.node('ticket-body').value = 'Fictional separate later draft';
-    f.state.enabled = false;
+    if (mode === 'config OFF') f.state.enabled = false;
+    else capabilityFault('http');
     await reload();
     expect(page.node('assistant-choice').hidden).toBe(true);
+    if (mode === 'capability outage')
+      expect(page.node('assistant-status').textContent).toContain('Retry the original ticket request');
     page.nativeSubmit('create-ticket');
     await until(() => page.node('feedback-status').textContent.includes('Ticket created.'));
     const posts = page.calls.filter((call) => call.method === 'POST');
@@ -126,7 +221,7 @@ describe('optional current customer answering browser entry', () => {
   });
 
   it('does not expose or replay an unknown original-actor packet under a different current account', async () => {
-    const { f, page, edit, switchActor } = await fixture();
+    const { f, page, edit, reload, switchActor } = await fixture();
     edit();
     page.node('assistant-preference').checked = true;
     f.state.loseAck = true;
@@ -134,6 +229,7 @@ describe('optional current customer answering browser entry', () => {
     await until(() =>
       page.node('feedback-status').textContent.includes('Could not confirm ticket creation.'),
     );
+    const original = page.calls.find((call) => call.method === 'POST')!;
     switchActor('peer');
     page.window.dispatchEvent(new Event('pagehide'));
     page.window.dispatchEvent(new Event('pageshow'));
@@ -143,5 +239,18 @@ describe('optional current customer answering browser entry', () => {
     page.node('create-ticket').fire('submit');
     await delay(10);
     expect(page.calls.filter((call) => call.method === 'POST')).toHaveLength(1);
+    switchActor('owner');
+    await reload();
+    expect(page.node('assistant-preference').checked).toBe(false);
+    page.nativeSubmit('create-ticket');
+    await until(() => page.node('feedback-status').textContent.includes('Ticket created.'));
+    const posts = page.calls.filter((call) => call.method === 'POST');
+    expect(posts).toHaveLength(2);
+    expect(posts[1]!.path).toBe(original.path);
+    expect(posts[1]!.body).toBe(original.body);
+    const rows = await f.human.rows(JSON.parse(original.body!).command.ticketId);
+    expect(rows.filter((row) => row.kind === 'ticket')).toHaveLength(1);
+    expect(rows.filter((row) => row.kind === 'message')).toHaveLength(1);
+    expect(f.state.calls).toBe(0);
   });
 });

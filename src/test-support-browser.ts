@@ -94,7 +94,11 @@ function documentFromTemplate(template: string) {
     const node = new BrowserNode(tag);
     const attributes = match[3] ?? '';
     for (const attr of attributes.matchAll(/([\w:-]+)(?:="([^"]*)")?/gu)) {
-      if (attr[1]) node.attributes.set(attr[1], attr[2] ?? '');
+      if (attr[1]) {
+        node.attributes.set(attr[1], attr[2] ?? '');
+        if (attr[1].startsWith('data-'))
+          node.dataset[attr[1].slice(5).replace(/-([a-z])/gu, (_match, letter: string) => letter.toUpperCase())] = attr[2] ?? '';
+      }
     }
     node.hidden = node.attributes.has('hidden');
     node.disabled = node.attributes.has('disabled');

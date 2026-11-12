@@ -4,7 +4,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { env } from 'cloudflare:workers';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { type AssistantBackend, type AssistantDiagnosticStage } from './support-assistant-fixtures';
+import {
+  registerSupportAssistantCases,
+  type AssistantBackend,
+  type AssistantDiagnosticStage,
+} from './support-assistant-fixtures';
 import { registerStagedSupportAssistantCases } from './support-assistant-staged-cases';
 
 declare global {
@@ -193,7 +197,10 @@ function measuredDatabase(backing: D1Database, diagnostic = false) {
       result: current.run({ profile, stage: 'runTick' }, operation),
     };
   }
-  function stage<T>(name: AssistantDiagnosticStage, operation: () => Promise<T>) {
+  function stage<T>(
+    name: AssistantDiagnosticStage,
+    operation: () => Promise<T>,
+  ) {
     const active = current.getStore();
     if (active === undefined) return operation();
     return current.run({ profile: active.profile, stage: name }, () => {
@@ -270,5 +277,10 @@ describe('SDK025 native meter contract', () => {
 
 registerStagedSupportAssistantCases(
   'SDK025 real Native D1 through the selected published adapter',
+  async () => backend(true),
+);
+
+registerSupportAssistantCases(
+  'published SDK full Native D1 regressions through the unchanged hard50/100 meter',
   async () => backend(true),
 );

@@ -1,4 +1,11 @@
-import { createSupportEngineeringRouter, type SupportEngineeringRouterOptions } from './support-engineering-router';
+import {
+  bestEffortSupportAssistantHint,
+  type SupportAssistantHintCallback,
+} from './support-assistant';
+import {
+  createSupportEngineeringRouter,
+  type SupportEngineeringRouterOptions,
+} from './support-engineering-router';
 import type { Logger, PrincipalId } from '@pegma/spine';
 import type { SessionStore } from '@pegma/sessions';
 import type { DurableRateLimiter } from '@pegma/rate-limit';
@@ -118,6 +125,8 @@ type StaffPatchAction =
   'assign' | 'unassign' | 'change_priority' | 'resolve' | 'close' | 'reopen';
 
 interface SupportApiOptions {
+  /** Trusted body-free advisory wake hint after an accepted customer message. */
+  readonly onCustomerMessageAccepted?: SupportAssistantHintCallback;
   readonly application: SupportDeskApplication;
   readonly sessions: SessionStore;
   readonly identity: IdentityPort;
@@ -652,6 +661,11 @@ async function stableBrowserMutation(
       ticketId: route.ticketId,
       body: messageBody,
     });
+    if (view.ticket.handling === 'assistant')
+      await bestEffortSupportAssistantHint(options.onCustomerMessageAccepted, {
+        ticketId: route.ticketId,
+        triggerMessageId: command.messageId,
+      });
     const final = await current(permission);
     options.logger.log('info', 'support.ticket_replied', {
       ticketNumber: view.ticket.number,
@@ -758,34 +772,67 @@ export function createSupportApi(
   const engineeringRouter = createSupportEngineeringRouter(options.engineering);
   const engineeringReady = (): boolean => {
     if (options.engineering?.configuration === undefined) return false;
-    try { return options.engineering.enabled?.() === true; } catch { return false; }
+    try {
+      return options.engineering.enabled?.() === true;
+    } catch {
+      return false;
+    }
   };
   const engineeringReviewReady = (): boolean => {
     if (!engineeringReady()) return false;
-    try { return options.engineering?.configuration?.reviewEnabled?.() === true; } catch { return false; }
+    try {
+      return options.engineering?.configuration?.reviewEnabled?.() === true;
+    } catch {
+      return false;
+    }
   };
-  if (options.learningHandler !== undefined && options.learningRuntime !== undefined)
+  if (
+    options.learningHandler !== undefined &&
+    options.learningRuntime !== undefined
+  )
     throw new TypeError('Choose one trusted Support learning composition');
-  const learningHandler = options.learningHandler ?? (
-    options.learningRuntime !== undefined && options.roleStore !== undefined
+  const learningHandler =
+    options.learningHandler ??
+    (options.learningRuntime !== undefined && options.roleStore !== undefined
       ? createSupportLearningBrowserHandlers({
-          identity: options.identity, sessions: options.sessions,
+          identity: options.identity,
+          sessions: options.sessions,
           identityLinkFromClaims: options.identityLinkFromClaims,
-          logger: options.logger, roleStore: options.roleStore,
-          ...(options.learningEnabled === undefined ? {} : { enabled: options.learningEnabled }),
+          logger: options.logger,
+          roleStore: options.roleStore,
+          ...(options.learningEnabled === undefined
+            ? {}
+            : { enabled: options.learningEnabled }),
           limiter: options.replyLimiter,
           learning: options.learningRuntime,
         })
-      : undefined
-  );
+      : undefined);
   const learningReady = (): boolean => {
-    if (typeof learningHandler !== 'function' || typeof options.learningEnabled !== 'function') return false;
-    try { return options.learningEnabled() === true; } catch { return false; }
+    if (
+      typeof learningHandler !== 'function' ||
+      typeof options.learningEnabled !== 'function'
+    )
+      return false;
+    try {
+      return options.learningEnabled() === true;
+    } catch {
+      return false;
+    }
   };
   const stagedReviewsReady = (): boolean => {
-    if (!learningReady() || options.learningRuntime?.stagedReviews === undefined) return false;
-    try { return options.learningStagedReviewsEnabled?.() === true &&
-      options.learningRuntime.stagedReviews.enabled() === true; } catch { return false; }
+    if (
+      !learningReady() ||
+      options.learningRuntime?.stagedReviews === undefined
+    )
+      return false;
+    try {
+      return (
+        options.learningStagedReviewsEnabled?.() === true &&
+        options.learningRuntime.stagedReviews.enabled() === true
+      );
+    } catch {
+      return false;
+    }
   };
   return async (request) => {
     const url = new URL(request.url);
@@ -796,10 +843,14 @@ export function createSupportApi(
       if (LEARNING_NAMESPACE.test(path)) {
         if (!learningReady()) throw new ApiError(404, 'not_found');
         let response: Response | null;
-        try { response = await learningHandler!(request); }
-        catch { throw new ApiError(503, 'support_learning_unavailable'); }
+        try {
+          response = await learningHandler!(request);
+        } catch {
+          throw new ApiError(503, 'support_learning_unavailable');
+        }
         // A flag change may withhold an ACK; the browser retains its exact packet.
-        if (!learningReady() || response === null) throw new ApiError(404, 'not_found');
+        if (!learningReady() || response === null)
+          throw new ApiError(404, 'not_found');
         return response;
       }
       if (supportBrowserCommandMode(request))
@@ -963,40 +1014,73 @@ export function createSupportApi(
         request.method === 'GET'
       ) {
         const ticketId = adminMatch[1]!;
-        if (typeof options.learningEnabled === 'function' || options.engineering !== undefined) {
+        if (
+          typeof options.learningEnabled === 'function' ||
+          options.engineering !== undefined
+        ) {
           // This optional hint comes from current real stored Support authority,
           // active Identity and the same live session, never browser role fields.
           const browser = supportHumanBrowser(request, {
             sessions: options.sessions,
-            authenticate: (incoming) => requireAuthentication(incoming, options),
-            access: (authenticated) => humanAccess(authenticated, options, true),
+            authenticate: (incoming) =>
+              requireAuthentication(incoming, options),
+            access: (authenticated) =>
+              humanAccess(authenticated, options, true),
             permission: supportPermissions.queueRead,
             mutation: false,
           });
           try {
             const initial = await browser.current();
-            const view = await options.application.readStaffTicket(initial.access, ticketId);
+            const view = await options.application.readStaffTicket(
+              initial.access,
+              ticketId,
+            );
             const final = await browser.current();
             return json({
               ...staffTicketView(view),
               csrfToken: final.authenticated.csrfToken,
-              ...(options.engineering === undefined ? {} : {
-                engineeringEnabled: engineeringReady() && [supportPermissions.engineeringRead,
-                  supportPermissions.engineeringEvidenceSubmit, supportPermissions.engineeringWithdraw,
-                  supportPermissions.engineeringPolicyRead, supportPermissions.engineeringPolicyManage]
-                  .some((permission) => hasPermission(final.access, permission)),
-                engineeringReviewEnabled: engineeringReviewReady() &&
-                  hasPermission(final.access, supportPermissions.engineeringReview),
-              }),
-              learningEnabled: learningReady() && hasPermission(final.access, supportPermissions.learningRead),
-              learningReviewRecoveryEnabled: learningReady() &&
-                hasPermission(final.access, supportPermissions.learningReview) &&
+              ...(options.engineering === undefined
+                ? {}
+                : {
+                    engineeringEnabled:
+                      engineeringReady() &&
+                      [
+                        supportPermissions.engineeringRead,
+                        supportPermissions.engineeringEvidenceSubmit,
+                        supportPermissions.engineeringWithdraw,
+                        supportPermissions.engineeringPolicyRead,
+                        supportPermissions.engineeringPolicyManage,
+                      ].some((permission) =>
+                        hasPermission(final.access, permission),
+                      ),
+                    engineeringReviewEnabled:
+                      engineeringReviewReady() &&
+                      hasPermission(
+                        final.access,
+                        supportPermissions.engineeringReview,
+                      ),
+                  }),
+              learningEnabled:
+                learningReady() &&
+                hasPermission(final.access, supportPermissions.learningRead),
+              learningReviewRecoveryEnabled:
+                learningReady() &&
+                hasPermission(
+                  final.access,
+                  supportPermissions.learningReview,
+                ) &&
                 hasPermission(final.access, supportPermissions.queueRead),
-              ...(options.learningStagedReviewsEnabled === undefined ? {} : {
-                learningStagedReviewEnabled: stagedReviewsReady() &&
-                  hasPermission(final.access, supportPermissions.learningReview) &&
-                  hasPermission(final.access, supportPermissions.queueRead),
-              }),
+              ...(options.learningStagedReviewsEnabled === undefined
+                ? {}
+                : {
+                    learningStagedReviewEnabled:
+                      stagedReviewsReady() &&
+                      hasPermission(
+                        final.access,
+                        supportPermissions.learningReview,
+                      ) &&
+                      hasPermission(final.access, supportPermissions.queueRead),
+                  }),
             });
           } catch (error) {
             // A raced loss of current access wins over an earlier failed read.
@@ -1257,14 +1341,25 @@ export function createSupportApi(
           allowMultiline: true,
         });
         const access = customerAccessContext(authenticated.link.subject);
+        const commandId = mintSupportId();
+        const correlationId = mintSupportId();
+        const messageId = mintSupportId();
         const view = await options.application.replyToCustomerTicket(access, {
-          commandId: mintSupportId(),
-          correlationId: mintSupportId(),
+          commandId,
+          correlationId,
           ticketId,
-          messageId: mintSupportId(),
+          messageId,
           body: messageBody,
         });
 
+        if (view.ticket.handling === 'assistant')
+          await bestEffortSupportAssistantHint(
+            options.onCustomerMessageAccepted,
+            {
+              ticketId,
+              triggerMessageId: messageId,
+            },
+          );
         options.logger.log('info', 'support.ticket_replied', {
           ticketNumber: view.ticket.number,
         });

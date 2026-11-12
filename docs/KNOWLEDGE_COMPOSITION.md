@@ -393,9 +393,20 @@ prerequisites.
 
 ### Limiter window cleanup and the shared cron
 
-The [scheduler](../worker/src/index.ts) keeps five distinct cron expressions.
-`RATE_LIMIT_CRON` remains `0-57 * * * *`. Its 58 eligible minutes allocate
-two isolated rate invocations followed by one ready-hint invocation:
+The [scheduler](../worker/src/index.ts) configures five cron entries.
+`RATE_LIMIT_CRON` is the all-minute `*/1 * * * *` trigger, including UTC minutes
+58 and 59. When answering processing is enabled, this physical invocation
+belongs exclusively to one bounded answering preparation or paid stage.
+Background cleanup uses its separate `0-58 * * * *` trigger and rotates through
+20 exclusive lanes, including the global limiter and retrieval-ready tasks.
+Each background task runs once per 20 eligible ticks, nominally 20-21 minutes.
+Retained history and contention can consume answering opportunities. The SDK's
+300-second turn deadline and its expiry/human-handoff rules remain authoritative.
+
+With answering OFF, cleanup uses its 18-lane rotation, nominally 18-19 minutes.
+The all-minute rate trigger performs background work only at minutes 0 through
+57. Those 58 eligible minutes allocate two isolated rate invocations followed by
+one ready-hint invocation:
 
 - UTC minutes with remainder 0 or 1 when divided by three run one
   [global limiter cleanup](../worker/src/knowledge-maintenance.ts) page of at
@@ -408,14 +419,12 @@ two isolated rate invocations followed by one ready-hint invocation:
   task. This reduces the previous 29 ready opportunities to 19; ready hints
   remain a latency aid, with atomic SDK jobs and physical recovery preserved.
 
-The original four other expressions remain in place. The cleanup rotation
-retains its original 15 lanes, the separately gated learning-review discovery
-lane and two engineering limiter lanes, for 18 exclusive lanes. Each lane runs
-once per 18 eligible ticks, a nominal 18-19 minutes because minute 59 is
-omitted. The learning lane emits queue hints only; a review phase runs in a
-later Queue invocation. The default root supplies no trusted learning bundle
-and keeps the review flag off. Minutes 58 and 59 have no `RATE_LIMIT_CRON`
-invocation. Before
+The OFF cleanup rotation covers the original 15 lanes, the separately gated
+learning-review discovery lane and two engineering limiter lanes. The learning
+lane emits queue hints for a later Queue invocation. The default root keeps
+the review flag off. The OFF rate callback performs no Store work at minutes
+58 and 59. Mail send, mail reconciliation and release-reconciliation cadences
+retain their separate invocations. Before
 merging, inventory every Worker's current cron triggers in the deployment
 account: pushes to `main` deploy these schedules regardless of the Knowledge
 flag. Deployment replaces this Worker's existing expressions with these
@@ -432,14 +441,16 @@ pages are not snapshots. Descriptors, malformed/legacy `0.2.0` rows and
 unknown layouts remain retained. This does not silently migrate old limiter
 storage; existing Identity/Support maintenance remains in place.
 
-The scheduled limiter ceiling is 780 physical rows per hour if all 39 pages
-succeed and fill. Live windows, descriptors, retained rows and cursor-cycle
+The OFF-mode scheduled limiter ceiling is 780 physical rows per hour if all
+39 pages succeed and fill. The enabled 20-lane cleanup rotation has lower
+background throughput, so that figure describes the OFF cadence. Live windows,
+descriptors, retained rows and cursor-cycle
 overhead consume slots, so this is not a deletion or expiry guarantee. The
 synthetic capacity regression creates 50 browser IP subjects plus one subject
 in each of six Agent Access policy shapes per five-minute cohort: 672 counters
 per hour for four continuing hours, then two hours without new arrivals.
-Seven persistent descriptors, live windows and the minute-58/59 gaps remain
-in the actual Store. It checks backlog and oldest-expiry age at the same
+The OFF-mode regression retains seven persistent descriptors, live windows and
+the minute-58/59 background gaps in the actual Store. It checks backlog and oldest-expiry age at the same
 workload phase after warmup, cursor-cycle progress and eventual drainage.
 This finite workload is not a production benchmark, universal arrival-rate
 bound or passed-gate claim in this guide.
@@ -485,7 +496,7 @@ completions cannot overwrite a newer generation. Already committed projection
 writes are not rolled back after acknowledgement uncertainty.
 
 The existing Knowledge turn in the
-[18-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
+[mode-dependent cleanup rotation](../worker/src/maintenance-schedule.ts) independently
 calls `repairRetrievalPage` with `limit:1` and `maxBatches:1`. Complete physical
 cycles and the SDK's existing atomic article-change jobs remain the recovery
 path for a lost hint, collection/policy changes and unfinished work. The ready

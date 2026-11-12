@@ -90,13 +90,14 @@ function issue(
   value: unknown,
   session: SupportEngineeringRepositorySession,
 ): EngineeringDuplicateIssue {
+  if (!object(value)) throw error();
+  const body = value.body === null ? '' : value.body;
   if (
-    !object(value) ||
     !integer(value.id) ||
     !integer(value.number) ||
     Object.hasOwn(value, 'pull_request') ||
     !text(value.title) ||
-    !prose(value.body, 12_000) ||
+    !prose(body, 12_000) ||
     value.repository_url !== session.path ||
     value.url !== session.path + '/issues/' + value.number ||
     value.html_url !==
@@ -114,7 +115,7 @@ function issue(
     issueId: String(value.id),
     issueNumber: value.number,
     title: value.title,
-    body: value.body,
+    body,
   });
 }
 function acknowledgement(

@@ -1,6 +1,7 @@
 import { SUPPORT_ANSWERING_DISCLOSURE_VERSION, composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, supportAnsweringAdmissionEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
 import { createProductionSupportAnswering, type SupportAssistantProductionEnvironment } from './support-assistant-production';
 import { runSupportAssistantTimer } from './support-assistant-timer';
+import { usageText } from './support-model-usage-ledger';
 import { createSupportAssistantStageDatabase as createSupportAssistantInvocationDatabase } from './support-assistant-stage-budget';
 import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
 import { composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
@@ -125,10 +126,25 @@ function answeringInvocationEnvironment(environment: AppEnv): AppEnv {
   });
 }
 
+/** Fixed categories only: optional composition failures must remain visible
+ * without logging credentials, configuration, provider payloads or exceptions. */
+function logSupportCompositionFailure(
+  logger: ReturnType<typeof createAppLogger>,
+  stage: 'answering_validation' | 'support_runtime' | 'answering_runtime',
+  surfaces?: { readonly engineering: boolean; readonly answering: boolean },
+): void {
+  try {
+    logger.log('error', 'support.composition_unavailable', { stage, ...surfaces });
+  } catch {
+    // A diagnostic sink cannot prevent the healthy surface fallback.
+  }
+}
+
 /** Reject incomplete source-injected bundles before optional ports are used.
  * The component validators still own route/policy/usage semantics. A previously
  * installed surface retains only exact accepted receipt recovery when OFF. */
-function checkedAnswering(options: SupportAnsweringComposition = {}): SupportAnsweringComposition {
+function checkedAnswering(options: SupportAnsweringComposition,
+  logger: ReturnType<typeof createAppLogger>): SupportAnsweringComposition {
   try {
     const recovery = options.recoveryOnly === true || Object.hasOwn(options, 'configuration')
       ? { recoveryOnly: true as const } : {};
@@ -141,12 +157,18 @@ function checkedAnswering(options: SupportAnsweringComposition = {}): SupportAns
       typeof value.readApiKey !== 'function' || typeof value.selectAudience !== 'function' ||
       value.customerPolicy === null || typeof value.customerPolicy !== 'object' ||
       Array.isArray(value.customerPolicy) || typeof value.customerPolicy.version !== 'string' ||
-      value.usagePolicy === null || typeof value.usagePolicy !== 'object' ||
+      value.usagePolicy === null || typeof value.usagePolicy !== 'object' || Array.isArray(value.usagePolicy) ||
       typeof value.route?.readRoute !== 'function' || typeof value.route.counter?.count !== 'function' ||
-      !Array.isArray(value.route.allowlist) || value.route.allowlist.length < 1 || value.route.allowlist.length > 8)
+      !Array.isArray(value.route.allowlist) || value.route.allowlist.length < 1 || value.route.allowlist.length > 8) {
+      logSupportCompositionFailure(logger, 'answering_validation');
       return recovery;
+    }
+    // Use the accounting component's exact version contract before constructing
+    // optional runtimes; its complete policy validator still owns all semantics.
+    usageText(value.usagePolicy.version);
     return options;
   } catch {
+    logSupportCompositionFailure(logger, 'answering_validation');
     return { recoveryOnly: true };
   }
 }
@@ -158,25 +180,31 @@ function createSupportHandler(
   answering: SupportAnsweringComposition = {},
 ) {
   let selectedEngineering = engineering;
-  let selectedAnswering = checkedAnswering(answering);
+  let selectedAnswering = checkedAnswering(answering, logger);
   let configured = supportEngineeringHumanEnabled(selectedEngineering);
   const answerConfigured = selectedAnswering.configuration !== undefined || selectedAnswering.recoveryOnly === true;
   const shared = configured || answerConfigured;
   const identityRuntime = createProductionIdentityRuntime(env, logger, shared ? 512 : undefined);
   function construct(withEngineering: boolean, withAnswering: boolean) {
-    const intake = withEngineering ? supportEngineeringIntakeOptions(selectedEngineering) : undefined;
-    const dependencies = {
-      sessions: identityRuntime.sessions,
-      identity: identityRuntime.identity,
-      identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
-      logger,
-      ...(intake === undefined ? {} : { engineering: intake }),
-      ...(!withAnswering || selectedAnswering.configuration === undefined
-        ? {} : { assistantTurns: supportAnsweringTurns(selectedAnswering) }),
-    };
-    return shared
-      ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
-      : createProductionSupportRuntime(env, dependencies);
+    try {
+      const intake = withEngineering ? supportEngineeringIntakeOptions(selectedEngineering) : undefined;
+      const dependencies = {
+        sessions: identityRuntime.sessions,
+        identity: identityRuntime.identity,
+        identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+        logger,
+        ...(intake === undefined ? {} : { engineering: intake }),
+        ...(!withAnswering || selectedAnswering.configuration === undefined
+          ? {} : { assistantTurns: supportAnsweringTurns(selectedAnswering) }),
+      };
+      return shared
+        ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
+        : createProductionSupportRuntime(env, dependencies);
+    } catch (error) {
+      if (withEngineering || withAnswering)
+        logSupportCompositionFailure(logger, 'support_runtime', { engineering: withEngineering, answering: withAnswering });
+      throw error;
+    }
   }
   let withAnswering = selectedAnswering.configuration !== undefined;
   let supportRuntime;
@@ -204,6 +232,7 @@ function createSupportHandler(
       answeringRuntime = composeSupportAnswering(supportRuntime, logger, selectedAnswering,
         () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true');
     } catch {
+      logSupportCompositionFailure(logger, 'answering_runtime');
       selectedAnswering = { recoveryOnly: true };
       supportRuntime = construct(configured, false);
       answeringRuntime = composeSupportAnswering(supportRuntime, logger, selectedAnswering,
@@ -218,6 +247,7 @@ function createSupportHandler(
     createLimiter: supportRuntime.createLimiter,
     replyLimiter: supportRuntime.replyLimiter,
     logger,
+    onCustomerMessageAccepted: answeringRuntime?.hintAccepted,
     ...(configured ? { engineering: composeSupportEngineeringHuman(supportRuntime, logger, selectedEngineering) } : {}),
     // The stored Support ROLE is the only staff gate (fail closed).
     roleStore: supportRuntime.roleStore,
@@ -245,7 +275,7 @@ function createSupportHandler(
 export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {}) {
   return async (request: Request): Promise<Response> => {
-    const selectedAnswering = checkedAnswering(answering);
+    const selectedAnswering = checkedAnswering(answering, logger);
     if (isSupportEngineeringRequest(new URL(request.url).pathname) && !supportEngineeringHumanEnabled(engineering))
       return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     if (new URL(request.url).pathname.startsWith(SUPPORT_ANSWERING_NAMESPACE)) {
@@ -577,7 +607,7 @@ return {
       if (env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true') {
         await runSupportAssistantTimer({
           isEnabled: () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true',
-          load: async () => checkedAnswering(await answeringFor(env)),
+          load: async () => checkedAnswering(await answeringFor(env), logger),
           create: (answering) => createSupportHandler(answeringInvocationEnvironment(env), logger,
             options.engineering, answering).answering,
           logger,

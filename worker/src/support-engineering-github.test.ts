@@ -365,6 +365,7 @@ describe('bounded public SDK GitHub issue transport', () => {
     'oversize',
     'duplicate',
     'too-many',
+    'body-type',
   ])('withholds malformed duplicate results: %s', async (mode) => {
     const f = fixture();
     f.state.rows.push(remoteIssue());
@@ -374,6 +375,7 @@ describe('bounded public SDK GitHub issue transport', () => {
         'https://api.github.com/repos/foreign/repo';
     if (mode === 'pull-request') f.state.rows[0]!.pull_request = {};
     if (mode === 'oversize') f.state.rows[0]!.body = 'x'.repeat(12_001);
+    if (mode === 'body-type') f.state.rows[0]!.body = 0;
     if (mode === 'duplicate') f.state.rows.push(remoteIssue());
     if (mode === 'too-many')
       f.state.onRequest = async (url) =>
@@ -650,6 +652,7 @@ describe('bounded public SDK GitHub issue transport', () => {
   );
   it.each([
     'body',
+    'null-body',
     'title',
     'labels',
     'pull-request',
@@ -671,6 +674,7 @@ describe('bounded public SDK GitHub issue transport', () => {
           body: request.bundle.body,
         });
         if (mode === 'body') row.body = 'Changed body';
+        if (mode === 'null-body') row.body = null;
         if (mode === 'title') row.title = 'Changed title';
         if (mode === 'labels') row.labels = [];
         if (mode === 'pull-request') row.pull_request = {};
@@ -834,6 +838,55 @@ describe('bounded public SDK GitHub issue transport', () => {
     expect(
       await f.ports.github.reconcile({ ...input, issueId: '502' }, f.context()),
     ).toEqual({ outcome: 'unknown' });
+    expect(
+      f.transport.mock.calls.every(([, init]) => init.method === 'GET'),
+    ).toBe(true);
+  });
+  it('normalizes a null issue description in the actual bounded duplicate search', async () => {
+    const f = fixture();
+    f.state.rows.push(remoteIssue({ body: null }));
+    const found = await f.ports.github.searchDuplicates(
+      { repositoryId: '101', query: 'workspace export', limit: 5 },
+      f.context(),
+    );
+    expect(found.physicalResults).toBe(1);
+    expect(found.issues).toEqual([
+      {
+        repositoryId: '101',
+        issueId: '501',
+        issueNumber: 7,
+        title: f.state.rows[0]!.title,
+        body: '',
+      },
+    ]);
+    expect(f.transport).toHaveBeenCalledTimes(3);
+    expect(
+      f.transport.mock.calls.every(([, init]) => init.method === 'GET'),
+    ).toBe(true);
+  });
+  it('reconciles an exact existing issue with a null description without creating or editing it', async () => {
+    const f = fixture();
+    f.state.rows.push(
+      remoteIssue({ body: null, performed_via_github_app: null }),
+    );
+    const result = await f.ports.github.reconcile(
+      {
+        ...f.identity(),
+        operation: 'link_existing_issue',
+        issueId: '501',
+        issueNumber: 7,
+      },
+      f.context(),
+    );
+    expect(result).toMatchObject({
+      outcome: 'accepted',
+      acknowledgement: {
+        repositoryId: '101',
+        issueId: '501',
+        issueNumber: 7,
+      },
+    });
+    expect(f.transport).toHaveBeenCalledTimes(3);
     expect(
       f.transport.mock.calls.every(([, init]) => init.method === 'GET'),
     ).toBe(true);

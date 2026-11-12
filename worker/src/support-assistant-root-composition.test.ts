@@ -10,6 +10,7 @@ import { RATE_LIMIT_CRON } from './maintenance-schedule';
 import { supportAssistantRoutePolicySha256 } from './support-assistant-config';
 import { publishAnsweringGuide } from './support-answering-fixtures';
 import { customerAccessContext } from './support-access';
+import { supportAssistantReadyTargets } from './support-assistant';
 
 vi.mock('@pegma/storage-cloudflare-d1', async (original) => ({
   ...(await original<typeof import('@pegma/storage-cloudflare-d1')>()),
@@ -114,6 +115,14 @@ async function fixture() {
     ordinary,
     tick,
     bundle: () => createProductionSupportAnswering(environment, f.f.runtime.clock),
+    async hints() {
+      const targets = await Promise.all(
+        ['ready:0', 'ready:1'].map((id) =>
+          f.store.collection(supportAssistantReadyTargets).get({ partition: 'support-answering', id }),
+        ),
+      );
+      return targets.filter((target) => target !== null);
+    },
   };
 }
 
@@ -136,14 +145,15 @@ describe('normal Worker optional answering composition', () => {
       settings.route.approval.validUntil = until;
       settings.tokenizer.validUntil = until;
       settings.usagePolicy.validUntil = until;
-      settings.route.approval.requestPolicySha256 = await supportAssistantRoutePolicySha256(
-        settings.route,
-      );
-      f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON = JSON.stringify(settings);
+      settings.route.approval.requestPolicySha256 =
+        await supportAssistantRoutePolicySha256(settings.route);
+      f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON =
+        JSON.stringify(settings);
       f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
       await publishAnsweringGuide(f.f);
       const packets = [f.packet(), f.packet()];
-      for (const packet of packets) expect((await f.call(f.request(packet))).status).toBe(201);
+      for (const packet of packets)
+        expect((await f.call(f.request(packet))).status).toBe(201);
       vi.stubGlobal('fetch', f.provider);
       const wires: number[] = [];
       const first = Math.floor(started / 60_000) * 60_000 + 60_000;
@@ -161,9 +171,9 @@ describe('normal Worker optional answering composition', () => {
           customerAccessContext(f.principalId),
           packet.command.ticketId,
         );
-        expect(view.messages.filter((message) => message.authorKind === 'assistant')).toHaveLength(
-          1,
-        );
+        expect(
+          view.messages.filter((message) => message.authorKind === 'assistant'),
+        ).toHaveLength(1);
       }
     },
   );
@@ -194,7 +204,10 @@ describe('normal Worker optional answering composition', () => {
     f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
     const engineering: SupportEngineeringHumanComposition = {
       enabled: () => true,
-      configuration: { application: { enabled: true, maxModelAttempts: 0 }, repositories: [] },
+      configuration: {
+        application: { enabled: true, maxModelAttempts: 0 },
+        repositories: [],
+      },
     };
     const options = { engineering };
     const capability = await f.call(f.request(), options);
@@ -247,12 +260,18 @@ describe('normal Worker optional answering composition', () => {
             ? 'selectAudience'
             : 'allowlist',
       );
-      const response = await f.call(f.request(), { answering: { ...supplied, configuration } });
+      const response = await f.call(f.request(), {
+        answering: { ...supplied, configuration },
+      });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ enabled: false });
       expect(route).not.toHaveBeenCalled();
       expect(
-        (await f.call(f.ordinary(), { answering: { ...supplied, configuration } })).status,
+        (
+          await f.call(f.ordinary(), {
+            answering: { ...supplied, configuration },
+          })
+        ).status,
       ).toBe(201);
       expect(f.network).not.toHaveBeenCalled();
     },
@@ -288,7 +307,9 @@ describe('normal Worker optional answering composition', () => {
     expect(
       (
         await f.call(
-          alter(f.request(), (headers) => headers.set('Authorization', 'Bearer fictional-agent')),
+          alter(f.request(), (headers) =>
+            headers.set('Authorization', 'Bearer fictional-agent'),
+          ),
         )
       ).status,
     ).toBe(403);
@@ -297,7 +318,8 @@ describe('normal Worker optional answering composition', () => {
       const response = await f.call(
         alter(f.request(packet), (headers) => {
           if (fault === 'cookie') headers.delete('Cookie');
-          else if (fault === 'origin') headers.set('Origin', 'https://foreign.example.test');
+          else if (fault === 'origin')
+            headers.set('Origin', 'https://foreign.example.test');
           else headers.delete('X-Pegma-CSRF');
         }),
       );
@@ -321,6 +343,213 @@ describe('normal Worker optional answering composition', () => {
     expect(replay.status).toBe(201);
     expect(await replay.json()).toMatchObject({ initialMode: 'assistant' });
     expect(await f.f.human.rows(packet.command.ticketId)).toEqual(rows);
+    expect(f.network).not.toHaveBeenCalled();
+  });
+
+  it('contains an actual scheduled factory throw in the timer with a finite diagnostic', async () => {
+    const f = await fixture();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(d1.createCloudflareD1Store).mockImplementation(() => {
+      throw new Error('FICTIONAL_PRIVATE_FACTORY_CONTEXT');
+    });
+    await expect(f.tick(Date.now())).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledWith({
+      level: 'error',
+      message: 'support.answering.failed',
+      fields: { stage: 'worker', reason: 'unavailable' },
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain(
+      'FICTIONAL_PRIVATE_FACTORY_CONTEXT',
+    );
+    expect(f.network).not.toHaveBeenCalled();
+  });
+
+  it('diagnoses actual engineering construction fallback without disabling healthy answering', async () => {
+    const f = await fixture();
+    f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const configuration = { application: { enabled: true }, repositories: [] };
+    Object.defineProperty(configuration, 'application', {
+      get() {
+        throw new Error('FICTIONAL_PRIVATE_ENGINEERING_CONFIGURATION');
+      },
+    });
+    const response = await f.call(f.request(), {
+      engineering: { enabled: () => true, configuration },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ enabled: true });
+    expect(error).toHaveBeenCalledWith({
+      level: 'error',
+      message: 'support.composition_unavailable',
+      fields: { stage: 'support_runtime', engineering: true, answering: true },
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain(
+      'FICTIONAL_PRIVATE_ENGINEERING_CONFIGURATION',
+    );
+    expect(f.network).not.toHaveBeenCalled();
+  });
+
+  it('diagnoses actual answering runtime fallback while ordinary human support remains healthy', async () => {
+    const f = await fixture();
+    const supplied = await f.bundle();
+    if (supplied.configuration === undefined)
+      throw new Error('Expected fictional configuration.');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const answering = {
+      ...supplied,
+      configuration: {
+        ...supplied.configuration,
+        usagePolicy: {
+          ...supplied.configuration.usagePolicy,
+          maxCostMicros: 0,
+        },
+      },
+    };
+    const response = await f.call(f.ordinary(), { answering });
+    expect(response.status).toBe(201);
+    expect(error).toHaveBeenCalledWith({
+      level: 'error',
+      message: 'support.composition_unavailable',
+      fields: { stage: 'answering_runtime' },
+    });
+    expect(f.network).not.toHaveBeenCalled();
+  });
+
+  it.each(['enabled', 'configuration', 'route'] as const)(
+    'diagnoses a throwing injected %s observation without exposing its exception',
+    async (fault) => {
+      const f = await fixture();
+      const supplied = await f.bundle();
+      if (supplied.configuration === undefined)
+        throw new Error('Expected fictional configuration.');
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const answering = {
+        ...supplied,
+        configuration: { ...supplied.configuration },
+      };
+      const fail = () => {
+        throw new Error('FICTIONAL_PRIVATE_ANSWERING_CONFIGURATION');
+      };
+      if (fault === 'enabled') answering.enabled = fail;
+      else
+        Object.defineProperty(
+          fault === 'configuration' ? answering : answering.configuration,
+          fault,
+          { get: fail },
+        );
+      const response = await f.call(f.request(), { answering });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ enabled: false });
+      expect(error).toHaveBeenCalledWith({
+        level: 'error',
+        message: 'support.composition_unavailable',
+        fields: { stage: 'answering_validation' },
+      });
+      expect(JSON.stringify(error.mock.calls)).not.toContain(
+        'FICTIONAL_PRIVATE_ANSWERING_CONFIGURATION',
+      );
+      expect(f.network).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, 1, '', ' padded ', 'v'.repeat(257)])(
+    'refuses malformed injected usage version %s before optional Store or route work',
+    async (version) => {
+      const f = await fixture();
+      const supplied = await f.bundle();
+      if (supplied.configuration === undefined)
+        throw new Error('Expected fictional configuration.');
+      const route = vi.fn(supplied.configuration.route.readRoute);
+      const configuration = {
+        ...supplied.configuration,
+        usagePolicy: { ...supplied.configuration.usagePolicy },
+        route: { ...supplied.configuration.route, readRoute: route },
+      };
+      Reflect.set(configuration.usagePolicy, 'version', version);
+      f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.mocked(d1.createCloudflareD1Store).mockClear();
+      const response = await f.call(f.request(), {
+        answering: { ...supplied, configuration },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ enabled: false });
+      expect(d1.createCloudflareD1Store).not.toHaveBeenCalled();
+      expect(route).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith({
+        level: 'error',
+        message: 'support.composition_unavailable',
+        fields: { stage: 'answering_validation' },
+      });
+      expect(f.network).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    'keeps ordinary human traffic healthy with optional configuration throwing while enabled=%s',
+    async (enabled) => {
+      const f = await fixture();
+      f.environment.PEGMA_SUPPORT_ASSISTANT_ENABLED = String(enabled);
+      const configuration = vi.fn(() => {
+        throw new Error('FICTIONAL_PRIVATE_OPTIONAL_CONFIGURATION');
+      });
+      const credential = vi.fn(() => {
+        throw new Error('FICTIONAL_PRIVATE_OPTIONAL_CREDENTIAL');
+      });
+      Object.defineProperty(
+        f.environment,
+        'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON',
+        { get: configuration },
+      );
+      Object.defineProperty(
+        f.environment,
+        'SUPPORT_ASSISTANT_OPENROUTER_API_KEY',
+        { get: credential },
+      );
+      const response = await f.call(f.ordinary());
+      expect(response.status).toBe(201);
+      expect(configuration).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      expect(credential).not.toHaveBeenCalled();
+      expect(f.network).not.toHaveBeenCalled();
+      expect(await f.hints()).toEqual([]);
+    },
+  );
+
+  it('retains a causal assistant turn when an ordinary customer reply follows explicit assistant admission', async () => {
+    const f = await fixture();
+    f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
+    const packet = f.packet();
+    expect((await f.call(f.request(packet))).status).toBe(201);
+    const headers = new Headers(f.request(packet).headers);
+    headers.delete('X-Pegma-Support-Command');
+    const reply = new Request(
+      'https://pegma.dev/api/support/tickets/' +
+        packet.command.ticketId +
+        '/replies',
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          body: 'A fictional causal follow-up question.',
+        }),
+      },
+    );
+    expect((await f.call(reply)).status).toBe(201);
+    const rows = await f.f.human.rows(packet.command.ticketId);
+    expect(rows.filter((row) => row.kind === 'assistant_turn')).toHaveLength(2);
+    const message = rows.find(
+      (row) => row.kind === 'message' && row.message.id !== packet.command.messageId,
+    );
+    if (message?.kind !== 'message')
+      throw new Error('Expected the actual accepted customer reply.');
+    expect(await f.hints()).toContainEqual({
+      partition: 'support-answering',
+      id: expect.stringMatching(/^ready:[01]$/u),
+      ticketId: packet.command.ticketId,
+      triggerMessageId: message.message.id,
+      createdAt: expect.any(String),
+    });
     expect(f.network).not.toHaveBeenCalled();
   });
 });

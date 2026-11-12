@@ -454,13 +454,6 @@ describe('bounded support OpenRouter wire', () => {
       (d: ReturnType<typeof document>) => ({ ...d, model: 'other/model' }),
     ],
     [
-      'truncation',
-      (d: ReturnType<typeof document>) => ({
-        ...d,
-        choices: [{ ...d.choices[0], finish_reason: 'length' }],
-      }),
-    ],
-    [
       'multiple choices',
       (d: ReturnType<typeof document>) => ({
         ...d,
@@ -944,6 +937,95 @@ describe('observed zero-media provider usage compatibility', () => {
 });
 
 describe('validated answering accounting regressions', () => {
+  it('accepts a null native finish reason with a completed answer', async () => {
+    const f = await fixture();
+    const value = document();
+    const fetch = vi.fn(async () =>
+      jsonResponse({
+        ...value,
+        choices: [{ ...value.choices[0], native_finish_reason: null }],
+      }),
+    );
+    const model = createSupportAssistantOpenRouterModel({
+      clock: f.clock,
+      configuration: f.configuration,
+      readApiKey: () => 'fictional-key',
+      fetch,
+    });
+    const result = await model.generate(f.input, f.context, f.config);
+    expect(JSON.parse(result.outputJson)).toMatchObject({ kind: 'escalate' });
+    expect(result.usage.costMicros).toBe(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['created', 'invalid_response'],
+    ['choice-index', 'invalid_response'],
+    ['detail-integer', 'invalid_response'],
+    ['usage-integer', 'usage_invalid'],
+    ['cache-policy', 'usage_invalid'],
+  ] as const)(
+    'classifies %s separately from native billing errors',
+    async (mode, code) => {
+      const f = await fixture();
+      const value = document();
+      if (mode === 'created') value.created = 0.5;
+      if (mode === 'choice-index') value.choices[0]!.index = 0.5;
+      if (mode === 'usage-integer') value.usage.prompt_tokens = 0.5;
+      const usage =
+        mode === 'detail-integer' || mode === 'cache-policy'
+          ? {
+              ...value.usage,
+              prompt_tokens_details: {
+                cached_tokens: mode === 'detail-integer' ? 0.5 : 1,
+              },
+            }
+          : value.usage;
+      const fetch = vi.fn(async () => jsonResponse({ ...value, usage }));
+      const model = createSupportAssistantOpenRouterModel({
+        clock: f.clock,
+        configuration: f.configuration,
+        readApiKey: () => 'fictional-key',
+        fetch,
+      });
+      await expect(
+        model.generate(f.input, f.context, f.config),
+      ).rejects.toMatchObject({ code });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['length', 'empty', 'byte-limit'] as const)(
+    'preserves native accounting for semantically unusable %s content',
+    async (mode) => {
+      const f = await fixture();
+      const value = document(
+        mode === 'empty'
+          ? ''
+          : mode === 'byte-limit'
+            ? '\u00e9'.repeat(2_001)
+            : '{',
+      );
+      if (mode === 'length') value.choices[0]!.finish_reason = 'length';
+      const fetch = vi.fn(async () => jsonResponse(value));
+      const model = createSupportAssistantOpenRouterModel({
+        clock: f.clock,
+        configuration: f.configuration,
+        readApiKey: () => 'fictional-key',
+        fetch,
+      });
+      const result = await model.generate(f.input, f.context, f.config);
+      expect(result.outputJson).toBe('');
+      expect(result.usage).toEqual({
+        inputTokens: 200,
+        outputTokens: 40,
+        costMicros: 1,
+        currency: 'USD',
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(['invalid-json', 'invalid-answer', 'output-tokens'] as const)(
     'preserves known native accounting for unusable %s output',
     async (mode) => {

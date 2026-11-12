@@ -29,10 +29,22 @@ const rawLedger = defineCollection<StoredRecord>({
 const key = { partition: 'support_answer', id: 'budget' };
 
 describe('native billing through the public SDK and actual durable host ledger', () => {
-  it.each(['over-budget', 'invalid-output'] as const)(
-    'settles %s native accounting once without an answer',
+  it.each([
+    'over-budget',
+    'invalid-output',
+    'finish-length',
+    'empty-content',
+    'null-content',
+    'whitespace-content',
+    'oversized-content',
+    'oversized-utf8',
+    'unparsed-body-limit',
+    'unparsed-json',
+  ] as const)(
+    'retains %s native accounting once without an answer',
     async (mode) => {
       const costMicros = mode === 'over-budget' ? 150_000 : 474;
+      const known = !mode.startsWith('unparsed-');
       const store = createMemoryStore();
       const f = await supportAssistantFixture({ store });
       const original = f.configuration();
@@ -110,8 +122,28 @@ describe('native billing through the public SDK and actual durable host ledger',
       expect((await configuration.configuration.resolve()).outcome).toBe(
         'ready',
       );
-      const fetch = vi.fn(async () =>
-        Response.json({
+      const fetch = vi.fn(async () => {
+        if (mode === 'unparsed-body-limit')
+          return new Response('x'.repeat(262_145), {
+            headers: { 'content-type': 'application/json' },
+          });
+        let content: string | null = JSON.stringify({
+          kind: 'escalate',
+          text: 'Contact support.',
+          reason: 'other',
+          citations: [],
+        });
+        if (mode === 'invalid-output') content = '{';
+        if (mode === 'empty-content') content = '';
+        if (mode === 'null-content') content = null;
+        if (mode === 'whitespace-content') content = '  \n';
+        if (mode === 'oversized-content')
+          content = 'x'.repeat(config.budgets.maxOutputBytes + 1);
+        if (mode === 'oversized-utf8')
+          content = '\u00e9'.repeat(
+            Math.floor(config.budgets.maxOutputBytes / 2) + 1,
+          );
+        const document = {
           id: 'gen-fictional-overage',
           object: 'chat.completion',
           provider: config.provider,
@@ -119,18 +151,13 @@ describe('native billing through the public SDK and actual durable host ledger',
           choices: [
             {
               index: 0,
-              finish_reason: 'stop',
+              finish_reason: mode === 'finish-length' ? 'length' : 'stop',
+              ...(mode === 'finish-length'
+                ? { native_finish_reason: 'length' }
+                : {}),
               message: {
                 role: 'assistant',
-                content:
-                  mode === 'invalid-output'
-                    ? '{'
-                    : JSON.stringify({
-                        kind: 'escalate',
-                        text: 'Contact support.',
-                        reason: 'other',
-                        citations: [],
-                      }),
+                content,
               },
             },
           ],
@@ -141,8 +168,13 @@ describe('native billing through the public SDK and actual durable host ledger',
             cost: mode === 'over-budget' ? 0.15 : 0.00047344,
             currency: 'USD',
           },
-        }),
-      );
+        };
+        if (mode === 'unparsed-json')
+          return new Response(JSON.stringify(document).slice(0, -1), {
+            headers: { 'content-type': 'application/json' },
+          });
+        return Response.json(document);
+      });
       const model = createSupportAssistantOpenRouterModel({
         clock: f.clock,
         configuration,
@@ -161,21 +193,32 @@ describe('native billing through the public SDK and actual durable host ledger',
       expect(retained).not.toBeNull();
       const payload: unknown = JSON.parse(String(retained!.payload));
       expect(payload).toMatchObject({
-        spentMicros: String(costMicros),
+        spentMicros: known ? String(costMicros) : '0',
         accountingHold: false,
         reservations: [
           {
-            state: 'known',
+            state: known ? 'known' : 'unknown',
             reservedMicros: 10_000,
-            usage: {
-              inputTokens: 100,
-              outputTokens: 30,
-              costMicros,
-              currency: 'USD',
-            },
+            ...(known
+              ? {
+                  usage: {
+                    inputTokens: 100,
+                    outputTokens: 30,
+                    costMicros,
+                    currency: 'USD',
+                  },
+                }
+              : { usage: null }),
           },
         ],
       });
+      if (!known) {
+        expect(payload).toHaveProperty('reservations.0.usage', null);
+        await f.tick();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(await store.collection(rawLedger).get(key)).toEqual(retained);
+        return;
+      }
       const context = f.usageReservations[0];
       if (!context) throw new Error('The real SDK did not reserve its attempt');
       const identity = {

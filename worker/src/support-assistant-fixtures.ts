@@ -168,6 +168,7 @@ export async function supportAssistantFixture(
   backend: AssistantBackend,
   setup: {
     readonly empty?: boolean;
+    readonly retainedHumanTickets?: number;
     readonly maxPoolCostMicros?: number;
     readonly maxAttempts?: number;
     readonly applicationMaxAttempts?: number;
@@ -565,7 +566,11 @@ export async function supportAssistantFixture(
     }
     throw new Error('Fictional guidance index exceeded its bounded setup.');
   }
-  async function createTicket(ticketId = 'fictional-answer-ticket') {
+  async function createTicket(
+    ticketId = 'fictional-answer-ticket',
+    assistant = true,
+    messageId: string = crypto.randomUUID(),
+  ) {
     const producer = resolveAccess(
       { principalId: owner },
       {
@@ -580,15 +585,29 @@ export async function supportAssistantFixture(
       commandId: crypto.randomUUID(),
       correlationId: crypto.randomUUID(),
       ticketId,
-      messageId: crypto.randomUUID(),
+      messageId,
       subject: 'Workspace export help',
       body: 'How do I export my workspace?',
-      initialHandling: 'assistant',
+      ...(assistant ? { initialHandling: 'assistant' as const } : {}),
     });
     return ticketId;
   }
   if (!setup.empty) {
     await configureKnowledge();
+    const retained = setup.retainedHumanTickets ?? 0;
+    if (!Number.isSafeInteger(retained) || retained < 0 || retained > 32)
+      throw new TypeError(
+        'Fictional retained-ticket setup is outside its bound.',
+      );
+    for (let index = 0; index < retained; ++index) {
+      const ticketId = 'a-fictional-history-' + String(index).padStart(2, '0');
+      await createTicket(ticketId, false);
+      await support.resolveTicket(await access(operator), {
+        commandId: crypto.randomUUID(),
+        correlationId: crypto.randomUUID(),
+        ticketId,
+      });
+    }
     await createTicket();
   }
   function answer(context: AssistantAttemptContext): AssistantModelResult {
@@ -634,8 +653,9 @@ export async function supportAssistantFixture(
       ...application,
       async scanAssistantTurnCandidates(currentAccess, bounds) {
         serviceContexts.push(currentAccess);
-        const page = await stage('application.scanAssistantTurnCandidates', () =>
-          application.scanAssistantTurnCandidates(currentAccess, bounds),
+        const page = await stage(
+          'application.scanAssistantTurnCandidates',
+          () => application.scanAssistantTurnCandidates(currentAccess, bounds),
         );
         scanned.push({
           ...bounds,
@@ -787,7 +807,10 @@ export async function supportAssistantFixture(
       const result = await tick({}, control);
       if (result.outcome === 'prepared' || result.outcome === 'deferred') {
         advance(
-          Math.max(0, Date.parse(result.nextAttemptAt) - Date.parse(clock.now())),
+          Math.max(
+            0,
+            Date.parse(result.nextAttemptAt) - Date.parse(clock.now()),
+          ),
         );
         continue;
       }
@@ -924,7 +947,7 @@ export function registerSupportAssistantCases(
   createBackend: () => Promise<AssistantBackend>,
 ) {
   describe('answer-only host composition (' + name + ')', () => {
-    it('commits one attributed answer from actual published KB015 sources without private canaries', async () => {
+    it('commits one attributed answer from actual published KB016 sources without private canaries', async () => {
       const f = await supportAssistantFixture(await createBackend());
       await f.support.addNote(await f.access(operator), {
         commandId: crypto.randomUUID(),
@@ -977,7 +1000,7 @@ export function registerSupportAssistantCases(
         f.scanned.every(
           (page) =>
             page.limit === SUPPORT_ASSISTANT_SCAN_LIMIT &&
-            page.physicalRows <= 1 &&
+            page.physicalRows <= SUPPORT_ASSISTANT_SCAN_LIMIT &&
             page.pages === 1,
         ),
       ).toBe(true);
@@ -1360,22 +1383,32 @@ export function registerSupportAssistantCases(
       });
       const first = f.untilTurn();
       let second: Awaited<ReturnType<typeof f.tick>> | undefined;
+      let held: Awaited<ReturnType<typeof f.checkpoint>>;
       try {
         await waitForAssistantGate(entered.ready, first);
+        held = await f.checkpoint();
+        if (held === null || held.notBefore === undefined)
+          throw new Error(
+            'The actual paid owner did not retain its due fence.',
+          );
         second = await f.tick();
+        expect(second).toEqual({
+          outcome: 'deferred',
+          nextAttemptAt: held.notBefore,
+          checkpointSaved: false,
+        });
+        expect(await f.checkpoint()).toEqual(held);
+        expect(f.modelCalls).toHaveLength(1);
       } finally {
         resume.release();
       }
       const completed = await first;
-      expect(second).toMatchObject({
-        outcome: 'scanned',
-        checkpointSaved: true,
-      });
       expect(completed).toMatchObject({
         outcome: 'scanned',
         turn: 'completed',
-        checkpointSaved: false,
+        checkpointSaved: true,
       });
+      expect((await f.checkpoint())?.generation).toBe(held!.generation + 1);
       expect(f.modelCalls).toHaveLength(1);
       expect(
         (await f.messages()).filter(

@@ -1,3 +1,4 @@
+import { bestEffortSupportAssistantHint } from './support-assistant';
 import { supportPermissions } from '@pegma/support-desk-application';
 import type { Logger } from '@pegma/spine';
 import {
@@ -11,8 +12,15 @@ import {
 } from './api-auth';
 import { createAgentPrincipalResolver } from './agent-authority';
 import { supportHumanBrowser } from './support-human-auth';
-import { supportBrowserCommand, SUPPORT_BROWSER_COMMAND_HEADER } from './support-browser-commands';
-import { mapSupportError, PEGMA_SUPPORT_CATEGORY_SET, type SupportRuntime } from './support-desk';
+import {
+  supportBrowserCommand,
+  SUPPORT_BROWSER_COMMAND_HEADER,
+} from './support-browser-commands';
+import {
+  mapSupportError,
+  PEGMA_SUPPORT_CATEGORY_SET,
+  type SupportRuntime,
+} from './support-desk';
 import { publicTicketView } from './support-api';
 import type { SupportAnsweringRuntime } from './support-assistant-composition';
 
@@ -30,9 +38,10 @@ export function createSupportAnsweringIngress(
     const url = new URL(request.url);
     if (
       url.search !== '' ||
-      !['/api/support/assistant/capability', '/api/support/assistant/tickets'].includes(
-        url.pathname,
-      )
+      ![
+        '/api/support/assistant/capability',
+        '/api/support/assistant/tickets',
+      ].includes(url.pathname)
     )
       return json({ error: 'not_found' }, { status: 404 });
     const capability = url.pathname.endsWith('/capability');
@@ -96,18 +105,25 @@ export function createSupportAnsweringIngress(
       try {
         const initial = await current();
         if (capability) {
-          const available = await answering.admission(initial.access.principalId);
+          const available = await answering.admission(
+            initial.access.principalId,
+          );
           const final = await current();
           available?.assertCurrent(final.access);
           return json({
             enabled: available !== null,
-            ...(available === null ? {} : { disclosureVersion: answering.disclosureVersion }),
+            ...(available === null
+              ? {}
+              : { disclosureVersion: answering.disclosureVersion }),
             csrfToken: final.authenticated.csrfToken,
           });
         }
         if (request.headers.get(SUPPORT_BROWSER_COMMAND_HEADER) !== '1')
           throw new ApiError(400, 'invalid_request');
-        await enforceRateLimit(runtime.createLimiter, initial.access.principalId);
+        await enforceRateLimit(
+          runtime.createLimiter,
+          initial.access.principalId,
+        );
         const body = optionalKeysObject(
           await readJson(request, { timeoutMs: 10_000 }),
           ['command', 'subject', 'body', 'category', 'preference'],
@@ -119,7 +135,10 @@ export function createSupportAnsweringIngress(
           actor.access.principalId,
           'create',
         );
-        if (body.preference !== 'human' && body.preference !== 'assistant_if_available')
+        if (
+          body.preference !== 'human' &&
+          body.preference !== 'assistant_if_available'
+        )
           throw new ApiError(400, 'invalid_request');
         const preference = body.preference;
         const disclosureVersion =
@@ -127,13 +146,19 @@ export function createSupportAnsweringIngress(
             ? undefined
             : boundedString(body.disclosureVersion, 1, 200);
         const subject = boundedString(body.subject, 1, 200);
-        const text = boundedString(body.body, 1, 20_000, { allowMultiline: true });
+        const text = boundedString(body.body, 1, 20_000, {
+          allowMultiline: true,
+        });
         const category = boundedString(body.category, 1, 200);
-        if (!PEGMA_SUPPORT_CATEGORY_SET.has(category)) throw new ApiError(400, 'invalid_request');
+        if (!PEGMA_SUPPORT_CATEGORY_SET.has(category))
+          throw new ApiError(400, 'invalid_request');
         // A changed contact admits only exact accepted recovery. Do not pre-read
         // the target or renew route/disclosure before the SDK receipt lookup.
-        const fresh = answering.admissionEnabled() && expectedRequesterEmail === email;
-        let admission: Awaited<ReturnType<SupportAnsweringRuntime['admission']>> = null;
+        const fresh =
+          answering.admissionEnabled() && expectedRequesterEmail === email;
+        let admission: Awaited<
+          ReturnType<SupportAnsweringRuntime['admission']>
+        > = null;
         const result = await runtime.application.createAdmittedCustomerTicket(
           actor.access,
           {
@@ -144,20 +169,27 @@ export function createSupportAnsweringIngress(
             category,
             preference,
             ...(disclosureVersion === undefined ? {} : { disclosureVersion }),
-            ...(expectedRequesterEmail === null ? {} : { requesterEmail: expectedRequesterEmail }),
+            ...(expectedRequesterEmail === null
+              ? {}
+              : { requesterEmail: expectedRequesterEmail }),
           },
           fresh
             ? {
                 signal: controller.signal,
                 async resolveAssistantStart() {
-                  if (disclosureVersion !== answering.disclosureVersion) return null;
-                  admission = await answering.admission(actor.access.principalId);
+                  if (disclosureVersion !== answering.disclosureVersion)
+                    return null;
+                  admission = await answering.admission(
+                    actor.access.principalId,
+                  );
                   return admission?.access ?? null;
                 },
                 async verifyBeforeCommit(mode) {
                   let finalAdmission: typeof admission = null;
                   if (mode === 'assistant') {
-                    const latest = await answering.admission(actor.access.principalId);
+                    const latest = await answering.admission(
+                      actor.access.principalId,
+                    );
                     if (
                       latest === null ||
                       admission === null ||
@@ -170,7 +202,9 @@ export function createSupportAnsweringIngress(
                   // Only fresh SDK creates reach this guard. Re-observe the
                   // public Identity contact after the body and admission waits;
                   // an exact accepted receipt never depends on today's email.
-                  const user = await runtime.identity.getUser(actor.access.principalId);
+                  const user = await runtime.identity.getUser(
+                    actor.access.principalId,
+                  );
                   if (
                     user === null ||
                     user.principalId !== actor.access.principalId ||
@@ -187,7 +221,8 @@ export function createSupportAnsweringIngress(
                   sync();
                   return () => {
                     sync();
-                    if (!answering.admissionEnabled()) throw new ApiError(409, 'admission_changed');
+                    if (!answering.admissionEnabled())
+                      throw new ApiError(409, 'admission_changed');
                     finalAdmission?.assertCurrent(finalBrowser.access);
                     return true;
                   };
@@ -195,6 +230,16 @@ export function createSupportAnsweringIngress(
               }
             : undefined,
         );
+        // Leave closing browser budget intact. Hints never turn a known ACK
+        // into an unknown result and never carry a browser actor or body.
+        if (
+          result.initialMode === 'assistant' &&
+          performance.now() - started < 23_500
+        )
+          await bestEffortSupportAssistantHint(answering.hintAccepted, {
+            ticketId: command.ticketId,
+            triggerMessageId: command.messageId,
+          });
         const final = await current();
         return json(
           {
@@ -212,14 +257,21 @@ export function createSupportAnsweringIngress(
               status: error.status,
               ...(error.retryAfterSeconds === undefined
                 ? {}
-                : { headers: { 'Retry-After': String(error.retryAfterSeconds) } }),
+                : {
+                    headers: { 'Retry-After': String(error.retryAfterSeconds) },
+                  }),
             },
           );
         const mapped = mapSupportError(error);
         if (mapped.status >= 500)
-          logger.log('error', 'support.answering_ingress_unavailable', { correlationId });
+          logger.log('error', 'support.answering_ingress_unavailable', {
+            correlationId,
+          });
         return json(
-          { error: mapped.code, ...(mapped.status >= 500 ? { correlationId } : {}) },
+          {
+            error: mapped.code,
+            ...(mapped.status >= 500 ? { correlationId } : {}),
+          },
           { status: mapped.status === 500 ? 503 : mapped.status },
         );
       }
@@ -227,8 +279,13 @@ export function createSupportAnsweringIngress(
     try {
       return await Promise.race([execute(), stopped]);
     } catch {
-      logger.log('warn', 'support.answering_ingress_unavailable', { correlationId });
-      return json({ error: 'acknowledgement_unknown', correlationId }, { status: 503 });
+      logger.log('warn', 'support.answering_ingress_unavailable', {
+        correlationId,
+      });
+      return json(
+        { error: 'acknowledgement_unknown', correlationId },
+        { status: 503 },
+      );
     } finally {
       clearTimeout(timer);
       request.signal.removeEventListener('abort', stop);

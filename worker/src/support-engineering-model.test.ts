@@ -746,6 +746,18 @@ describe('actual public SDK engineering coordinator with fictional HTTP', () => 
 });
 
 describe('validated engineering accounting and destination regressions', () => {
+  it('accepts a null native finish reason for a valid engineering candidate', async () => {
+    const f = await fixture();
+    await f.ready();
+    Reflect.set(f.state.document.choices[0]!, 'native_finish_reason', null);
+    const result = await f.ports.model.generate(f.input, f.context, f.config);
+    expect(JSON.parse(result.outputJson)).toMatchObject({
+      title: candidate().title,
+      security: 'ordinary',
+    });
+    expect(result.usage.costMicros).toBeGreaterThan(0);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
   it.each([
     'confidence',
     'duplicate-json',

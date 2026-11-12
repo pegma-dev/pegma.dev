@@ -146,14 +146,19 @@ export function text(value: unknown, maximum: number): string {
   return value;
 }
 
-export function integer(value: unknown, maximum: number, minimum = 0): number {
+export function integer(
+  value: unknown,
+  maximum: number,
+  minimum = 0,
+  failure: SupportOpenRouterModelFailure = 'usage_invalid',
+): number {
   if (
     typeof value !== 'number' ||
     !Number.isSafeInteger(value) ||
     value < minimum ||
     value > maximum
   )
-    fail('usage_invalid');
+    fail(failure);
   return value;
 }
 
@@ -306,8 +311,15 @@ function details(
 ): void {
   if (raw === undefined) return;
   const values = object(raw, allowed, []);
-  for (const value of Object.values(values))
-    integer(value, requireZero ? 0 : maximum);
+  for (const value of Object.values(values)) {
+    const count = integer(
+      value,
+      Number.MAX_SAFE_INTEGER,
+      0,
+      'invalid_response',
+    );
+    if (count > (requireZero ? 0 : maximum)) fail('usage_invalid');
+  }
 }
 
 function responseResult(
@@ -343,7 +355,7 @@ function responseResult(
   const headerId = response.headers.get('x-generation-id');
   if (headerId !== null && headerId !== requestId) fail('invalid_response');
   if (data.created !== undefined)
-    integer(data.created, Number.MAX_SAFE_INTEGER);
+    integer(data.created, Number.MAX_SAFE_INTEGER, 0, 'invalid_response');
   if (data.system_fingerprint !== undefined && data.system_fingerprint !== null)
     scalar(data.system_fingerprint);
   if (
@@ -361,16 +373,21 @@ function responseResult(
   );
   if (
     choice.index !== 0 ||
-    choice.finish_reason !== 'stop' ||
+    (choice.finish_reason !== 'stop' && choice.finish_reason !== 'length') ||
     (choice.logprobs !== undefined && choice.logprobs !== null)
   )
     fail('invalid_response');
   if (
     choice.native_finish_reason !== undefined &&
-    (typeof choice.native_finish_reason !== 'string' ||
-      !['stop', 'end_turn', 'completed'].includes(choice.native_finish_reason))
-  )
-    fail('invalid_response');
+    choice.native_finish_reason !== null
+  ) {
+    const nativeReason = scalar(choice.native_finish_reason);
+    if (
+      choice.finish_reason === 'stop' &&
+      !['stop', 'end_turn', 'completed'].includes(nativeReason)
+    )
+      fail('invalid_response');
+  }
   const message = object(
     choice.message,
     [
@@ -401,9 +418,8 @@ function responseResult(
     )
       fail('invalid_response');
   }
-  const content = text(message.content, context.budgets.maxOutputBytes);
-  if (encoder.encode(content).byteLength > context.budgets.maxOutputBytes)
-    fail('response_limit');
+  if (typeof message.content !== 'string' && message.content !== null)
+    fail('invalid_response');
   const usage = object(
     data.usage,
     [
@@ -491,8 +507,11 @@ function responseResult(
     inputTokens + outputTokens > context.budgets.maxContextTokens ||
     actualCostMicros > context.budgets.maxCostMicros;
   let outputJson = '';
-  if (!overBudget) {
+  if (!overBudget && choice.finish_reason === 'stop') {
     try {
+      const content = text(message.content, context.budgets.maxOutputBytes);
+      if (encoder.encode(content).byteLength > context.budgets.maxOutputBytes)
+        fail('response_limit');
       outputJson = convertOutput(content);
     } catch {
       // Unusable output still carries validated native accounting.
