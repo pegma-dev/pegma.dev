@@ -43,17 +43,24 @@ export interface SupportAssistantProductionConfiguration {
   readonly tokenizer: QualifiedSupportAssistantCounter['qualification'];
 }
 
-export const SUPPORT_ASSISTANT_CREDENTIAL_REF = 'pegma-support-answering-openrouter';
+export const SUPPORT_ASSISTANT_CREDENTIAL_REF =
+  'pegma-support-answering-openrouter';
 export const SUPPORT_ASSISTANT_SYNTHETIC_ROLE = 'SupportAnsweringSynthetic';
 const MODEL = 'openai/gpt-4.1-mini';
 const PROVIDER = 'Azure';
 const ENDPOINT_TAG = 'azure/swedencentral';
 const FRAMING = 1024;
 const WEEK = 7 * 24 * 60 * 60_000;
-const recovery: SupportAnsweringComposition = Object.freeze({ recoveryOnly: true });
+const recovery: SupportAnsweringComposition = Object.freeze({
+  recoveryOnly: true,
+});
 
-function object(value: unknown, names: readonly string[]): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError();
+function object(
+  value: unknown,
+  names: readonly string[],
+): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    throw new TypeError();
   const result = value as Record<string, unknown>;
   if (
     Object.keys(result).length !== names.length ||
@@ -73,13 +80,21 @@ function text(value: unknown): string {
   return value;
 }
 function integer(value: unknown, maximum: number): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > maximum)
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > maximum
+  )
     throw new TypeError();
   return value;
 }
 function instant(value: unknown): string {
   const result = text(value);
-  if (!Number.isFinite(Date.parse(result)) || new Date(result).toISOString() !== result)
+  if (
+    !Number.isFinite(Date.parse(result)) ||
+    new Date(result).toISOString() !== result
+  )
     throw new TypeError();
   return result;
 }
@@ -120,7 +135,10 @@ function pool(value: unknown): SupportAssistantUsagePolicy {
     pricingRef: text(data.pricingRef),
     currency: 'USD',
     maxCostMicros,
-    maxReservationCostMicros: integer(data.maxReservationCostMicros, maxCostMicros),
+    maxReservationCostMicros: integer(
+      data.maxReservationCostMicros,
+      maxCostMicros,
+    ),
     maxReservations: integer(data.maxReservations, 32),
     validFrom,
     validUntil,
@@ -164,7 +182,11 @@ export async function createProductionSupportAnswering(
     const principalId = fictional(audience.principalId);
     const collectionId = fictional(audience.collectionId);
     const audienceVersion = text(audience.audienceVersion);
-    const applies = object(audience.applicability, ['productId', 'productVersion', 'buildId']);
+    const applies = object(audience.applicability, [
+      'productId',
+      'productVersion',
+      'buildId',
+    ]);
     if (applies.productId !== 'fictional-workspace') return recovery;
     const applicability = Object.freeze({
       productId: 'fictional-workspace',
@@ -215,7 +237,9 @@ export async function createProductionSupportAnswering(
         }),
       ],
       readRoute: () =>
-        environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON === raw ? data.route : undefined,
+        environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON === raw
+          ? data.route
+          : undefined,
     };
     const checked = createSupportAssistantConfiguration({
       ...routeOptions,
@@ -238,7 +262,9 @@ export async function createProductionSupportAnswering(
       usagePolicy.configurationVersion !== route.configuration.version ||
       usagePolicy.modelVersion !== route.configuration.modelVersion ||
       usagePolicy.pricingRef !== route.configuration.pricingRef ||
-      usagePolicy.maxReservationCostMicros !== route.configuration.budgets.maxCostMicros
+      route.configuration.budgets.maxCostMicros < 1 ||
+      route.configuration.budgets.maxCostMicros >
+        usagePolicy.maxReservationCostMicros
     )
       return recovery;
     // JSON values are private to this factory; returning an independent
@@ -251,7 +277,8 @@ export async function createProductionSupportAnswering(
       recoveryOnly: true,
       enabled: () => enabled() && checked.currentRoute() !== undefined,
       customerAdmissionEnabled: () =>
-        environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED === 'true',
+        environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED ===
+        'true',
       configuration: {
         disclosureVersion: SUPPORT_ANSWERING_DISCLOSURE_VERSION,
         turns: Object.freeze({ maxAttempts: 2 }),

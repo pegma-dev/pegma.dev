@@ -12,7 +12,11 @@ const START = '2026-11-10T00:00:00.000Z';
 const END = '2026-11-10T01:00:00.000Z';
 
 /** Fictional byte-token model and test-only approvals; no real route is selected. */
-async function fixture() {
+async function fixture(
+  budgets: Partial<
+    ApprovedSupportAssistantRoute['configuration']['budgets']
+  > = {},
+) {
   let now = START;
   let enabled = true;
   const base: Omit<ApprovedSupportAssistantRoute, 'approval'> = {
@@ -44,6 +48,7 @@ async function fixture() {
         currency: 'USD',
         maxAttempts: 1,
         maxAssistantTurns: 2,
+        ...budgets,
       },
       dataControls: {
         status: 'verified',
@@ -134,6 +139,35 @@ async function fixture() {
 }
 
 describe('support assistant closed route configuration', () => {
+  it('preserves a generic zero-cost configuration without granting paid admission', async () => {
+    const f = await fixture({ maxCostMicros: 0 });
+    expect((await f.provider.configuration.resolve()).outcome).toBe('ready');
+  });
+
+  it.each([
+    { maxInputTokens: 512 },
+    { maxInputTokens: 511 },
+    { maxContextTokens: 2_560 },
+    { maxContextTokens: 2_559 },
+  ])(
+    'refuses a digest-bound budget with no room for a nonempty request: %j',
+    async (budgets) => {
+      const f = await fixture(budgets);
+      expect(await f.provider.configuration.resolve()).toEqual({
+        outcome: 'unavailable',
+      });
+      expect(f.provider.currentRoute()).toBeUndefined();
+    },
+  );
+
+  it.each([513, 8_192])(
+    'keeps feasible independent token ceilings ready: input %i',
+    async (maxInputTokens) => {
+      const f = await fixture({ maxInputTokens, maxContextTokens: 2_561 });
+      expect((await f.provider.configuration.resolve()).outcome).toBe('ready');
+    },
+  );
+
   it('defaults disabled without consulting a route or inventing a counter', async () => {
     const readRoute = vi.fn(() => {
       throw new Error('private configuration');

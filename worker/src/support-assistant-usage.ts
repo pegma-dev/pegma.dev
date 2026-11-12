@@ -38,7 +38,8 @@ const KEY = Object.freeze({ partition: 'support_answer', id: 'budget' });
 const MAX_RESERVATIONS = 32;
 const MAX_WINDOW_MS = 31 * 24 * 60 * 60 * 1_000;
 const MAX_RECORD_BYTES = 60_000;
-const MAX_SPENT = BigInt(Number.MAX_SAFE_INTEGER) * BigInt(MAX_RESERVATIONS + 1);
+const MAX_SPENT =
+  BigInt(Number.MAX_SAFE_INTEGER) * BigInt(MAX_RESERVATIONS + 1);
 const HASH = /^[0-9a-f]{64}$/u;
 
 interface Reservation {
@@ -70,7 +71,10 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function keys(value: Record<string, unknown>, expected: readonly string[]): void {
+function keys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): void {
   if (
     Object.keys(value).length !== expected.length ||
     expected.some((name) => !Object.hasOwn(value, name))
@@ -90,7 +94,11 @@ function text(value: unknown): string {
   return value;
 }
 
-function integer(value: unknown, minimum = 0, maximum = Number.MAX_SAFE_INTEGER): number {
+function integer(
+  value: unknown,
+  minimum = 0,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
   if (
     typeof value !== 'number' ||
     !Number.isSafeInteger(value) ||
@@ -108,7 +116,9 @@ function timestamp(value: unknown): number {
   return result;
 }
 
-function policySnapshot(input: SupportAssistantUsagePolicy): SupportAssistantUsagePolicy {
+function policySnapshot(
+  input: SupportAssistantUsagePolicy,
+): SupportAssistantUsagePolicy {
   const value = object(input);
   keys(value, [
     'version',
@@ -130,7 +140,8 @@ function policySnapshot(input: SupportAssistantUsagePolicy): SupportAssistantUsa
     throw new TypeError('Invalid assistant usage policy window');
   const maxCostMicros = integer(value.maxCostMicros, 1);
   const currency = text(value.currency);
-  if (!/^[A-Z]{3}$/u.test(currency)) throw new TypeError('Invalid assistant usage currency');
+  if (!/^[A-Z]{3}$/u.test(currency))
+    throw new TypeError('Invalid assistant usage currency');
   return Object.freeze({
     version: text(value.version),
     scopeRef: text(value.scopeRef),
@@ -139,11 +150,19 @@ function policySnapshot(input: SupportAssistantUsagePolicy): SupportAssistantUsa
     pricingRef: text(value.pricingRef),
     currency,
     maxCostMicros,
-    maxReservationCostMicros: integer(value.maxReservationCostMicros, 1, maxCostMicros),
+    maxReservationCostMicros: integer(
+      value.maxReservationCostMicros,
+      1,
+      maxCostMicros,
+    ),
     maxReservations: integer(value.maxReservations, 1, MAX_RESERVATIONS),
     validFrom: value.validFrom as string,
     validUntil: value.validUntil as string,
-    terminalRetentionMilliseconds: integer(value.terminalRetentionMilliseconds, 1, MAX_WINDOW_MS),
+    terminalRetentionMilliseconds: integer(
+      value.terminalRetentionMilliseconds,
+      1,
+      MAX_WINDOW_MS,
+    ),
   });
 }
 
@@ -151,7 +170,8 @@ function usageSnapshot(input: unknown): AssistantModelUsage {
   const value = object(input);
   keys(value, ['inputTokens', 'outputTokens', 'costMicros', 'currency']);
   const currency = text(value.currency);
-  if (!/^[A-Z]{3}$/u.test(currency)) throw new TypeError('Invalid usage currency');
+  if (!/^[A-Z]{3}$/u.test(currency))
+    throw new TypeError('Invalid usage currency');
   return {
     inputTokens: integer(value.inputTokens),
     outputTokens: integer(value.outputTokens),
@@ -162,7 +182,13 @@ function usageSnapshot(input: unknown): AssistantModelUsage {
 
 function ledgerSnapshot(input: unknown): Ledger {
   const value = object(input);
-  keys(value, ['policyHash', 'accountingHold', 'spentMicros', 'observedAt', 'reservations']);
+  keys(value, [
+    'policyHash',
+    'accountingHold',
+    'spentMicros',
+    'observedAt',
+    'reservations',
+  ]);
   if (typeof value.policyHash !== 'string' || !HASH.test(value.policyHash))
     throw new TypeError('Invalid usage policy binding');
   if (typeof value.accountingHold !== 'boolean')
@@ -175,7 +201,10 @@ function ledgerSnapshot(input: unknown): Ledger {
     throw new TypeError('Invalid cumulative usage');
   const observedAt = value.observedAt as string;
   const observed = timestamp(observedAt);
-  if (!Array.isArray(value.reservations) || value.reservations.length > MAX_RESERVATIONS)
+  if (
+    !Array.isArray(value.reservations) ||
+    value.reservations.length > MAX_RESERVATIONS
+  )
     throw new TypeError('Invalid reservation capacity');
   const reservationIds = new Set<string>();
   const attemptIds = new Set<string>();
@@ -193,7 +222,12 @@ function ledgerSnapshot(input: unknown): Ledger {
       'terminalAt',
       'usage',
     ]);
-    for (const name of ['reservationHash', 'attemptHash', 'identityHash', 'bindingHash'])
+    for (const name of [
+      'reservationHash',
+      'attemptHash',
+      'identityHash',
+      'bindingHash',
+    ])
       if (typeof entry[name] !== 'string' || !HASH.test(entry[name] as string))
         throw new TypeError('Invalid reservation binding');
     const reservationHash = entry.reservationHash as string;
@@ -207,7 +241,12 @@ function ledgerSnapshot(input: unknown): Ledger {
     if (created > observed || deadline <= created)
       throw new TypeError('Invalid reservation interval');
     const state = entry.state;
-    if (state !== 'reserved' && state !== 'unknown' && state !== 'known' && state !== 'not_called')
+    if (
+      state !== 'reserved' &&
+      state !== 'unknown' &&
+      state !== 'known' &&
+      state !== 'not_called'
+    )
       throw new TypeError('Invalid reservation state');
     const terminal = state === 'known' || state === 'not_called';
     if (terminal) {
@@ -218,7 +257,8 @@ function ledgerSnapshot(input: unknown): Ledger {
       throw new TypeError('Uncertain usage cannot expire');
     }
     const usage = state === 'known' ? usageSnapshot(entry.usage) : null;
-    if (state !== 'known' && entry.usage !== null) throw new TypeError('Invalid usage settlement');
+    if (state !== 'known' && entry.usage !== null)
+      throw new TypeError('Invalid usage settlement');
     return {
       reservationHash,
       attemptHash,
@@ -251,7 +291,10 @@ const records = defineCollection<Ledger>({
         format: 1,
         payload: JSON.stringify(ledgerSnapshot(value)),
       };
-      if (new TextEncoder().encode(JSON.stringify(record)).byteLength > MAX_RECORD_BYTES)
+      if (
+        new TextEncoder().encode(JSON.stringify(record)).byteLength >
+        MAX_RECORD_BYTES
+      )
         throw new TypeError('Assistant usage record capacity exceeded');
       return record;
     },
@@ -261,7 +304,8 @@ const records = defineCollection<Ledger>({
         value.id !== KEY.id ||
         value.format !== 1 ||
         typeof value.payload !== 'string' ||
-        new TextEncoder().encode(JSON.stringify(value)).byteLength > MAX_RECORD_BYTES
+        new TextEncoder().encode(JSON.stringify(value)).byteLength >
+          MAX_RECORD_BYTES
       )
         throw new TypeError('Invalid assistant usage record');
       keys(value, ['partition', 'id', 'format', 'payload']);
@@ -271,10 +315,13 @@ const records = defineCollection<Ledger>({
 });
 
 async function hash(input: string): Promise<string> {
-  const result = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(result), (value) => value.toString(16).padStart(2, '0')).join(
-    '',
+  const result = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(input),
   );
+  return Array.from(new Uint8Array(result), (value) =>
+    value.toString(16).padStart(2, '0'),
+  ).join('');
 }
 
 async function identityBinding(input: AssistantUsageIdentity) {
@@ -292,7 +339,10 @@ async function identityBinding(input: AssistantUsageIdentity) {
   return { reservationHash, attemptHash, identityHash };
 }
 
-function sameUsage(a: AssistantModelUsage | null, b: AssistantModelUsage): boolean {
+function sameUsage(
+  a: AssistantModelUsage | null,
+  b: AssistantModelUsage,
+): boolean {
   return (
     a !== null &&
     a.currency === b.currency &&
@@ -302,7 +352,9 @@ function sameUsage(a: AssistantModelUsage | null, b: AssistantModelUsage): boole
   );
 }
 
-function observationSnapshot(input: AssistantUsageObservation): AssistantUsageObservation {
+function observationSnapshot(
+  input: AssistantUsageObservation,
+): AssistantUsageObservation {
   const value = object(input);
   if (value.state === 'not_called' || value.state === 'unknown') {
     keys(value, ['state']);
@@ -330,7 +382,8 @@ function observationSnapshot(input: AssistantUsageObservation): AssistantUsageOb
 export function createSupportAssistantUsage(
   options: SupportAssistantUsageOptions,
 ): AssistantUsagePort {
-  const policy = options.policy === undefined ? undefined : policySnapshot(options.policy);
+  const policy =
+    options.policy === undefined ? undefined : policySnapshot(options.policy);
   const policyJson = policy === undefined ? '' : JSON.stringify(policy);
   const active = (now: number) =>
     policy !== undefined &&
@@ -340,7 +393,11 @@ export function createSupportAssistantUsage(
     const at = options.clock.now();
     return { at, milliseconds: timestamp(at) };
   };
-  const checkedHead = (current: Ledger | null, policyHash: string, now: number) => {
+  const checkedHead = (
+    current: Ledger | null,
+    policyHash: string,
+    now: number,
+  ) => {
     if (
       current !== null &&
       (current.policyHash !== policyHash || now < timestamp(current.observedAt))
@@ -348,7 +405,8 @@ export function createSupportAssistantUsage(
       throw new TypeError('Assistant usage policy or clock changed');
     if (current !== null && policy !== undefined) {
       const known = current.reservations.reduce(
-        (total, entry) => total + (entry.usage === null ? 0n : BigInt(entry.usage.costMicros)),
+        (total, entry) =>
+          total + (entry.usage === null ? 0n : BigInt(entry.usage.costMicros)),
         0n,
       );
       if (
@@ -392,13 +450,21 @@ export function createSupportAssistantUsage(
           context.configurationVersion !== policy.configurationVersion ||
           context.modelVersion !== policy.modelVersion ||
           context.budgets.currency !== policy.currency ||
-          context.budgets.maxCostMicros !== policy.maxReservationCostMicros
+          !Number.isSafeInteger(context.budgets.maxCostMicros) ||
+          context.budgets.maxCostMicros < 1 ||
+          context.budgets.maxCostMicros > policy.maxReservationCostMicros
         )
           return { outcome: 'denied' };
         const fence = context.fence;
-        if (context.attemptId !== fence.attemptId || context.attempt !== fence.attempt)
+        if (
+          context.attemptId !== fence.attemptId ||
+          context.attempt !== fence.attempt
+        )
           return { outcome: 'denied' };
-        if (!Array.isArray(context.allSourceReferences) || context.allSourceReferences.length > 5)
+        if (
+          !Array.isArray(context.allSourceReferences) ||
+          context.allSourceReferences.length > 5
+        )
           return { outcome: 'denied' };
         const references = context.allSourceReferences.map((reference) => [
           text(reference.articleId),
@@ -446,8 +512,12 @@ export function createSupportAssistantUsage(
           integer(budgets.maxAnswerTextCharacters, 1),
           text(context.applicability.productId),
           text(context.applicability.productVersion),
-          context.applicability.buildId === undefined ? null : text(context.applicability.buildId),
-          context.applicability.locale === undefined ? null : text(context.applicability.locale),
+          context.applicability.buildId === undefined
+            ? null
+            : text(context.applicability.buildId),
+          context.applicability.locale === undefined
+            ? null
+            : text(context.applicability.locale),
           references,
         ]);
         const [identity, policyHash] = await Promise.all([
@@ -462,7 +532,11 @@ export function createSupportAssistantUsage(
           (current) => {
             const now = sampled();
             checkedHead(current, policyHash, now.milliseconds);
-            if (!active(now.milliseconds) || signal.aborted || deadline <= now.milliseconds)
+            if (
+              !active(now.milliseconds) ||
+              signal.aborted ||
+              deadline <= now.milliseconds
+            )
               return { action: 'keep' };
             if (current?.accountingHold) return { action: 'keep' };
             const existing = current?.reservations.find(
@@ -483,7 +557,8 @@ export function createSupportAssistantUsage(
             );
             if (
               retained.length >= policy.maxReservations ||
-              spent + held + BigInt(policy.maxReservationCostMicros) > BigInt(policy.maxCostMicros)
+              spent + held + BigInt(policy.maxReservationCostMicros) >
+                BigInt(policy.maxCostMicros)
             )
               return { action: 'keep' };
             return {
@@ -513,13 +588,18 @@ export function createSupportAssistantUsage(
         );
         const now = sampled();
         checkedHead(result.value, policyHash, now.milliseconds);
-        if (!active(now.milliseconds) || signal.aborted || deadline <= now.milliseconds)
+        if (
+          !active(now.milliseconds) ||
+          signal.aborted ||
+          deadline <= now.milliseconds
+        )
           return { outcome: 'unavailable' };
         if (result.value?.accountingHold) return { outcome: 'denied' };
         const entry = result.value?.reservations.find(
           (value) => value.reservationHash === identity.reservationHash,
         );
-        return entry?.identityHash === identity.identityHash && entry.bindingHash === bindingHash
+        return entry?.identityHash === identity.identityHash &&
+          entry.bindingHash === bindingHash
           ? {
               outcome: 'reserved',
               usageReservationId: identityInput.usageReservationId,
@@ -538,7 +618,10 @@ export function createSupportAssistantUsage(
       if (policy === undefined) return 'pending';
       try {
         const observation = observationSnapshot(input);
-        if (observation.state === 'known' && observation.usage.currency !== policy.currency)
+        if (
+          observation.state === 'known' &&
+          observation.usage.currency !== policy.currency
+        )
           return 'pending';
         sampled();
         const [identity, policyHash] = await Promise.all([
@@ -562,7 +645,10 @@ export function createSupportAssistantUsage(
             let spent = BigInt(current.spentMicros);
             if (observation.state === 'known') {
               if (entry.state === 'known') {
-                if (sameUsage(entry.usage, observation.usage) || current.accountingHold)
+                if (
+                  sameUsage(entry.usage, observation.usage) ||
+                  current.accountingHold
+                )
                   return { action: 'keep' };
                 // Returning pending alone is insufficient: another ticket could
                 // otherwise spend a pool whose accepted accounting is disputed.
@@ -583,7 +669,8 @@ export function createSupportAssistantUsage(
                 terminalAt: now.at,
               };
             } else if (observation.state === 'unknown') {
-              if (entry.state === 'known' || entry.state === 'unknown') return { action: 'keep' };
+              if (entry.state === 'known' || entry.state === 'unknown')
+                return { action: 'keep' };
               // A late uncertain observation may restore a previously released hold.
               next = {
                 ...entry,
@@ -621,7 +708,8 @@ export function createSupportAssistantUsage(
                       value.terminalAt === null ||
                       now.milliseconds < timestamp(policy.validUntil) ||
                       now.milliseconds <
-                        timestamp(value.deadline) + policy.terminalRetentionMilliseconds,
+                        timestamp(value.deadline) +
+                          policy.terminalRetentionMilliseconds,
                   ),
               },
             };
@@ -637,11 +725,14 @@ export function createSupportAssistantUsage(
         const covered =
           entry !== undefined &&
           (observation.state === 'known'
-            ? entry.state === 'known' && sameUsage(entry.usage, observation.usage)
+            ? entry.state === 'known' &&
+              sameUsage(entry.usage, observation.usage)
             : observation.state === 'not_called'
               ? entry.state === 'not_called'
               : entry.state === 'unknown' || entry.state === 'known');
-        return covered && result.value?.accountingHold === false ? 'reconciled' : 'pending';
+        return covered && result.value?.accountingHold === false
+          ? 'reconciled'
+          : 'pending';
       } catch {
         return 'pending';
       }

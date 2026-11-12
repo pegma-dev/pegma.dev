@@ -1,4 +1,7 @@
-import type { AssistantAttemptContext, AssistantModelInput } from '@pegma/support-desk-ai';
+import type {
+  AssistantAttemptContext,
+  AssistantModelInput,
+} from '@pegma/support-desk-ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createSupportAssistantConfiguration,
@@ -27,9 +30,13 @@ const REFERENCE = {
 
 /** All route, account, price and tokenizer evidence here is fictional test data. */
 async function fixture(
-  outputTokenParameter: 'max_tokens' | 'max_completion_tokens' = 'max_completion_tokens',
+  outputTokenParameter:
+    'max_tokens' | 'max_completion_tokens' = 'max_completion_tokens',
   maxAttempts = 1,
   implicitCache: 'absent' | 'approved' = 'absent',
+  budgets: Partial<
+    ApprovedSupportAssistantRoute['configuration']['budgets']
+  > = {},
 ) {
   let now = START;
   let enabled = true;
@@ -62,6 +69,7 @@ async function fixture(
         currency: 'USD',
         maxAttempts,
         maxAssistantTurns: 2,
+        ...budgets,
       },
       dataControls: {
         status: 'verified',
@@ -130,7 +138,8 @@ async function fixture(
     },
   });
   const ready = await configuration.configuration.resolve();
-  if (ready.outcome !== 'ready') throw new Error('Fictional test qualification failed');
+  if (ready.outcome !== 'ready')
+    throw new Error('Fictional test qualification failed');
   const input: AssistantModelInput = {
     trustedInstructions: base.configuration.trustedInstructions,
     messages: [
@@ -236,6 +245,66 @@ function jsonResponse(value: unknown, headers: Record<string, string> = {}) {
 afterEach(() => vi.useRealTimers());
 
 describe('bounded support OpenRouter wire', () => {
+  it.each(['cost', 'input', 'output', 'context'] as const)(
+    'preserves finite native %s overage for SDK accounting without an acceptable answer',
+    async (overage) => {
+      const f = await fixture(
+        'max_completion_tokens',
+        1,
+        'absent',
+        overage === 'context' ? { maxContextTokens: 8_200 } : {},
+      );
+      const value = document();
+      if (overage === 'cost') value.usage.cost = 0.15;
+      if (overage === 'input') value.usage.prompt_tokens = 8_193;
+      if (overage === 'output') value.usage.completion_tokens = 2_049;
+      if (overage === 'context') value.usage.prompt_tokens = 8_192;
+      value.usage.total_tokens =
+        value.usage.prompt_tokens + value.usage.completion_tokens;
+      const fetch = vi.fn(async () => jsonResponse(value));
+      const model = createSupportAssistantOpenRouterModel({
+        clock: f.clock,
+        configuration: f.configuration,
+        readApiKey: () => 'fictional-key',
+        fetch,
+      });
+      const result = await model.generate(f.input, f.context, f.config);
+      expect(result.outputJson).toBe('');
+      expect(result.usage).toEqual({
+        inputTokens: value.usage.prompt_tokens,
+        outputTokens: value.usage.completion_tokens,
+        costMicros: overage === 'cost' ? 150_000 : 1,
+        currency: 'USD',
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['provider', 'currency', 'total', 'unrepresentable'] as const)(
+    'does not invent an overage charge from invalid native %s evidence',
+    async (invalid) => {
+      const f = await fixture();
+      const value = document();
+      value.usage.cost = 0.15;
+      if (invalid === 'provider') value.provider = 'other';
+      if (invalid === 'currency')
+        Object.assign(value.usage, { currency: 'EUR' });
+      if (invalid === 'total') value.usage.total_tokens = 1;
+      if (invalid === 'unrepresentable') value.usage.cost = 1e20;
+      const fetch = vi.fn(async () => jsonResponse(value));
+      const model = createSupportAssistantOpenRouterModel({
+        clock: f.clock,
+        configuration: f.configuration,
+        readApiKey: () => 'fictional-key',
+        fetch,
+      });
+      await expect(
+        model.generate(f.input, f.context, f.config),
+      ).rejects.toBeInstanceOf(SupportAssistantModelError);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('serializes only the provider input and fixed locked request policy', async () => {
     const f = await fixture();
     const fetch = vi.fn(async (_url: string, _init: RequestInit) =>
@@ -278,7 +347,8 @@ describe('bounded support OpenRouter wire', () => {
     const headers = new Headers(init.headers);
     expect(headers.get('x-openrouter-cache')).toBe('false');
     expect(headers.get('authorization')).toBe('Bearer PRIVATE_API_KEY');
-    if (typeof init.body !== 'string') throw new Error('Missing bounded request body');
+    if (typeof init.body !== 'string')
+      throw new Error('Missing bounded request body');
     expect(init.body).not.toContain('PRIVATE_');
     const body = JSON.parse(init.body);
     expect(Object.keys(body).sort()).toEqual([
@@ -319,7 +389,11 @@ describe('bounded support OpenRouter wire', () => {
           ),
         ),
     });
-    expect(JSON.parse((await model.generate(f.input, f.context, f.config)).outputJson)).toEqual({
+    expect(
+      JSON.parse(
+        (await model.generate(f.input, f.context, f.config)).outputJson,
+      ),
+    ).toEqual({
       kind: 'answer',
       text: 'Use the guide.',
       citations: [REFERENCE],
@@ -334,14 +408,18 @@ describe('bounded support OpenRouter wire', () => {
       configuration: f.configuration,
       readApiKey: () => 'key',
       fetch: async (_url, init) => {
-        if (typeof init.body !== 'string') throw new Error('Missing bounded body');
+        if (typeof init.body !== 'string')
+          throw new Error('Missing bounded body');
         bodies.push(JSON.parse(init.body));
         return jsonResponse(document());
       },
     });
     await model.generate(f.input, f.context, f.config);
     expect(bodies).toHaveLength(1);
-    expect(bodies[0]).toHaveProperty('max_tokens', f.context.budgets.maxOutputTokens);
+    expect(bodies[0]).toHaveProperty(
+      'max_tokens',
+      f.context.budgets.maxOutputTokens,
+    );
     expect(bodies[0]).not.toHaveProperty('max_completion_tokens');
   });
 
@@ -355,9 +433,12 @@ describe('bounded support OpenRouter wire', () => {
       clock: f.clock,
       configuration: f.configuration,
       readApiKey: () => 'test-key',
-      fetch: async () => new Response(raw, { headers: { 'content-type': 'application/json' } }),
+      fetch: async () =>
+        new Response(raw, { headers: { 'content-type': 'application/json' } }),
     });
-    expect((await model.generate(f.input, f.context, f.config)).usage.costMicros).toBe(2);
+    expect(
+      (await model.generate(f.input, f.context, f.config)).usage.costMicros,
+    ).toBe(2);
   });
 
   it.each<[string, (value: ReturnType<typeof document>) => unknown]>([
@@ -368,7 +449,10 @@ describe('bounded support OpenRouter wire', () => {
         provider: 'Other Provider',
       }),
     ],
-    ['wrong model', (d: ReturnType<typeof document>) => ({ ...d, model: 'other/model' })],
+    [
+      'wrong model',
+      (d: ReturnType<typeof document>) => ({ ...d, model: 'other/model' }),
+    ],
     [
       'truncation',
       (d: ReturnType<typeof document>) => ({
@@ -463,9 +547,9 @@ describe('bounded support OpenRouter wire', () => {
       readApiKey: () => 'test-key',
       fetch,
     });
-    await expect(model.generate(f.input, f.context, f.config)).rejects.toBeInstanceOf(
-      SupportAssistantModelError,
-    );
+    await expect(
+      model.generate(f.input, f.context, f.config),
+    ).rejects.toBeInstanceOf(SupportAssistantModelError);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -473,7 +557,10 @@ describe('bounded support OpenRouter wire', () => {
     const f = await fixture();
     for (const response of [
       new Response(
-        JSON.stringify(document()).replace('"cost":0.000001', '"cost":0,"cost":0.000001'),
+        JSON.stringify(document()).replace(
+          '"cost":0.000001',
+          '"cost":0,"cost":0.000001',
+        ),
         { headers: { 'content-type': 'application/json' } },
       ),
       jsonResponse(document(), { 'x-generation-id': 'different-generation' }),
@@ -484,9 +571,9 @@ describe('bounded support OpenRouter wire', () => {
         readApiKey: () => 'test-key',
         fetch: async () => response,
       });
-      await expect(model.generate(f.input, f.context, f.config)).rejects.toBeInstanceOf(
-        SupportAssistantModelError,
-      );
+      await expect(
+        model.generate(f.input, f.context, f.config),
+      ).rejects.toBeInstanceOf(SupportAssistantModelError);
     }
   });
 
@@ -500,7 +587,9 @@ describe('bounded support OpenRouter wire', () => {
         readApiKey: () => key,
         fetch,
       });
-    await expect(make(undefined).generate(f.input, f.context, f.config)).rejects.toMatchObject({
+    await expect(
+      make(undefined).generate(f.input, f.context, f.config),
+    ).rejects.toMatchObject({
       code: 'credential_unavailable',
     });
     await expect(
@@ -511,7 +600,9 @@ describe('bounded support OpenRouter wire', () => {
       ),
     ).rejects.toMatchObject({ code: 'invalid_input' });
     f.disable();
-    await expect(make('key').generate(f.input, f.context, f.config)).rejects.toMatchObject({
+    await expect(
+      make('key').generate(f.input, f.context, f.config),
+    ).rejects.toMatchObject({
       code: 'route_unavailable',
     });
     expect(fetch).not.toHaveBeenCalled();
@@ -572,7 +663,9 @@ describe('bounded support OpenRouter wire', () => {
         throw new Error('PRIVATE_NETWORK_PROMPT');
       },
     });
-    const error = await bad.generate(f.input, f.context, f.config).catch((value: unknown) => value);
+    const error = await bad
+      .generate(f.input, f.context, f.config)
+      .catch((value: unknown) => value);
     expect(error).toBeInstanceOf(SupportAssistantModelError);
     expect(String(error)).not.toContain('PRIVATE_NETWORK_PROMPT');
   });
@@ -595,7 +688,9 @@ describe('bounded support OpenRouter wire', () => {
           headers: { 'content-type': 'application/json' },
         }),
     });
-    await expect(model.generate(f.input, f.context, f.config)).rejects.toMatchObject({
+    await expect(
+      model.generate(f.input, f.context, f.config),
+    ).rejects.toMatchObject({
       code: 'response_limit',
     });
     expect(cancel).toHaveBeenCalled();
@@ -613,7 +708,11 @@ describe('bounded support OpenRouter wire', () => {
     });
     controller.abort();
     await expect(
-      model.generate(f.input, { ...f.context, signal: controller.signal }, f.config),
+      model.generate(
+        f.input,
+        { ...f.context, signal: controller.signal },
+        f.config,
+      ),
     ).rejects.toMatchObject({ code: 'aborted' });
     expect(fetch).not.toHaveBeenCalled();
 
@@ -636,9 +735,14 @@ describe('bounded support OpenRouter wire', () => {
       clock: f.clock,
       configuration: f.configuration,
       readApiKey: () => 'key',
-      fetch: async () => new Response(body, { headers: { 'content-type': 'application/json' } }),
+      fetch: async () =>
+        new Response(body, { headers: { 'content-type': 'application/json' } }),
     });
-    const pending = held.generate(f.input, { ...f.context, signal: live.signal }, f.config);
+    const pending = held.generate(
+      f.input,
+      { ...f.context, signal: live.signal },
+      f.config,
+    );
     const assertion = expect(pending).rejects.toMatchObject({
       code: 'aborted',
     });
@@ -659,7 +763,9 @@ describe('bounded support OpenRouter wire', () => {
         return jsonResponse(document());
       },
     });
-    await expect(model.generate(f.input, f.context, f.config)).rejects.toMatchObject({
+    await expect(
+      model.generate(f.input, f.context, f.config),
+    ).rejects.toMatchObject({
       code: 'deadline',
     });
   });
@@ -710,7 +816,9 @@ describe('SDK025 staged generation wire boundary', () => {
         preparationAttemptId: 'PRIVATE_PREPARATION_ATTEMPT',
       },
     };
-    const transport = vi.fn(async (_url: string, _init: RequestInit) => jsonResponse(document()));
+    const transport = vi.fn(async (_url: string, _init: RequestInit) =>
+      jsonResponse(document()),
+    );
     const key = vi.fn(() => 'PRIVATE_FICTIONAL_KEY');
     const model = createSupportAssistantOpenRouterModel({
       clock: f.clock,
@@ -738,7 +846,9 @@ describe('SDK025 staged generation wire boundary', () => {
       zdr: true,
       require_parameters: true,
     });
-    expect(new Headers(call[1].headers).get('x-openrouter-cache')).toBe('false');
+    expect(new Headers(call[1].headers).get('x-openrouter-cache')).toBe(
+      'false',
+    );
   });
 });
 
@@ -760,7 +870,11 @@ function zeroMediaDocument() {
         audio_tokens: 0,
         video_tokens: 0,
       },
-      completion_tokens_details: { reasoning_tokens: 0, image_tokens: 0, audio_tokens: 0 },
+      completion_tokens_details: {
+        reasoning_tokens: 0,
+        image_tokens: 0,
+        audio_tokens: 0,
+      },
       cost_details: {
         upstream_inference_cost: 0.00047344,
         upstream_inference_prompt_cost: 0.00019184,
@@ -809,7 +923,10 @@ describe('observed zero-media provider usage compatibility', () => {
       const observed = zeroMediaDocument();
       const altered = {
         ...observed,
-        usage: { ...observed.usage, [group]: { ...observed.usage[group], [key]: value } },
+        usage: {
+          ...observed.usage,
+          [group]: { ...observed.usage[group], [key]: value },
+        },
       };
       const transport = vi.fn(async () => jsonResponse(altered));
       const model = createSupportAssistantOpenRouterModel({
@@ -818,9 +935,9 @@ describe('observed zero-media provider usage compatibility', () => {
         readApiKey: () => 'fictional-key',
         fetch: transport,
       });
-      await expect(model.generate(f.input, f.context, f.config)).rejects.toBeInstanceOf(
-        SupportAssistantModelError,
-      );
+      await expect(
+        model.generate(f.input, f.context, f.config),
+      ).rejects.toBeInstanceOf(SupportAssistantModelError);
       expect(transport).toHaveBeenCalledTimes(1);
     },
   );

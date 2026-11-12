@@ -1,8 +1,15 @@
-import { hasPermission, resolveAccess, type AccessContext } from '@pegma/authorization-core';
+import {
+  hasPermission,
+  resolveAccess,
+  type AccessContext,
+} from '@pegma/authorization-core';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import type { PolicyDocumentV1 } from '@pegma/authorization-policy';
 import type { PrivateSourcesVerifier } from '@pegma/knowledge-base-application';
-import { supportPermissions, type AssistantTurnOptions } from '@pegma/support-desk-application';
+import {
+  supportPermissions,
+  type AssistantTurnOptions,
+} from '@pegma/support-desk-application';
 import type { Logger } from '@pegma/spine';
 import type { SupportRuntime } from './support-desk';
 import { createKnowledgeRuntime } from './knowledge-runtime';
@@ -50,17 +57,24 @@ export interface SupportAnsweringComposition {
   readonly configuration?: {
     readonly disclosureVersion: typeof SUPPORT_ANSWERING_DISCLOSURE_VERSION;
     readonly turns: AssistantTurnOptions;
-    readonly route: Omit<SupportAssistantConfigurationOptions, 'clock' | 'isEnabled'>;
+    readonly route: Omit<
+      SupportAssistantConfigurationOptions,
+      'clock' | 'isEnabled'
+    >;
     readonly readApiKey: SupportAssistantOpenRouterModelOptions['readApiKey'];
     readonly fetch?: SupportAssistantOpenRouterModelOptions['fetch'];
     readonly usagePolicy: SupportAssistantUsagePolicy;
     readonly customerPolicy: PolicyDocumentV1;
-    readonly selectAudience: NonNullable<SupportAssistantOptions['selectAudience']>;
+    readonly selectAudience: NonNullable<
+      SupportAssistantOptions['selectAudience']
+    >;
     readonly privateSources?: PrivateSourcesVerifier;
   };
 }
 
-export function supportAnsweringEnabled(options: SupportAnsweringComposition = {}): boolean {
+export function supportAnsweringEnabled(
+  options: SupportAnsweringComposition = {},
+): boolean {
   try {
     const attempts = options.configuration?.turns.maxAttempts;
     return (
@@ -78,7 +92,10 @@ export function supportAnsweringAdmissionEnabled(
   options: SupportAnsweringComposition = {},
 ): boolean {
   try {
-    return supportAnsweringEnabled(options) && options.customerAdmissionEnabled?.() === true;
+    return (
+      supportAnsweringEnabled(options) &&
+      options.customerAdmissionEnabled?.() === true
+    );
   } catch {
     return false;
   }
@@ -86,7 +103,9 @@ export function supportAnsweringAdmissionEnabled(
 
 /** Preserve the actual application cap, including a later reduction. A reduced
  * cap disables fresh staged intake without preventing accepted receipt replay. */
-export function supportAnsweringTurns(options: SupportAnsweringComposition = {}) {
+export function supportAnsweringTurns(
+  options: SupportAnsweringComposition = {},
+) {
   const value = options.configuration?.turns;
   if (value === undefined) return undefined;
   return { ...value };
@@ -101,18 +120,25 @@ export function composeSupportAnswering(
 ) {
   const supplied = options.configuration;
   if (supplied === undefined) {
-    if (options.recoveryOnly !== true) throw new TypeError('Answering is not configured.');
+    if (options.recoveryOnly !== true)
+      throw new TypeError('Answering is not configured.');
     return Object.freeze({
       enabled: () => false,
       admissionEnabled: () => false,
       disclosureVersion: SUPPORT_ANSWERING_DISCLOSURE_VERSION,
       admission: async (_principalId: string) => null,
-      runTick: async () => ({ outcome: 'disabled' as const, checkpointSaved: false as const }),
+      runTick: async () => ({
+        outcome: 'disabled' as const,
+        checkpointSaved: false as const,
+      }),
     });
   }
   const enabled = () =>
-    options.configuration === supplied && environmentEnabled() && supportAnsweringEnabled(options);
-  const admissionEnabled = () => enabled() && supportAnsweringAdmissionEnabled(options);
+    options.configuration === supplied &&
+    environmentEnabled() &&
+    supportAnsweringEnabled(options);
+  const admissionEnabled = () =>
+    enabled() && supportAnsweringAdmissionEnabled(options);
   const bundle = createSupportAssistantConfiguration({
     ...supplied.route,
     clock: runtime.clock,
@@ -141,7 +167,11 @@ export function composeSupportAnswering(
     )
       return null;
     const resolved = await bundle.configuration.resolve();
-    if (resolved.outcome !== 'ready' || resolved.configuration.budgets.maxAttempts < 2) return null;
+    if (
+      resolved.outcome !== 'ready' ||
+      resolved.configuration.budgets.maxAttempts < 2
+    )
+      return null;
     const route = bundle.currentRoute(resolved.configuration.version);
     const pool = supplied.usagePolicy;
     const now = Date.parse(runtime.clock.now());
@@ -152,6 +182,10 @@ export function composeSupportAnswering(
       pool.modelVersion !== resolved.configuration.modelVersion ||
       pool.pricingRef !== resolved.configuration.pricingRef ||
       pool.currency !== resolved.configuration.budgets.currency ||
+      !Number.isSafeInteger(resolved.configuration.budgets.maxCostMicros) ||
+      resolved.configuration.budgets.maxCostMicros < 1 ||
+      resolved.configuration.budgets.maxCostMicros >
+        pool.maxReservationCostMicros ||
       !(Date.parse(pool.validFrom) <= now && now < Date.parse(pool.validUntil))
     )
       return null;
@@ -160,11 +194,18 @@ export function composeSupportAnswering(
       current.outcome !== 'ready' ||
       current.authority.usageScopeRef !== route.usageScopeRef ||
       !hasPermission(current.authority.access, supportPermissions.create) ||
-      !hasPermission(current.authority.access, supportPermissions.assistantStart) ||
+      !hasPermission(
+        current.authority.access,
+        supportPermissions.assistantStart,
+      ) ||
       !admissionEnabled()
     )
       return null;
-    const binding = JSON.stringify({ route, authority: current.authority, pool });
+    const binding = JSON.stringify({
+      route,
+      authority: current.authority,
+      pool,
+    });
     const policy = JSON.stringify(supplied.customerPolicy);
     const poolText = JSON.stringify(pool);
     return {
@@ -177,14 +218,21 @@ export function composeSupportAnswering(
         // closes a role/mapping change during its awaits without another read
         // or inventing grants from a previous customer observation.
         const projected = resolveAccess(
-          { principalId: browserAccess.principalId, roles: browserAccess.roles },
+          {
+            principalId: browserAccess.principalId,
+            roles: browserAccess.roles,
+          },
           supplied.customerPolicy,
         );
         const selected = supplied.selectAudience(projected);
         const latestAuthority =
           selected === null
             ? null
-            : { ...selected, access: projected, policyVersion: projected.policyVersion };
+            : {
+                ...selected,
+                access: projected,
+                policyVersion: projected.policyVersion,
+              };
         if (
           !admissionEnabled() ||
           !latest ||
@@ -195,7 +243,9 @@ export function composeSupportAnswering(
           !hasPermission(projected, knowledgePermissions.articleRead) ||
           !hasPermission(projected, supportPermissions.assistantStart) ||
           canonical(latestAuthority) !== canonical(current.authority) ||
-          !(Date.parse(pool.validFrom) <= at && at < Date.parse(pool.validUntil))
+          !(
+            Date.parse(pool.validFrom) <= at && at < Date.parse(pool.validUntil)
+          )
         )
           throw new Error('Answering admission changed.');
         return true as const;
@@ -209,7 +259,11 @@ export function composeSupportAnswering(
     disclosureVersion: supplied.disclosureVersion,
     admission,
     async runTick() {
-      if (!enabled()) return { outcome: 'disabled' as const, checkpointSaved: false as const };
+      if (!enabled())
+        return {
+          outcome: 'disabled' as const,
+          checkpointSaved: false as const,
+        };
       // This direct KB instance uses the same published evidence verifier and
       // current source gates as the browser composition, with the qualified counter.
       const knowledge = createKnowledgeRuntime({
@@ -245,4 +299,6 @@ export function composeSupportAnswering(
   });
 }
 
-export type SupportAnsweringRuntime = ReturnType<typeof composeSupportAnswering>;
+export type SupportAnsweringRuntime = ReturnType<
+  typeof composeSupportAnswering
+>;

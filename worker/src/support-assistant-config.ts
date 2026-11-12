@@ -223,7 +223,7 @@ function checkedConfiguration(
     BAD_TEXT.test(config.trustedInstructions)
   )
     throw new TypeError('Invalid support assistant configuration');
-  integer(config.framingTokens, 8_192);
+  const framingTokens = integer(config.framingTokens, 8_192);
   const budget = record(config.budgets, [
     'maxMessages',
     'maxInputBytes',
@@ -249,6 +249,12 @@ function checkedConfiguration(
     ['maxAssistantTurns', 100],
   ] as const)
     integer(budget[key], maximum, 1);
+  if (
+    framingTokens >= integer(budget.maxInputTokens, 65_536, 1) ||
+    framingTokens + integer(budget.maxOutputTokens, 8_192, 1) >=
+      integer(budget.maxContextTokens, 131_072, 1)
+  )
+    throw new TypeError('Impossible support assistant token budgets');
   integer(budget.maxCostMicros, Number.MAX_SAFE_INTEGER);
   if (budget.currency !== 'USD')
     throw new TypeError('Unsupported cost contract');

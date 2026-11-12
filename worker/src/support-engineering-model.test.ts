@@ -303,6 +303,45 @@ afterEach(() => {
 });
 
 describe('distinct engineering configuration and model wire', () => {
+  it.each([
+    { maxInputTokens: 512 },
+    { maxInputTokens: 511 },
+    { maxContextTokens: 2_012 },
+    { maxContextTokens: 2_011 },
+  ])(
+    'refuses a correctly bound engineering configuration that cannot fit a request: %j',
+    async (budgets) => {
+      const config = configuration();
+      Object.assign(config.budgets, budgets);
+      const f = await fixture(config);
+      expect(await f.ready()).toEqual({ outcome: 'unavailable' });
+      expect(f.readApiKey).not.toHaveBeenCalled();
+      expect(f.fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a feasible engineering configuration with independent ceilings ready', async () => {
+    const config = configuration();
+    Object.assign(config.budgets, { maxContextTokens: 2_013 });
+    const f = await fixture(config);
+    expect((await f.ready()).outcome).toBe('ready');
+  });
+
+  it('preserves actual engineering cost overage without a usable candidate', async () => {
+    const f = await fixture();
+    await f.ready();
+    f.state.document.usage.cost = 0.15;
+    const result = await f.ports.model.generate(f.input, f.context, f.config);
+    expect(result.outputJson).toBe('');
+    expect(result.usage).toEqual({
+      inputTokens: 200,
+      outputTokens: 160,
+      costMicros: 150_000,
+      currency: 'USD',
+    });
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('defaults unavailable without configuration, credentials, funding or provider work', async () => {
     const f = await fixture();
     const empty = createSupportEngineeringModelPorts({ clock: f.clock });
@@ -498,7 +537,7 @@ describe('distinct engineering configuration and model wire', () => {
     'provider',
     'model',
     'currency',
-    'cost',
+    'unrepresentable-cost',
     'tokens',
     'video',
     'audio',
@@ -515,7 +554,7 @@ describe('distinct engineering configuration and model wire', () => {
       if (mode === 'provider') f.state.document.provider = 'Other Provider';
       if (mode === 'model') f.state.document.model = 'fictional/other';
       if (mode === 'currency') f.state.document.usage.currency = 'EUR';
-      if (mode === 'cost') f.state.document.usage.cost = 1;
+      if (mode === 'unrepresentable-cost') f.state.document.usage.cost = 1e20;
       if (mode === 'tokens') f.state.document.usage.total_tokens = 999;
       if (mode === 'video')
         f.state.document.usage.prompt_tokens_details.video_tokens = 1;

@@ -415,18 +415,14 @@ function responseResult(
     ],
     ['prompt_tokens', 'completion_tokens', 'total_tokens', 'cost'],
   );
-  const inputTokens = integer(
-    usage.prompt_tokens,
-    context.budgets.maxInputTokens,
-    1,
-  );
+  const inputTokens = integer(usage.prompt_tokens, Number.MAX_SAFE_INTEGER, 1);
   const outputTokens = integer(
     usage.completion_tokens,
-    context.budgets.maxOutputTokens,
+    Number.MAX_SAFE_INTEGER,
     1,
   );
   if (
-    integer(usage.total_tokens, context.budgets.maxContextTokens) !==
+    integer(usage.total_tokens, Number.MAX_SAFE_INTEGER) !==
       inputTokens + outputTokens ||
     (usage.currency !== undefined && usage.currency !== 'USD') ||
     (usage.is_byok !== undefined && usage.is_byok !== false) ||
@@ -484,15 +480,23 @@ function responseResult(
       )
         fail('usage_invalid');
   }
+  const actualCostMicros = costMicros(parsed.cost, Number.MAX_SAFE_INTEGER);
+  const overBudget =
+    inputTokens > context.budgets.maxInputTokens ||
+    outputTokens > context.budgets.maxOutputTokens ||
+    inputTokens + outputTokens > context.budgets.maxContextTokens ||
+    actualCostMicros > context.budgets.maxCostMicros;
   return {
-    outputJson: convertOutput(content),
+    // Preserve valid native accounting for the SDK's usage reconciliation. An
+    // over-budget response must never supply an acceptable answer/candidate.
+    outputJson: overBudget ? '' : convertOutput(content),
     provider: route.configuration.provider,
     model: route.configuration.model,
     requestId,
     usage: {
       inputTokens,
       outputTokens,
-      costMicros: costMicros(parsed.cost, context.budgets.maxCostMicros),
+      costMicros: actualCostMicros,
       currency: 'USD',
     },
   };

@@ -4,10 +4,14 @@ import {
   createProductionSupportAnswering,
   SUPPORT_ASSISTANT_SYNTHETIC_ROLE,
 } from './support-assistant-production';
-import { composeSupportAnswering, supportAnsweringEnabled } from './support-assistant-composition';
+import {
+  composeSupportAnswering,
+  supportAnsweringEnabled,
+} from './support-assistant-composition';
 import { createSupportAnsweringIngress } from './support-assistant-ingress';
 import { productionAnsweringFixture } from './support-assistant-production-fixtures';
 import { supportAssistantRoutePolicySha256 } from './support-assistant-config';
+import { defineCollection, type StoredRecord } from '@pegma/storage-core';
 
 afterEach(() => vi.unstubAllGlobals());
 function runtime(
@@ -21,7 +25,9 @@ function runtime(
     () => f.environment.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true',
   );
 }
-async function ingress(f: Awaited<ReturnType<typeof productionAnsweringFixture>>) {
+async function ingress(
+  f: Awaited<ReturnType<typeof productionAnsweringFixture>>,
+) {
   return createSupportAnsweringIngress(
     { ...f.f.runtime, application: f.f.application },
     f.f.logger,
@@ -30,6 +36,85 @@ async function ingress(f: Awaited<ReturnType<typeof productionAnsweringFixture>>
 }
 
 describe('source-owned normal production answering bundle', () => {
+  it('admits and funds a smaller positive production request using the full immutable pool hold', async () => {
+    const f = await productionAnsweringFixture();
+    f.settings.route.configuration.budgets.maxCostMicros = 1_000;
+    f.settings.route.approval.requestPolicySha256 =
+      await supportAssistantRoutePolicySha256(f.settings.route);
+    f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON = JSON.stringify(
+      f.settings,
+    );
+    f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
+    const configured = await f.bundle();
+    expect(configured.configuration).toBeDefined();
+    expect(
+      await runtime(f, configured).admission(f.principalId),
+    ).not.toBeNull();
+    await f.seed();
+    vi.stubGlobal('fetch', vi.fn(f.provider));
+    const outcomes: string[] = [];
+    for (let physical = 0; physical < 12; ++physical) {
+      const result = await runtime(f, await f.bundle()).runTick();
+      outcomes.push(
+        result.outcome === 'scanned' ? result.turn : result.outcome,
+      );
+      if (result.outcome === 'deferred')
+        f.f.advance(
+          Math.max(
+            0,
+            Date.parse(result.nextAttemptAt) -
+              Date.parse(f.f.runtime.clock.now()),
+          ),
+        );
+      if (result.outcome === 'scanned' && result.turn === 'completed') break;
+    }
+    expect(outcomes.at(-1)).toBe('completed');
+    expect(f.wires).toHaveLength(1);
+    const raw = defineCollection<StoredRecord>({
+      name: 'pegma.support-assistant-usage.v1',
+      key: (value) => ({
+        partition: String(value.partition),
+        id: String(value.id),
+      }),
+      codec: {
+        encode: (value) => ({ ...value }),
+        decode: (value) => ({ ...value }),
+      },
+    });
+    const ledger = await f.store
+      .collection(raw)
+      .get({ partition: 'support_answer', id: 'budget' });
+    expect(ledger).not.toBeNull();
+    expect(JSON.parse(String(ledger!.payload))).toMatchObject({
+      spentMicros: '1',
+      reservations: [{ reservedMicros: 2_704, state: 'known' }],
+    });
+  });
+
+  it.each([0, 2_705])(
+    'refuses paid admission with an unfunded request budget %i',
+    async (maxCostMicros) => {
+      const f = await productionAnsweringFixture();
+      const original = await f.bundle();
+      if (!original.configuration)
+        throw new Error('Fictional production setup unavailable');
+      f.environment.PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED = 'true';
+      const route = structuredClone(f.settings.route);
+      route.configuration.budgets.maxCostMicros = maxCostMicros;
+      route.approval.requestPolicySha256 =
+        await supportAssistantRoutePolicySha256(route);
+      const supplied = {
+        ...original,
+        configuration: {
+          ...original.configuration,
+          route: { ...original.configuration.route, readRoute: () => route },
+        },
+      };
+      expect(await runtime(f, supplied).admission(f.principalId)).toBeNull();
+      expect(f.wires).toHaveLength(0);
+    },
+  );
+
   it.each([undefined, '', '{', '{}'])(
     'keeps missing or malformed operator configuration receipt-only: %s',
     async (value) => {
@@ -52,27 +137,40 @@ describe('source-owned normal production answering bundle', () => {
     'audience',
     'pool',
     'tokenizer',
-  ] as const)('refuses an unqualified operator %s without reading a credential', async (change) => {
-    const f = await productionAnsweringFixture();
-    const settings = structuredClone(f.settings);
-    if (change === 'endpoint') settings.route.endpointTag = 'azure/unreviewed';
-    if (change === 'credential') settings.route.credentialRef = 'some-other-secret';
-    if (change === 'hash') settings.route.approval.requestPolicySha256 = '0'.repeat(64);
-    if (change === 'extra') Object.assign(settings, { extra: true });
-    if (change === 'expiry') settings.route.approval.validUntil = '2020-01-01T00:00:00.000Z';
-    if (change === 'audience') settings.audience.principalId = 'ordinary-real-account';
-    if (change === 'pool') settings.usagePolicy.maxCostMicros = 1_000_001;
-    if (change === 'tokenizer') settings.tokenizer.framingTokens = 0;
-    f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON = JSON.stringify(settings);
-    Object.defineProperty(f.environment, 'SUPPORT_ASSISTANT_OPENROUTER_API_KEY', {
-      get() {
-        throw new Error('Credential must stay unread.');
-      },
-    });
-    const configured = await f.bundle();
-    expect(configured.configuration).toBeUndefined();
-    expect(supportAnsweringEnabled(configured)).toBe(false);
-  });
+  ] as const)(
+    'refuses an unqualified operator %s without reading a credential',
+    async (change) => {
+      const f = await productionAnsweringFixture();
+      const settings = structuredClone(f.settings);
+      if (change === 'endpoint')
+        settings.route.endpointTag = 'azure/unreviewed';
+      if (change === 'credential')
+        settings.route.credentialRef = 'some-other-secret';
+      if (change === 'hash')
+        settings.route.approval.requestPolicySha256 = '0'.repeat(64);
+      if (change === 'extra') Object.assign(settings, { extra: true });
+      if (change === 'expiry')
+        settings.route.approval.validUntil = '2020-01-01T00:00:00.000Z';
+      if (change === 'audience')
+        settings.audience.principalId = 'ordinary-real-account';
+      if (change === 'pool') settings.usagePolicy.maxCostMicros = 1_000_001;
+      if (change === 'tokenizer') settings.tokenizer.framingTokens = 0;
+      f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON =
+        JSON.stringify(settings);
+      Object.defineProperty(
+        f.environment,
+        'SUPPORT_ASSISTANT_OPENROUTER_API_KEY',
+        {
+          get() {
+            throw new Error('Credential must stay unread.');
+          },
+        },
+      );
+      const configured = await f.bundle();
+      expect(configured.configuration).toBeUndefined();
+      expect(supportAnsweringEnabled(configured)).toBe(false);
+    },
+  );
 
   it('binds only the reserved fictional principal with its actual current synthetic role', async () => {
     const f = await productionAnsweringFixture();
@@ -82,13 +180,19 @@ describe('source-owned normal production answering bundle', () => {
     expect(selected?.collectionIds).toEqual(['fictional-guides']);
     expect(
       configured.selectAudience(
-        resolveAccess({ principalId: f.principalId }, configured.customerPolicy),
+        resolveAccess(
+          { principalId: f.principalId },
+          configured.customerPolicy,
+        ),
       ),
     ).toBeNull();
     expect(
       configured.selectAudience(
         resolveAccess(
-          { principalId: 'fictional-other', roles: [SUPPORT_ASSISTANT_SYNTHETIC_ROLE] },
+          {
+            principalId: 'fictional-other',
+            roles: [SUPPORT_ASSISTANT_SYNTHETIC_ROLE],
+          },
           configured.customerPolicy,
         ),
       ),
@@ -105,11 +209,17 @@ describe('source-owned normal production answering bundle', () => {
     const outcomes: string[] = [];
     for (let physical = 0; physical < 12; ++physical) {
       const result = await runtime(f, await f.bundle()).runTick();
-      outcomes.push(result.outcome === 'scanned' ? result.turn : result.outcome);
+      outcomes.push(
+        result.outcome === 'scanned' ? result.turn : result.outcome,
+      );
       if (result.outcome === 'prepared') expect(f.wires).toHaveLength(0);
       if (result.outcome === 'deferred')
         f.f.advance(
-          Math.max(0, Date.parse(result.nextAttemptAt) - Date.parse(f.f.runtime.clock.now())),
+          Math.max(
+            0,
+            Date.parse(result.nextAttemptAt) -
+              Date.parse(f.f.runtime.clock.now()),
+          ),
         );
       if (result.outcome === 'scanned' && result.turn === 'completed') break;
     }
@@ -127,7 +237,9 @@ describe('source-owned normal production answering bundle', () => {
       await f.access(),
       command.command.ticketId,
     );
-    expect(view.messages.filter((message) => message.authorKind === 'assistant')).toHaveLength(1);
+    expect(
+      view.messages.filter((message) => message.authorKind === 'assistant'),
+    ).toHaveLength(1);
   });
 
   it.each(['human', 'assistant_if_available'] as const)(
@@ -152,17 +264,23 @@ describe('source-owned normal production answering bundle', () => {
       expect((await (await ingress(f))(f.request(packet))).status).toBe(503);
       f.environment.PEGMA_SUPPORT_ASSISTANT_ENABLED = 'false';
       f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON = '';
-      Object.defineProperty(f.environment, 'SUPPORT_ASSISTANT_OPENROUTER_API_KEY', {
-        get() {
-          throw new Error('Recovery does not read keys.');
+      Object.defineProperty(
+        f.environment,
+        'SUPPORT_ASSISTANT_OPENROUTER_API_KEY',
+        {
+          get() {
+            throw new Error('Recovery does not read keys.');
+          },
         },
-      });
+      );
       const recovered = await (await ingress(f))(f.request(packet));
       expect(recovered.status).toBe(201);
       expect(await recovered.json()).toMatchObject({
         initialMode: preference === 'human' ? 'human' : 'assistant',
       });
-      expect((await (await ingress(f))(f.request(f.packet(preference)))).status).toBe(409);
+      expect(
+        (await (await ingress(f))(f.request(f.packet(preference)))).status,
+      ).toBe(409);
       expect(f.wires).toHaveLength(0);
     },
   );
@@ -176,12 +294,18 @@ describe('source-owned normal production answering bundle', () => {
       const prepared = await runtime(f, await f.bundle()).runTick();
       expect(prepared.outcome).toBe('prepared');
       if (change === 'role') {
-        const current = await f.f.runtime.roleStore.getRoleAssignment('fictional-answering-role');
-        if (current === null) throw new Error('Missing real synthetic assignment.');
+        const current = await f.f.runtime.roleStore.getRoleAssignment(
+          'fictional-answering-role',
+        );
+        if (current === null)
+          throw new Error('Missing real synthetic assignment.');
         await f.f.runtime.roleStore.revokeRoleAssignmentWithAudit({
           assignmentId: 'fictional-answering-role',
           expectedConcurrencyToken: current.concurrencyToken,
-          revokedBy: { kind: 'principal', principalId: f.f.human.principals.administrator },
+          revokedBy: {
+            kind: 'principal',
+            principalId: f.f.human.principals.administrator,
+          },
           revokedAtEpochMs: Date.now(),
           auditEventId: crypto.randomUUID(),
         });
@@ -190,19 +314,22 @@ describe('source-owned normal production answering bundle', () => {
           f.settings.route.configuration.dataControls = {
             ...f.settings.route.configuration.dataControls,
             verifiedAt: new Date(
-              Date.parse(f.settings.route.configuration.dataControls.verifiedAt) - 1,
+              Date.parse(
+                f.settings.route.configuration.dataControls.verifiedAt,
+              ) - 1,
             ).toISOString(),
           };
         else {
           f.settings.route.usageScopeRef = 'fictional-changed-pool';
           f.settings.usagePolicy.scopeRef = 'fictional-changed-pool';
         }
-        f.settings.route.approval.requestPolicySha256 = await supportAssistantRoutePolicySha256(
-          f.settings.route,
-        );
-        f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON = JSON.stringify(f.settings);
+        f.settings.route.approval.requestPolicySha256 =
+          await supportAssistantRoutePolicySha256(f.settings.route);
+        f.environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON =
+          JSON.stringify(f.settings);
       }
-      for (let physical = 0; physical < 3; ++physical) await runtime(f, await f.bundle()).runTick();
+      for (let physical = 0; physical < 3; ++physical)
+        await runtime(f, await f.bundle()).runTick();
       expect(f.wires).toHaveLength(0);
     },
   );
@@ -214,14 +341,22 @@ describe('source-owned normal production answering bundle', () => {
       throw new Error('Fictional lost transport acknowledgement.');
     });
     vi.stubGlobal('fetch', transport);
-    expect((await runtime(f, await f.bundle()).runTick()).outcome).toBe('prepared');
+    expect((await runtime(f, await f.bundle()).runTick()).outcome).toBe(
+      'prepared',
+    );
     const outcomes: string[] = [];
     for (let physical = 0; physical < 5; ++physical) {
       const result = await runtime(f, await f.bundle()).runTick();
-      outcomes.push(result.outcome === 'scanned' ? result.turn : result.outcome);
+      outcomes.push(
+        result.outcome === 'scanned' ? result.turn : result.outcome,
+      );
       if (result.outcome === 'deferred') {
         f.f.advance(
-          Math.max(0, Date.parse(result.nextAttemptAt) - Date.parse(f.f.runtime.clock.now())),
+          Math.max(
+            0,
+            Date.parse(result.nextAttemptAt) -
+              Date.parse(f.f.runtime.clock.now()),
+          ),
         );
       }
       f.f.advance(1000);
@@ -233,7 +368,9 @@ describe('source-owned normal production answering bundle', () => {
     );
     expect(outcomes).toEqual(['finished', 'none', 'none', 'none', 'none']);
     expect(view.ticket.handling).toBe('human-pending');
-    expect(view.messages.filter((message) => message.authorKind === 'assistant')).toHaveLength(0);
+    expect(
+      view.messages.filter((message) => message.authorKind === 'assistant'),
+    ).toHaveLength(0);
   });
 
   it('never uses receipt-only recovery to bypass original-session revocation', async () => {

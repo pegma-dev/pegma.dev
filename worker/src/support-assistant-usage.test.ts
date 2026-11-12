@@ -32,7 +32,9 @@ const rawRecords = defineCollection<StoredRecord>({
   },
 });
 
-function policy(overrides: Partial<SupportAssistantUsagePolicy> = {}): SupportAssistantUsagePolicy {
+function policy(
+  overrides: Partial<SupportAssistantUsagePolicy> = {},
+): SupportAssistantUsagePolicy {
   return {
     version: 'synthetic-budget-v1',
     scopeRef: 'synthetic-scope',
@@ -132,7 +134,8 @@ function observe(backing: Store, hooks: Hooks = {}) {
         async update(key, decide, options) {
           counts.updates += 1;
           attempts.push(options?.maxAttempts);
-          if (hooks.unavailable?.()) throw new Error('synthetic storage outage');
+          if (hooks.unavailable?.())
+            throw new Error('synthetic storage outage');
           const result = await target.update(
             key,
             async (current) => {
@@ -163,7 +166,10 @@ function observe(backing: Store, hooks: Hooks = {}) {
   return { store, counts, attempts };
 }
 
-function fixture(overrides: Partial<SupportAssistantUsagePolicy> = {}, hooks: Hooks = {}) {
+function fixture(
+  overrides: Partial<SupportAssistantUsagePolicy> = {},
+  hooks: Hooks = {},
+) {
   const backing = createMemoryStore();
   const observed = observe(backing, hooks);
   let at = START;
@@ -203,7 +209,9 @@ interface StoredLedger {
 
 async function ledger(store: Store): Promise<StoredLedger | null> {
   const record = await store.collection(rawRecords).get(KEY);
-  return record === null ? null : (JSON.parse(String(record.payload)) as StoredLedger);
+  return record === null
+    ? null
+    : (JSON.parse(String(record.payload)) as StoredLedger);
 }
 
 function deferred() {
@@ -215,6 +223,49 @@ function deferred() {
 }
 
 describe('Support assistant durable usage port', () => {
+  it.each([0, -1, 1.5, NaN, Infinity, 11])(
+    'refuses an unfunded or invalid context cost before storage: %s',
+    async (maxCostMicros) => {
+      const f = fixture();
+      const input = context();
+      expect(
+        await f.port.reserve({
+          ...input,
+          budgets: { ...input.budgets, maxCostMicros },
+        }),
+      ).toEqual({ outcome: 'denied' });
+      expect(f.observed.counts.collections).toBe(0);
+      expect(await ledger(f.backing)).toBeNull();
+    },
+  );
+
+  it('retains the policy hold for a smaller positive request budget across exact replay', async () => {
+    const f = fixture();
+    const original = context();
+    const input = {
+      ...original,
+      budgets: { ...original.budgets, maxCostMicros: 5 },
+    };
+    const expected = {
+      outcome: 'reserved',
+      usageReservationId: input.usageReservationId,
+    };
+    expect(await f.port.reserve(input)).toEqual(expected);
+    expect((await ledger(f.backing))?.reservations[0]?.reservedMicros).toBe(10);
+    const retained = await f.backing.collection(rawRecords).get(KEY);
+    expect(await f.create().reserve(input)).toEqual(expected);
+    expect(await f.backing.collection(rawRecords).get(KEY)).toEqual(retained);
+    expect(
+      (
+        await f.port.reserve({
+          ...input,
+          budgets: { ...input.budgets, maxCostMicros: 6 },
+        })
+      ).outcome,
+    ).toBe('denied');
+    expect(await f.backing.collection(rawRecords).get(KEY)).toEqual(retained);
+  });
+
   it('keeps the default unavailable before any Store operation', async () => {
     const backing = createMemoryStore();
     const observed = observe(backing);
@@ -223,7 +274,9 @@ describe('Support assistant durable usage port', () => {
       clock: { now: () => START },
     });
     expect(await port.reserve(context())).toEqual({ outcome: 'unavailable' });
-    expect(await port.reconcile(identity(context()), { state: 'unknown' })).toBe('pending');
+    expect(
+      await port.reconcile(identity(context()), { state: 'unknown' }),
+    ).toBe('pending');
     expect(observed.counts.collections).toBe(0);
     expect(await ledger(backing)).toBeNull();
   });
@@ -266,7 +319,9 @@ describe('Support assistant durable usage port', () => {
     const f = fixture();
     const a = context();
     expect((await f.port.reserve(a)).outcome).toBe('reserved');
-    expect((await f.port.reserve({ ...a, inputFingerprint: 'changed' })).outcome).toBe('denied');
+    expect(
+      (await f.port.reserve({ ...a, inputFingerprint: 'changed' })).outcome,
+    ).toBe('denied');
     expect(
       (
         await f.port.reserve({
@@ -275,10 +330,13 @@ describe('Support assistant durable usage port', () => {
         })
       ).outcome,
     ).toBe('denied');
-    expect((await f.port.reserve({ ...a, usageReservationId: 'other-reservation' })).outcome).toBe(
-      'denied',
-    );
-    expect((await f.port.reserve({ ...a, audienceVersion: 'changed' })).outcome).toBe('denied');
+    expect(
+      (await f.port.reserve({ ...a, usageReservationId: 'other-reservation' }))
+        .outcome,
+    ).toBe('denied');
+    expect(
+      (await f.port.reserve({ ...a, audienceVersion: 'changed' })).outcome,
+    ).toBe('denied');
     expect(
       (
         await f.port.reserve({
@@ -331,7 +389,7 @@ describe('Support assistant durable usage port', () => {
               ? { ...a, modelVersion: 'other' }
               : field === 'currency'
                 ? { ...a, budgets: { ...a.budgets, currency: 'EUR' } }
-                : { ...a, budgets: { ...a.budgets, maxCostMicros: 9 } };
+                : { ...a, budgets: { ...a.budgets, maxCostMicros: 11 } };
       expect((await f.port.reserve(input)).outcome).toBe('denied');
       expect(f.observed.counts.collections).toBe(0);
     },
@@ -340,13 +398,18 @@ describe('Support assistant durable usage port', () => {
   it('refuses expired/window-crossing/aborted contexts and an invalid clock', async () => {
     const f = fixture();
     const a = context();
-    expect((await f.port.reserve({ ...a, deadline: START })).outcome).toBe('denied');
-    expect((await f.port.reserve({ ...a, deadline: '2026-11-10T00:10:01.000Z' })).outcome).toBe(
+    expect((await f.port.reserve({ ...a, deadline: START })).outcome).toBe(
       'denied',
     );
+    expect(
+      (await f.port.reserve({ ...a, deadline: '2026-11-10T00:10:01.000Z' }))
+        .outcome,
+    ).toBe('denied');
     const controller = new AbortController();
     controller.abort();
-    expect((await f.port.reserve({ ...a, signal: controller.signal })).outcome).toBe('denied');
+    expect(
+      (await f.port.reserve({ ...a, signal: controller.signal })).outcome,
+    ).toBe('denied');
     f.setTime('2026-11-09T23:59:59.000Z');
     expect((await f.port.reserve(a)).outcome).toBe('denied');
     f.setTime('invalid');
@@ -367,11 +430,17 @@ describe('Support assistant durable usage port', () => {
         },
       },
     );
-    const pending = Promise.all([f.port.reserve(context('a')), f.port.reserve(context('b'))]);
+    const pending = Promise.all([
+      f.port.reserve(context('a')),
+      f.port.reserve(context('b')),
+    ]);
     await bothRead.promise;
     proceed.release();
     const results = await pending;
-    expect(results.map((value) => value.outcome).sort()).toEqual(['denied', 'reserved']);
+    expect(results.map((value) => value.outcome).sort()).toEqual([
+      'denied',
+      'reserved',
+    ]);
     expect((await ledger(f.backing))?.reservations).toHaveLength(1);
     expect(f.observed.counts.updates).toBe(2);
     expect(f.observed.counts.decisions).toBeLessThanOrEqual(4);
@@ -384,28 +453,39 @@ describe('Support assistant durable usage port', () => {
     const b = context('b');
     await f.port.reserve(a);
     await f.port.reserve(b);
-    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe('reconciled');
-    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe('pending');
+    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe(
+      'reconciled',
+    );
+    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe(
+      'pending',
+    );
     f.advance(120_000);
-    expect((await f.port.reserve(context('c', f.clock.now()))).outcome).toBe('denied');
-    expect((await ledger(f.backing))?.reservations.map((entry) => entry.state)).toEqual([
-      'unknown',
-      'reserved',
-    ]);
+    expect((await f.port.reserve(context('c', f.clock.now()))).outcome).toBe(
+      'denied',
+    );
+    expect(
+      (await ledger(f.backing))?.reservations.map((entry) => entry.state),
+    ).toEqual(['unknown', 'reserved']);
   });
 
   it('settles exact known duplicates without a false accounting hold or downgrade', async () => {
     const f = fixture();
     const a = context();
     await f.port.reserve(a);
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage() })).toBe(
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('reconciled');
+    expect(
+      await f
+        .create()
+        .reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('reconciled');
+    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe(
+      'pending',
+    );
+    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe(
       'reconciled',
     );
-    expect(await f.create().reconcile(identity(a), { state: 'known', usage: usage() })).toBe(
-      'reconciled',
-    );
-    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe('pending');
-    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe('reconciled');
     expect((await ledger(f.backing))?.spentMicros).toBe('5');
     expect((await ledger(f.backing))?.accountingHold).toBe(false);
     expect((await f.port.reserve(context('b'))).outcome).toBe('reserved');
@@ -415,9 +495,9 @@ describe('Support assistant durable usage port', () => {
     const f = fixture({ maxCostMicros: 100 });
     const a = context('a');
     expect((await f.port.reserve(a)).outcome).toBe('reserved');
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage(5) })).toBe(
-      'reconciled',
-    );
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage(5) }),
+    ).toBe('reconciled');
     // The original known charge cannot justify spending the rest of this pool
     // after another observation reports a larger liability for the same call.
     expect(
@@ -429,7 +509,9 @@ describe('Support assistant durable usage port', () => {
     expect((await ledger(f.backing))?.accountingHold).toBe(true);
     expect((await f.create().reserve(context('b'))).outcome).toBe('denied');
     // Replaying an older observation must not clear a durable accounting hold.
-    await f.create().reconcile(identity(a), { state: 'known', usage: usage(5) });
+    await f
+      .create()
+      .reconcile(identity(a), { state: 'known', usage: usage(5) });
     expect((await f.create().reserve(context('c'))).outcome).toBe('denied');
   });
 
@@ -469,9 +551,11 @@ describe('Support assistant durable usage port', () => {
     const accepted = stored?.reservations[0]?.usage;
     if (accepted === null || accepted === undefined)
       throw new Error('Actual accepted usage was not retained');
-    expect(await f.create().reconcile(identity(a), { state: 'known', usage: accepted })).toBe(
-      'pending',
-    );
+    expect(
+      await f
+        .create()
+        .reconcile(identity(a), { state: 'known', usage: accepted }),
+    ).toBe('pending');
     expect((await f.create().reserve(context('b'))).outcome).toBe('denied');
     expect((await ledger(f.backing))?.accountingHold).toBe(true);
     expect(f.observed.attempts.every((maximum) => maximum === 2)).toBe(true);
@@ -481,11 +565,13 @@ describe('Support assistant durable usage port', () => {
     const f = fixture({ maxReservations: 3, maxCostMicros: 100 });
     const a = context('a');
     expect((await f.port.reserve(a)).outcome).toBe('reserved');
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage(5) })).toBe(
-      'reconciled',
-    );
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage(5) }),
+    ).toBe('reconciled');
     f.advance(27_000); // Original deadline and terminal retention have both elapsed.
-    expect((await f.port.reserve(context('b', f.clock.now()))).outcome).toBe('reserved');
+    expect((await f.port.reserve(context('b', f.clock.now()))).outcome).toBe(
+      'reserved',
+    );
     const renewed = {
       ...a,
       inputFingerprint: 'different-request-for-the-same-attempt',
@@ -501,10 +587,16 @@ describe('Support assistant durable usage port', () => {
     const f = fixture({ maxCostMicros: 10 });
     const a = context();
     await f.port.reserve(a);
-    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe('reconciled');
-    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe('reconciled');
+    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe(
+      'reconciled',
+    );
+    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe(
+      'reconciled',
+    );
     expect((await f.port.reserve(context('b'))).outcome).toBe('denied');
-    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe('pending');
+    expect(await f.port.reconcile(identity(a), { state: 'not_called' })).toBe(
+      'pending',
+    );
   });
 
   it('retains active-window terminal slots and compacts only after admission closes', async () => {
@@ -516,20 +608,24 @@ describe('Support assistant durable usage port', () => {
     const b = context('b', f.clock.now());
     expect((await f.port.reserve(b)).outcome).toBe('reserved');
     expect((await ledger(f.backing))?.reservations).toHaveLength(2);
-    expect((await f.port.reserve(context('c', f.clock.now()))).outcome).toBe('denied');
+    expect((await f.port.reserve(context('c', f.clock.now()))).outcome).toBe(
+      'denied',
+    );
     const updates = f.observed.counts.updates;
     expect((await f.port.reserve(a)).outcome).toBe('denied');
     expect(f.observed.counts.updates).toBe(updates);
     f.setTime('2026-11-10T00:10:01.000Z');
-    expect(await f.port.reconcile(identity(b), { state: 'known', usage: usage(10) })).toBe(
-      'reconciled',
-    );
+    expect(
+      await f.port.reconcile(identity(b), { state: 'known', usage: usage(10) }),
+    ).toBe('reconciled');
     expect((await ledger(f.backing))?.reservations).toHaveLength(1);
-    expect((await f.port.reserve(context('d', f.clock.now()))).outcome).toBe('denied');
-    expect((await ledger(f.backing))?.spentMicros).toBe('20');
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage(10) })).toBe(
-      'pending',
+    expect((await f.port.reserve(context('d', f.clock.now()))).outcome).toBe(
+      'denied',
     );
+    expect((await ledger(f.backing))?.spentMicros).toBe('20');
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage(10) }),
+    ).toBe('pending');
   });
 
   it('records actual over-budget usage exactly, even beyond Number-safe cumulative sums', async () => {
@@ -549,9 +645,9 @@ describe('Support assistant durable usage port', () => {
     expect((await ledger(f.backing))?.spentMicros).toBe(
       (2n * BigInt(Number.MAX_SAFE_INTEGER)).toString(),
     );
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage(5) })).toBe(
-      'pending',
-    );
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage(5) }),
+    ).toBe('pending');
     expect((await ledger(f.backing))?.spentMicros).toBe(
       (2n * BigInt(Number.MAX_SAFE_INTEGER)).toString(),
     );
@@ -570,15 +666,17 @@ describe('Support assistant durable usage port', () => {
       policy: { ...f.selected, version: 'other', maxCostMicros: 1_000 },
     });
     expect((await changed.reserve(context('b'))).outcome).toBe('unavailable');
-    expect(await changed.reconcile(identity(a), { state: 'known', usage: usage() })).toBe(
-      'pending',
-    );
+    expect(
+      await changed.reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('pending');
     f.setTime('2026-11-10T00:10:00.000Z');
-    expect((await f.port.reserve(context('c', f.clock.now()))).outcome).toBe('denied');
-    expect((await ledger(f.backing))?.spentMicros).toBe('5');
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage() })).toBe(
-      'reconciled',
+    expect((await f.port.reserve(context('c', f.clock.now()))).outcome).toBe(
+      'denied',
     );
+    expect((await ledger(f.backing))?.spentMicros).toBe('5');
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('reconciled');
   });
 
   it('refuses a clock moving behind a committed observation', async () => {
@@ -589,7 +687,9 @@ describe('Support assistant durable usage port', () => {
     await f.port.reconcile(identity(a), { state: 'unknown' });
     f.setTime(START);
     expect((await f.port.reserve(context('b'))).outcome).toBe('unavailable');
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage() })).toBe('pending');
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('pending');
     expect((await ledger(f.backing))?.spentMicros).toBe('0');
   });
 
@@ -629,11 +729,15 @@ describe('Support assistant durable usage port', () => {
     const a = context();
     await f.port.reserve(a);
     loseAck = true;
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage() })).toBe('pending');
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('pending');
     expect((await ledger(f.backing))?.spentMicros).toBe('5');
-    expect(await f.create().reconcile(identity(a), { state: 'known', usage: usage() })).toBe(
-      'reconciled',
-    );
+    expect(
+      await f
+        .create()
+        .reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('reconciled');
     expect((await ledger(f.backing))?.spentMicros).toBe('5');
   });
 
@@ -643,13 +747,15 @@ describe('Support assistant durable usage port', () => {
     const a = context();
     await f.port.reserve(a);
     unavailable = true;
-    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe('pending');
+    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe(
+      'pending',
+    );
     expect((await f.port.reserve(context('b'))).outcome).toBe('unavailable');
     unavailable = false;
     expect((await ledger(f.backing))?.reservations).toHaveLength(1);
-    expect(await f.port.reconcile(identity(a), { state: 'known', usage: usage() })).toBe(
-      'reconciled',
-    );
+    expect(
+      await f.port.reconcile(identity(a), { state: 'known', usage: usage() }),
+    ).toBe('reconciled');
   });
 
   it('withholds a late ACK while keeping its committed reservation', async () => {
@@ -660,7 +766,9 @@ describe('Support assistant durable usage port', () => {
     expect((await f.port.reserve(a)).outcome).toBe('unavailable');
     expect((await ledger(f.backing))?.reservations[0]?.state).toBe('reserved');
     advance = () => {};
-    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe('reconciled');
+    expect(await f.port.reconcile(identity(a), { state: 'unknown' })).toBe(
+      'reconciled',
+    );
   });
 
   it('refuses malformed/mismatched observations without mutating known liability', async () => {
@@ -689,21 +797,31 @@ describe('Support assistant durable usage port', () => {
 
   it('refuses persisted corruption without replacing it with an empty budget', async () => {
     const f = fixture();
-    await f.backing.collection(rawRecords).put({ ...KEY, format: 1, payload: '{}' });
+    await f.backing
+      .collection(rawRecords)
+      .put({ ...KEY, format: 1, payload: '{}' });
     const before = await f.backing.collection(rawRecords).getVersioned(KEY);
     expect((await f.port.reserve(context())).outcome).toBe('unavailable');
-    expect(await f.port.reconcile(identity(context()), { state: 'unknown' })).toBe('pending');
-    expect(await f.backing.collection(rawRecords).getVersioned(KEY)).toEqual(before);
+    expect(
+      await f.port.reconcile(identity(context()), { state: 'unknown' }),
+    ).toBe('pending');
+    expect(await f.backing.collection(rawRecords).getVersioned(KEY)).toEqual(
+      before,
+    );
   });
 
   it('stores one bounded record of hashes and accounting, with no raw context identifiers', async () => {
     const f = fixture({ maxReservations: 32, maxCostMicros: 1_000 });
     for (let index = 0; index < 32; index += 1)
-      expect((await f.port.reserve(context(`private-canary-${index}`))).outcome).toBe('reserved');
+      expect(
+        (await f.port.reserve(context(`private-canary-${index}`))).outcome,
+      ).toBe('reserved');
     const rows = await f.backing.collection(rawRecords).list(KEY.partition);
     expect(rows).toHaveLength(1);
     const serialized = JSON.stringify(rows[0]);
-    expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(60_000);
+    expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(
+      60_000,
+    );
     expect(serialized).not.toContain('private-canary');
     expect(serialized).not.toContain('synthetic-scope');
     expect(serialized).not.toContain('synthetic-price-v1');
