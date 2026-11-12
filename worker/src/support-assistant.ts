@@ -47,6 +47,9 @@ const MAX_TICK_MILLISECONDS = 25_000;
 const COMMIT_RESERVE_MILLISECONDS = 1_000;
 const CHECKPOINT_KEY = { partition: 'support-answering', id: 'scan' } as const;
 
+interface PreparedTarget extends AssistantTurnKey {
+  readonly triggerMessageId?: string;
+}
 interface Checkpoint {
   readonly partition: string;
   readonly id: string;
@@ -54,6 +57,8 @@ interface Checkpoint {
   readonly generation: number;
   /** Scheduling-only suppression of exact already completed hints, never authority. */
   readonly retiredTargets?: readonly SupportAssistantTargetHint[];
+  /** One-use scheduling key from an acknowledged public SDK preparation. */
+  readonly preparedTarget?: PreparedTarget;
   /** A scheduling hint only. Every resumed turn still uses current SDK guards. */
   readonly notBefore?: string;
 }
@@ -68,6 +73,19 @@ function bounded(value: unknown, maximum = 200): value is string {
 }
 function validCursor(value: unknown): value is string | null {
   return value === null || bounded(value, MAX_CURSOR);
+}
+function validPreparedTarget(value: unknown): value is PreparedTarget {
+  if (value === null || typeof value !== 'object') return false;
+  return (
+    'ticketId' in value &&
+    bounded(value.ticketId) &&
+    'turnId' in value &&
+    bounded(value.turnId) &&
+    Object.keys(value).every((key) =>
+      ['ticketId', 'turnId', 'triggerMessageId'].includes(key),
+    ) &&
+    (!('triggerMessageId' in value) || bounded(value.triggerMessageId))
+  );
 }
 function validRetiredTargets(
   value: unknown,
@@ -95,6 +113,8 @@ function checkpoint(value: Checkpoint | null): Checkpoint {
     value.generation < 1 ||
     (value.retiredTargets !== undefined &&
       !validRetiredTargets(value.retiredTargets)) ||
+    (value.preparedTarget !== undefined &&
+      !validPreparedTarget(value.preparedTarget)) ||
     (value.notBefore !== undefined &&
       (!bounded(value.notBefore, 40) ||
         !Number.isFinite(Date.parse(value.notBefore)) ||
@@ -111,13 +131,16 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
   codec: {
     encode(value) {
       checkpoint(value);
-      const { retiredTargets, ...fields } = value;
+      const { retiredTargets, preparedTarget, ...fields } = value;
       return {
         ...fields,
         cursor: value.cursor === null ? 'end' : 'next:' + value.cursor,
         ...(retiredTargets === undefined
           ? {}
           : { retiredTargets: JSON.stringify(retiredTargets) }),
+        ...(preparedTarget === undefined
+          ? {}
+          : { preparedTarget: JSON.stringify(preparedTarget) }),
       };
     },
     decode(value) {
@@ -131,6 +154,7 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
               'generation',
               'notBefore',
               'retiredTargets',
+              'preparedTarget',
             ].includes(key),
         ) ||
         !['partition', 'id', 'cursor', 'generation'].every((key) =>
@@ -143,7 +167,9 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
         (Object.hasOwn(value, 'notBefore') &&
           typeof value.notBefore !== 'string') ||
         (Object.hasOwn(value, 'retiredTargets') &&
-          typeof value.retiredTargets !== 'string')
+          typeof value.retiredTargets !== 'string') ||
+        (Object.hasOwn(value, 'preparedTarget') &&
+          typeof value.preparedTarget !== 'string')
       )
         throw new TypeError('Invalid Support assistant checkpoint fields.');
       const cursor =
@@ -160,6 +186,12 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
           : JSON.parse(String(value.retiredTargets));
       if (retiredTargets !== undefined && !validRetiredTargets(retiredTargets))
         throw new TypeError('Invalid retired Support assistant targets.');
+      const preparedTarget: unknown =
+        value.preparedTarget === undefined
+          ? undefined
+          : JSON.parse(String(value.preparedTarget));
+      if (preparedTarget !== undefined && !validPreparedTarget(preparedTarget))
+        throw new TypeError('Invalid prepared Support assistant target.');
       return checkpoint({
         partition: value.partition,
         id: value.id,
@@ -169,6 +201,7 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
           ? { notBefore: value.notBefore }
           : {}),
         ...(retiredTargets === undefined ? {} : { retiredTargets }),
+        ...(preparedTarget === undefined ? {} : { preparedTarget }),
       });
     },
   },
@@ -561,6 +594,7 @@ export function createSupportAssistantRuntime(
           .sort((a, b) => b.value.createdAt.localeCompare(a.value.createdAt));
         const prior = checkpoint(priorVersion?.value ?? null);
         let retiredTargets = prior.retiredTargets ?? [];
+        let preparedTarget = prior.preparedTarget;
         const targetHeads = observedTargets.filter(
           (head) =>
             !retiredTargets.some(
@@ -592,6 +626,7 @@ export function createSupportAssistantRuntime(
             cursor,
             ...(notBefore === undefined ? {} : { notBefore }),
             ...(retiredTargets.length === 0 ? {} : { retiredTargets }),
+            ...(preparedTarget === undefined ? {} : { preparedTarget }),
           };
           if (!current()) return false;
           if (owner === undefined) {
@@ -623,7 +658,20 @@ export function createSupportAssistantRuntime(
               options.knowledge.confirmAnswerSources(access, input),
           },
           serviceAccess,
-          customerAuthority,
+          customerAuthority: {
+            async resolve(principalId) {
+              // A disabled processing route can refuse early, before another
+              // source proof. The SDK still compares every full current input
+              // and observes configuration last before generation/completion.
+              const route = await options.configuration.resolve(version);
+              if (
+                route.outcome !== 'ready' ||
+                route.configuration.version !== version
+              )
+                return { outcome: 'unavailable' };
+              return customerAuthority.resolve(principalId);
+            },
+          },
           configuration: options.configuration,
           usage: options.usage,
           model: options.model,
@@ -643,7 +691,21 @@ export function createSupportAssistantRuntime(
         let page: AssistantTurnScanResult | undefined;
         let candidate: AssistantTurnKey | undefined;
         let selectedTarget: SupportAssistantTargetHint | undefined;
-        if (targetHeads.length > 0) {
+        if (preparedTarget !== undefined) {
+          candidate = {
+            ticketId: preparedTarget.ticketId,
+            turnId: preparedTarget.turnId,
+          };
+          if (preparedTarget.triggerMessageId !== undefined)
+            selectedTarget = {
+              ticketId: preparedTarget.ticketId,
+              triggerMessageId: preparedTarget.triggerMessageId,
+            };
+          // Consume the advisory key in the existing acquisition CAS. A crash
+          // or ambiguous SDK result retains the cursor and SDK fallback scan.
+          // The next SDK claim still checks the complete current durable turn.
+          preparedTarget = undefined;
+        } else if (targetHeads.length > 0) {
           for (const head of targetHeads) {
             const hint = head.value;
             const rows = await within(() =>
@@ -774,7 +836,21 @@ export function createSupportAssistantRuntime(
               target,
             ].slice(-2);
           }
-          if (result.outcome === 'prepared') preparation = result;
+          if (result.outcome === 'prepared') {
+            if (
+              result.ticketId !== candidate.ticketId ||
+              result.turnId !== candidate.turnId
+            )
+              throw new TypeError('Mismatched Support assistant preparation.');
+            preparation = result;
+            preparedTarget = {
+              ticketId: result.ticketId,
+              turnId: result.turnId,
+              ...(selectedTarget === undefined
+                ? {}
+                : { triggerMessageId: selectedTarget.triggerMessageId }),
+            };
+          }
           if (turn === 'not_claimed')
             return {
               outcome: 'deferred',
@@ -798,6 +874,17 @@ export function createSupportAssistantRuntime(
           final.configuration.version !== version
         )
           return { outcome: 'unavailable', checkpointSaved: false };
+        // The SDK has already settled this attempt or handed it to a person.
+        // Keep the acquired cursor/hold; a later no-paid tick advances it.
+        // Advisory progress must not compete with failure-settlement work.
+        if (turn === 'finished')
+          return {
+            outcome: 'scanned',
+            physicalRows,
+            candidates,
+            turn,
+            checkpointSaved: false,
+          };
         // Keep the original cursor after the final current-route fence. A later
         // physical tick revisits this work at/after the SDK's nextAttemptAt.
         // Never call processTurn again here or resume with waitUntil.

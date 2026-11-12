@@ -165,14 +165,22 @@ export function registerStagedSupportAssistantCases(
             expect(f.scanned.every((page) => page.physicalRows <= 32)).toBe(
               true,
             );
+            if (physicalTick === 0 && laterCandidates > 0) {
+              if (result.outcome !== 'prepared')
+                throw new Error('Actual preparation required.');
+              expect(result.candidates).toBeGreaterThan(1);
+              expect(result.physicalRows).toBe(32);
+            }
             if (physicalTick === 1 && laterCandidates > 0) {
               expect(result).toMatchObject({
                 outcome: 'scanned',
                 turn: 'completed',
+                physicalRows: 0,
+                candidates: 1,
               });
               if (result.outcome !== 'scanned')
                 throw new Error('Actual completion required.');
-              expect(result.candidates).toBeGreaterThan(1);
+              expect(f.scanned).toHaveLength(1);
               expect(f.scanned.at(-1)?.physicalRows).toBe(32);
               expect((await f.checkpoint())?.cursor).toBe(
                 original?.cursor ?? null,

@@ -209,3 +209,98 @@ describe('two normal turns preserve cadence even when advisory slots collide', (
       ).toHaveLength(1);
   });
 });
+
+describe('acknowledged preparation resumes without another physical scan', () => {
+  it('retains only the actual SDK key across a cold runtime and still completes once', async () => {
+    const f = await supportAssistantFixture({ store: createMemoryStore() });
+    const preparation = await f.tick();
+    if (preparation.outcome !== 'prepared')
+      throw new Error('Expected a genuine acknowledged SDK preparation.');
+    expect((await f.checkpoint())?.preparedTarget).toEqual({
+      ticketId: preparation.ticketId,
+      turnId: preparation.turnId,
+    });
+    expect(f.scanned).toHaveLength(1);
+    expect(f.modelCalls).toEqual([]);
+    expect(f.usageReservations).toEqual([]);
+    f.advance(
+      Date.parse(preparation.nextAttemptAt) - Date.parse(f.clock.now()),
+    );
+    // tick reconstructs the host runtime and all SDK/application adapters.
+    expect(await f.tick()).toMatchObject({ turn: 'completed' });
+    expect(f.scanned).toHaveLength(1);
+    expect((await f.checkpoint())?.preparedTarget).toBeUndefined();
+    expect(f.modelCalls).toHaveLength(1);
+    expect(f.usageReservations).toHaveLength(1);
+    await f.tick();
+    expect(f.modelCalls).toHaveLength(1);
+  });
+
+  it('defers advisory cursor cleanup after a current-source denial while the SDK hands off safely', async () => {
+    const f = await supportAssistantFixture({ store: createMemoryStore() });
+    const preparation = await f.tick();
+    if (preparation.outcome !== 'prepared')
+      throw new Error('Expected a genuine acknowledged SDK preparation.');
+    const before = await f.checkpoint();
+    f.setModel(async (_input, context) => {
+      f.state.sourceCurrent = false;
+      return f.answer(context);
+    });
+    f.advance(
+      Date.parse(preparation.nextAttemptAt) - Date.parse(f.clock.now()),
+    );
+    expect(await f.tick()).toMatchObject({
+      turn: 'finished',
+      checkpointSaved: false,
+    });
+    const held = await f.checkpoint();
+    expect(held?.generation).toBe((before?.generation ?? 0) + 1);
+    expect(held?.cursor).toBe(before?.cursor);
+    expect(held?.preparedTarget).toBeUndefined();
+    expect(held?.notBefore).toBeDefined();
+    expect(f.modelCalls).toHaveLength(1);
+    expect(
+      (
+        await f.support.readCustomerTicket(
+          await f.access('fictional-answer-customer'),
+          preparation.ticketId,
+        )
+      ).ticket.handling,
+    ).toBe('human-pending');
+    expect(
+      (await f.messages()).filter((m) => m.authorKind === 'assistant'),
+    ).toEqual([]);
+    f.advance(60_000);
+    expect(await f.tick()).toMatchObject({
+      turn: 'none',
+      checkpointSaved: true,
+    });
+    expect(f.modelCalls).toHaveLength(1);
+  });
+
+  it('uses a current disabled route as an early refusal and leaves the paid result to the SDK human handoff', async () => {
+    const f = await supportAssistantFixture({ store: createMemoryStore() });
+    f.setModel(async (_input, context) => {
+      f.state.configurationCurrent = false;
+      return f.answer(context);
+    });
+    expect(await f.untilTurn()).toMatchObject({ outcome: 'unavailable' });
+    expect(f.modelCalls).toHaveLength(1);
+    expect(f.usageObservations.at(-1)?.state).toBe('known');
+    expect(
+      (await f.messages()).filter((m) => m.authorKind === 'assistant'),
+    ).toEqual([]);
+    expect(
+      (
+        await f.support.readCustomerTicket(
+          await f.access('fictional-answer-customer'),
+          'fictional-answer-ticket',
+        )
+      ).ticket.handling,
+    ).toBe('human-pending');
+    f.state.configurationCurrent = true;
+    f.advance(60_000);
+    await f.tick();
+    expect(f.modelCalls).toHaveLength(1);
+  });
+});
