@@ -67,7 +67,7 @@ function authorizationRequest(clientId: string, redirectUri: string) {
 }
 
 describe('controlled authoring deployment registrations against released Agent Access', () => {
-  it('constructs the exact checked-in three-client profile and serves both discovery documents', async () => {
+  it('constructs the exact checked-in four-client profile and serves both discovery documents', async () => {
     const config = deploymentConfiguration();
     expect(config.vars.PEGMA_KNOWLEDGE_ENABLED).toBe('true');
     expect(config.vars.PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED).toBe('false');
@@ -93,6 +93,13 @@ describe('controlled authoring deployment registrations against released Agent A
         redirectUris: [],
         allowedScopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
         grantTypes: ['device_code'],
+      },
+      {
+        clientId: 'pg-kb-grok-accept-v1',
+        name: 'Pegma Grok Bot',
+        redirectUris: ['https://www.cursor.com/agents/mcp/oauth/callback'],
+        allowedScopes: [...AGENT_KNOWLEDGE_PERMISSIONS],
+        grantTypes: ['authorization_code'],
       },
     ]);
     expect(AGENT_KNOWLEDGE_PERMISSIONS).toEqual([
@@ -126,6 +133,10 @@ describe('controlled authoring deployment registrations against released Agent A
   it.each([
     ['pg-kb-codex-accept-v1', 'http://127.0.0.1:48773/callback'],
     ['pg-kb-claude-accept-v1', 'http://localhost:48772/callback'],
+    [
+      'pg-kb-grok-accept-v1',
+      'https://www.cursor.com/agents/mcp/oauth/callback',
+    ],
   ])(
     'hands the registered %s PKCE request to existing login without approving it',
     async (clientId, redirectUri) => {
@@ -147,11 +158,35 @@ describe('controlled authoring deployment registrations against released Agent A
     ['pg-kb-codex-accept-v1', 'http://localhost:48773/callback'],
     ['pg-kb-codex-accept-v1', 'http://127.0.0.1:48773/other'],
     ['pg-kb-claude-accept-v1', 'http://localhost:48773/callback'],
+    ['pg-kb-grok-accept-v1', 'https://www.cursor.com/agents/mcp/oauth/other'],
+    ['pg-kb-grok-accept-v1', 'https://cursor.com/agents/mcp/oauth/callback'],
   ])(
     'rejects unregistered callback %s %s before login',
     async (clientId, redirectUri) => {
       const response = await configuredRuntime().protocol.handle(
         authorizationRequest(clientId, redirectUri),
+      );
+      expect(response?.status).toBe(400);
+      expect(response?.headers.get('Location')).toBeNull();
+    },
+  );
+
+  it.each([
+    ['PKCE downgrade', 'code_challenge_method', 'plain'],
+    ['different resource', 'resource', 'https://pegma.dev/api/mcp'],
+    ['scope escalation', 'scope', AGENT_LINK_PERMISSION],
+  ])(
+    'rejects hosted Grok %s before login',
+    async (_name, parameter, value) => {
+      const request = new URL(
+        authorizationRequest(
+          'pg-kb-grok-accept-v1',
+          'https://www.cursor.com/agents/mcp/oauth/callback',
+        ).url,
+      );
+      request.searchParams.set(parameter, value);
+      const response = await configuredRuntime().protocol.handle(
+        new Request(request),
       );
       expect(response?.status).toBe(400);
       expect(response?.headers.get('Location')).toBeNull();
