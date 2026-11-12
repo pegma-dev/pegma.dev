@@ -11,6 +11,7 @@ import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './su
 import { SUPPORT_ENGINEERING_QUEUE, seedSupportEngineeringWake, consumeSupportEngineeringWake, seedSupportLearningWake, consumeSupportLearningWake, isSupportLearningWake, type SupportEngineeringWake, type SupportLearningWake } from './support-engineering-queue';
 import { createSupportLearningComposition, type SupportLearningCompositionOptions } from './support-learning-composition';
 import { createSupportLearningBootstrap, type SupportLearningSourceEnvironment } from './support-learning-bootstrap';
+import { createSupportPaidBootstrap, type SupportPaidEnvironment } from './support-paid-bootstrap';
 import { createSupportLearningDriver, type SupportLearningDeferredCheckHint } from './support-learning-driver';
 import { createProductionSupportEngineering, type SupportEngineeringProductionOptions } from './support-engineering-production';
 import { composeSupportEngineeringDriver, composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
@@ -82,12 +83,12 @@ import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 import { createKnowledgeHostRuntime, handleKnowledgeRequest, isKnowledgeRequest, type KnowledgeHostRuntime } from './knowledge-host';
 import type { createSupportLearningReviewQueue, SupportLearningReviewQueueMessage } from './support-learning-review-queue';
 
-type AppEnv = Omit<Env, 'SUPPORT_ENGINEERING_JOBS' | 'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED' | 'PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED' | 'PEGMA_SUPPORT_LEARNING_WORKER_ENABLED' | 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON'> &
+type AppEnv = Omit<Env, 'SUPPORT_PAID_CONFIGURATION_JSON' | 'PEGMA_SUPPORT_INDEPENDENT_CHECKS_ENABLED' | 'PEGMA_SUPPORT_ENGINEERING_REPOSITORY_ENABLED' | 'PEGMA_SUPPORT_ENGINEERING_ISSUE_WRITE_ENABLED' | 'SUPPORT_ENGINEERING_JOBS' | 'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED' | 'PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED' | 'PEGMA_SUPPORT_LEARNING_WORKER_ENABLED' | 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON'> &
   LoggerEnv &
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
   SupportRuntimeEnv &
-  CatalogFetchEnv & SupportAssistantProductionEnvironment & SupportLearningSourceEnvironment & {
+  CatalogFetchEnv & SupportAssistantProductionEnvironment & SupportLearningSourceEnvironment & SupportPaidEnvironment & {
     readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
     readonly PEGMA_SUPPORT_ASSISTANT_ENABLED?: string;
     readonly PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED?: string;
@@ -231,10 +232,11 @@ function createSupportHandler(
     // Explicit sharing wins even when its controller is unavailable. Never
     // construct a private checker pool as a fallback for this selection.
     engineeringProduction = { ...engineeringProduction, configuration: {
-      ...engineeringProduction.configuration, readChecks: () => learningGraph?.readChecks(),
+      ...engineeringProduction.configuration, readChecks: () => learningGraph?.readEngineeringChecks(),
     } };
   }
   const production = createProductionSupportEngineering(engineeringProduction);
+  learningGraph?.bindEngineeringRepositories(production.application.repositoryMetadata);
   const workerConfigured = production.processing.configuration !== undefined;
   let selectedEngineering = engineering;
   let selectedAnswering = checkedAnswering(answering, logger);
@@ -568,6 +570,67 @@ export function createWorker(options: {
   readonly releaseFollowup?: SupportReleaseFollowupComposition;
   readonly learning?: SupportLearningRootComposition;
 } = {}) {
+type PaidBundle = Awaited<ReturnType<typeof createSupportPaidBootstrap>>;
+const paidSelections = new WeakMap<
+  AppEnv,
+  {
+    raw: string | undefined;
+    source: string | undefined;
+    signature: string;
+    promise: Promise<void>;
+    bundle: PaidBundle;
+  }
+>();
+async function prepareDefault(env: AppEnv) {
+  if ('learning' in options || 'engineering' in options || 'engineeringProduction' in options)
+    return;
+  const raw = env.SUPPORT_PAID_CONFIGURATION_JSON;
+  const source = env.SUPPORT_LEARNING_SOURCE_CONFIGURATION_JSON;
+  const signature = JSON.stringify([
+    raw,
+    source,
+    env.PEGMA_KNOWLEDGE_ENABLED,
+    env.PEGMA_SUPPORT_INDEPENDENT_CHECKS_ENABLED,
+    env.PEGMA_SUPPORT_LEARNING_WORKER_ENABLED,
+    env.PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED,
+    env.PEGMA_SUPPORT_ENGINEERING_REPOSITORY_ENABLED,
+    env.PEGMA_SUPPORT_ENGINEERING_ISSUE_WRITE_ENABLED,
+  ]);
+  const previous = paidSelections.get(env);
+  if (previous?.signature === signature) return previous.promise;
+  const entry = {
+    raw,
+    source,
+    signature,
+    bundle: undefined as PaidBundle,
+    promise: Promise.resolve(),
+  };
+  entry.promise = createSupportPaidBootstrap(env, {
+    isSelected: () =>
+      !('learning' in options) &&
+      !('engineering' in options) &&
+      !('engineeringProduction' in options) &&
+      paidSelections.get(env) === entry,
+  })
+    .then((bundle) => {
+      entry.bundle = bundle;
+    })
+    .catch(() => {
+      entry.bundle = undefined;
+    });
+  paidSelections.set(env, entry);
+  return entry.promise;
+}
+function paidFor(env: AppEnv) {
+  const value = paidSelections.get(env);
+  return value !== undefined &&
+    value.raw === env.SUPPORT_PAID_CONFIGURATION_JSON &&
+    value.source === env.SUPPORT_LEARNING_SOURCE_CONFIGURATION_JSON
+    ? value.bundle
+    : undefined;
+}
+const humanEngineeringFor = (env: AppEnv) =>
+  'engineering' in options ? options.engineering : paidFor(env)?.engineering;
 const answeringFor = (env: AppEnv) => options.answering === undefined
   ? createProductionSupportAnswering(env)
   : Promise.resolve(options.answering);
@@ -575,13 +638,13 @@ const answeringFor = (env: AppEnv) => options.answering === undefined
 // its original enablement/configuration and the separate deployment flag live.
 const engineeringFor = (env: AppEnv): SupportEngineeringProductionOptions => {
   try {
-  const supplied = options.engineeringProduction;
+  const supplied = 'engineeringProduction' in options ? options.engineeringProduction : paidFor(env)?.engineeringProduction;
   if (supplied === undefined) return {};
   const configuration = supplied.configuration;
   return { ...supplied, enabled: () => {
     try {
       return env.PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED === 'true' &&
-        options.engineeringProduction === supplied && supplied.configuration === configuration &&
+        (('engineeringProduction' in options ? options.engineeringProduction : paidFor(env)?.engineeringProduction) === supplied) && supplied.configuration === configuration &&
         supplied.enabled?.() === true;
     } catch { return false; }
   } };
@@ -594,12 +657,12 @@ const learningFor = (env: AppEnv): SupportLearningRootComposition | undefined =>
     const bootstrap = explicit ? undefined : createSupportLearningBootstrap(env, {
       isSelected: () => !('learning' in options),
     });
-    const supplied = explicit ? options.learning : bootstrap?.learning;
+    const supplied = explicit ? options.learning : paidFor(env)?.learning ?? bootstrap?.learning;
     failedSelection = supplied;
     if (supplied === undefined) return undefined;
     const currentSelection = () => {
       try { return explicit ? 'learning' in options && options.learning === supplied
-        : !('learning' in options) && bootstrap?.current() === true; }
+        : !('learning' in options) && (paidFor(env)?.learning === supplied ? paidFor(env)?.current() === true : bootstrap?.current() === true); }
       catch { return false; }
     };
     const intake = supplied.intake;
@@ -654,7 +717,7 @@ const learningFor = (env: AppEnv): SupportLearningRootComposition | undefined =>
 const retrievalFor = (env: AppEnv, logger: ReturnType<typeof createAppLogger>) => {
   const learning = learningFor(env);
   if (!learningConfigured(learning)) return { store: createKnowledgeProjectionStore(env), clock: systemClock };
-  const selected = createSupportHandler(env, logger, options.engineering, {}, options.releaseFollowup,
+  const selected = createSupportHandler(env, logger, humanEngineeringFor(env), {}, options.releaseFollowup,
     engineeringFor(env), learning).learning?.retrievalOptions();
   if (selected === undefined) throw new TypeError('Learning retrieval binding unavailable');
   return selected;
@@ -665,6 +728,8 @@ return {
     env: AppEnv,
     ctx: ExecutionContext,
   ): Promise<Response> {
+    if (env.SUPPORT_PAID_CONFIGURATION_JSON && !('learning' in options) && !('engineering' in options) && !('engineeringProduction' in options))
+      await prepareDefault(env);
     const logger = createAppLogger(env, (p) => ctx.waitUntil(p));
     const url = new URL(request.url);
     const path = url.pathname;
@@ -703,7 +768,7 @@ return {
       const learning = learningFor(env);
       if (!learningConfigured(learning)) return handleKnowledgeRequest(request, env, logger);
       try {
-        const composed = createSupportHandler(env, logger, options.engineering, {}, options.releaseFollowup,
+        const composed = createSupportHandler(env, logger, humanEngineeringFor(env), {}, options.releaseFollowup,
           engineeringFor(env), learning);
         return handleKnowledgeRequest(request, env, logger, composed.knowledgeHost ?? null);
       } catch {
@@ -740,7 +805,7 @@ return {
         probe: 'disabled' | 'ok' | 'fail';
       } = {
         storage: 'cloudflare-d1',
-        packages: '@pegma/support-desk-application@0.2.8',
+        packages: '@pegma/support-desk-application@0.2.9',
         probe: 'disabled',
       };
       if (supportHealthProbeEnabled(env)) {
@@ -924,15 +989,15 @@ return {
       try {
         const answering = await answeringFor(env);
         if (path.startsWith(SUPPORT_ANSWERING_NAMESPACE))
-          return await createSupportRequestHandler(env, logger, options.engineering, answering, {}, engineeringFor(env), learningFor(env))(request);
+          return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, {}, engineeringFor(env), learningFor(env))(request);
         if (isSupportReleaseFollowupRequest(path))
-          return await createSupportRequestHandler(env, logger, options.engineering, answering, options.releaseFollowup, engineeringFor(env), learningFor(env))(request);
+          return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, options.releaseFollowup, engineeringFor(env), learningFor(env))(request);
         if (isSupportEngineeringRequest(path))
-          return await createSupportRequestHandler(env, logger, options.engineering, answering, {}, engineeringFor(env), learningFor(env))(request);
+          return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, {}, engineeringFor(env), learningFor(env))(request);
         const reviews = options.learningReviews;
         if (reviews !== undefined && learningReviewsEnabled(env, reviews))
-          return await reviews.create(env, logger, options.engineering, answering, engineeringFor(env)).api(request);
-        return await createSupportRequestHandler(env, logger, options.engineering, answering, {}, engineeringFor(env), learningFor(env))(request);
+          return await reviews.create(env, logger, humanEngineeringFor(env), answering, engineeringFor(env)).api(request);
+        return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, {}, engineeringFor(env), learningFor(env))(request);
       } catch (error) {
         logger.log('error', 'support.runtime_unavailable', {
           error: error instanceof Error ? error.name : 'unknown',
@@ -959,6 +1024,8 @@ return {
     env: AppEnv,
     ctx: ExecutionContext,
   ): Promise<void> {
+    if (env.SUPPORT_PAID_CONFIGURATION_JSON && !('learning' in options) && !('engineering' in options) && !('engineeringProduction' in options))
+      await prepareDefault(env);
     const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
     // Each cron has its own invocation CPU budget. Never combine all cleanup
     // with the time-sensitive mail path on Workers Free.
@@ -968,7 +1035,7 @@ return {
           isEnabled: () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true',
           load: async () => checkedAnswering(await answeringFor(env), logger),
           create: (answering) => createSupportHandler(answeringInvocationEnvironment(env), logger,
-            options.engineering, answering, {}, engineeringFor(env), learningFor(env)).answering,
+            humanEngineeringFor(env), answering, {}, engineeringFor(env), learningFor(env)).answering,
           logger,
         });
         return;
@@ -1040,9 +1107,10 @@ return {
     }
 
     if (controller.cron === CLEANUP_CRON && env.PEGMA_SUPPORT_LEARNING_WORKER_ENABLED === 'true') {
+      const selectedLearning = learningFor(env);
       ctx.waitUntil(seedSupportLearningWake({
         clock: systemClock, logger,
-        enabled: () => learningWorkerEnabled(env, options.learning),
+        enabled: () => learningWorkerEnabled(env, selectedLearning),
         producer: () => env.SUPPORT_ENGINEERING_JOBS,
       }));
     }
@@ -1167,14 +1235,17 @@ return {
       );
   },
   async queue(batch: MessageBatch<unknown>, env: AppEnv, ctx: ExecutionContext): Promise<void> {
+    if (env.SUPPORT_PAID_CONFIGURATION_JSON && !('learning' in options) && !('engineering' in options) && !('engineeringProduction' in options))
+      await prepareDefault(env);
     if (batch.queue === SUPPORT_ENGINEERING_QUEUE) {
       const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
       if (batch.messages.length === 1 && isSupportLearningWake(batch.messages[0]!.body)) {
+        const selectedLearning = learningFor(env);
         await consumeSupportLearningWake(batch, {
           clock: systemClock, logger,
-          enabled: () => learningWorkerEnabled(env, options.learning),
-          create: () => createSupportHandler(env, logger, options.engineering, {}, options.releaseFollowup,
-            engineeringFor(env), learningFor(env)).learningDriver,
+          enabled: () => learningWorkerEnabled(env, selectedLearning),
+          create: () => createSupportHandler(env, logger, humanEngineeringFor(env), {}, options.releaseFollowup,
+            engineeringFor(env), selectedLearning).learningDriver,
         });
         return;
       }
@@ -1183,7 +1254,7 @@ return {
       await consumeSupportEngineeringWake(batch, {
         clock: source.clock ?? systemClock, logger,
         enabled: () => production.processing.configuration !== undefined && production.processing.enabled?.() === true,
-        create: () => createSupportHandler(env, logger, options.engineering, {}, {}, source, learningFor(env)).engineeringDriver,
+        create: () => createSupportHandler(env, logger, humanEngineeringFor(env), {}, {}, source, learningFor(env)).engineeringDriver,
       });
       return;
     }

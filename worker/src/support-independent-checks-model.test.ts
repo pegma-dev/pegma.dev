@@ -191,7 +191,10 @@ async function fixture() {
   const input = {
     trustedInstructions: c.trustedInstructions,
     kind: 'engineering' as const,
-    facts: { actualBehavior: 'The export appears empty.' },
+    facts: {
+      actualBehavior: 'The export appears empty.',
+      messages: ['The fictional export appears empty.'],
+    },
     candidate: { actualBehavior: 'The export is empty.' },
     outbound: {
       body: 'Export is empty. <!-- hidden unverified claim -->',

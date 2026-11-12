@@ -64,7 +64,10 @@ export interface SupportLearningCompositionOptions {
     SupportIndependentChecksOptions,
     "store" | "clock" | "application" | "knowledge" | "knowledgeAccess"
   >;
+  /** Optional purpose-bound controller sharing the same durable checker pool. */
+  readonly engineeringIndependentChecks?: SupportLearningCompositionOptions["independentChecks"];
   readonly readScheduling?: SupportLearningRuntimeOptions["readScheduling"];
+  readonly deliveryMode?: SupportLearningRuntimeOptions["deliveryMode"];
 }
 
 /** Build before Support, bind its exact application, then construct KB here.
@@ -76,6 +79,8 @@ export function createSupportLearningComposition(
   let knowledge: KnowledgeRuntime | undefined;
   let knowledgeOptions: KnowledgeOptions | undefined;
   let checks: Checks | undefined;
+  let engineeringChecks: Checks | undefined;
+  let engineeringRepositories: SupportIndependentChecksOptions["repositories"];
   let verifier: PrivateSourcesVerifier | undefined;
   let failed = false;
   const supplied = options.production?.configuration;
@@ -188,6 +193,7 @@ export function createSupportLearningComposition(
   function refuseBinding(): false {
     failed = true;
     checks = undefined;
+    engineeringChecks = undefined;
     verifier = undefined;
     return false;
   }
@@ -206,12 +212,22 @@ export function createSupportLearningComposition(
       ...(options.readScheduling === undefined
         ? {}
         : { readScheduling: options.readScheduling }),
+      ...(options.deliveryMode === undefined ? {} : { deliveryMode: options.deliveryMode }),
     };
   }
   return Object.freeze({
     application,
     sources,
     readChecks,
+    readEngineeringChecks() {
+      if (failed) return undefined;
+      return options.engineeringIndependentChecks === undefined ? checks : engineeringChecks;
+    },
+    bindEngineeringRepositories(port: SupportIndependentChecksOptions["repositories"]) {
+      if (engineeringRepositories !== undefined && engineeringRepositories !== port) return false;
+      engineeringRepositories = port;
+      return true;
+    },
     ready,
     processingEnabled: () => ready() && production.processingEnabled(),
     bindSupport(runtime: SupportRuntime): boolean {
@@ -262,7 +278,7 @@ export function createSupportLearningComposition(
           clock: current.clock,
           privateSources: sources,
         });
-        if (configured && production.sourcePorts !== undefined) {
+        if (options.independentChecks !== undefined && sourcePorts !== undefined) {
           checks = createSupportIndependentChecks({
             ...options.independentChecks!,
             store: current.store,
@@ -273,7 +289,22 @@ export function createSupportLearningComposition(
               return current.application;
             },
             knowledge: knowledge.application,
-            knowledgeAccess: production.sourcePorts.knowledgeAccess,
+            knowledgeAccess: sourcePorts.knowledgeAccess,
+          });
+        }
+        if (sourcePorts !== undefined && options.engineeringIndependentChecks !== undefined) {
+          const selected = options.engineeringIndependentChecks;
+          engineeringChecks = createSupportIndependentChecks({
+            ...selected,
+            store: current.store,
+            clock: current.clock,
+            application: () => {
+              if (failed || support !== current) throw new TypeError("Engineering Support binding unavailable");
+              return current.application;
+            },
+            knowledge: knowledge.application,
+            knowledgeAccess: sourcePorts.knowledgeAccess,
+            repositories: engineeringRepositories ?? selected.repositories,
           });
         }
         return knowledge;

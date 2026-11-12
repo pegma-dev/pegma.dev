@@ -2,6 +2,7 @@ import { resolveAccess } from '@pegma/authorization-core';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import { systemClock, type Clock } from '@pegma/spine';
 import type { LearningCheckPolicyPort } from '@pegma/support-desk-ai';
+import type { ResolutionTrustContext } from '@pegma/support-desk-application';
 import type { SupportLearningRootComposition } from './index';
 import { createSupportBackgroundServiceAccess } from './support-background-service-access';
 import { canonical, object, strictJson } from './support-openrouter-model';
@@ -134,6 +135,7 @@ export function createSupportLearningBootstrap(
   const raw = env[SUPPORT_LEARNING_SOURCE_SETTING];
   const configuration = readSupportLearningSourceConfiguration(raw);
   if (configuration === undefined) return undefined;
+  const currentConfiguration = configuration;
   const clock = options.clock ?? systemClock;
   const currentEnv = options.currentEnv ?? (() => env);
   function current(): boolean {
@@ -164,6 +166,51 @@ export function createSupportLearningBootstrap(
         : { enabled: false };
     },
   });
+  async function resolveProduct(
+    context: Pick<ResolutionTrustContext, 'ticketId' | 'ticketRevision' | 'acceptedAt'>,
+    signal: AbortSignal,
+  ) {
+    if (!current() || signal.aborted) return null;
+    const accepted = Date.parse(context.acceptedAt),
+      now = Date.parse(clock.now());
+    if (
+      !Number.isFinite(accepted) ||
+      !Number.isFinite(now) ||
+      accepted > now ||
+      now >= accepted + 300_000 ||
+      new Date(accepted).toISOString() !== context.acceptedAt
+    )
+      return null;
+    const version = await profileVersion();
+    const binding = await digest([
+      currentConfiguration.namespace,
+      currentConfiguration.product,
+      currentConfiguration.collectionIds,
+    ]);
+    const receipt = await digest([
+      version,
+      context.ticketId,
+      context.ticketRevision,
+      context.acceptedAt,
+    ]);
+    const closing = Date.parse(clock.now());
+    if (
+      !current() ||
+      signal.aborted ||
+      !Number.isFinite(closing) ||
+      closing < accepted ||
+      closing >= accepted + 300_000
+    )
+      return null;
+    return {
+      ...currentConfiguration.product,
+      binding,
+      contextVersion: version,
+      receiptId: 'pg-source-context:' + receipt,
+      verifiedAt: context.acceptedAt,
+      validUntil: new Date(accepted + 300_000).toISOString(),
+    };
+  }
   const selectedPolicy = options.reviewPolicy;
   const learning: SupportLearningRootComposition = {
     source: {
@@ -184,48 +231,7 @@ export function createSupportLearningBootstrap(
     intake: {
       enabled: configuration.intakeEnabled,
       productContext: {
-        async resolve(context, signal) {
-          if (!current() || signal.aborted) return null;
-          const accepted = Date.parse(context.acceptedAt),
-            now = Date.parse(clock.now());
-          if (
-            !Number.isFinite(accepted) ||
-            !Number.isFinite(now) ||
-            accepted > now ||
-            now >= accepted + 300_000 ||
-            new Date(accepted).toISOString() !== context.acceptedAt
-          )
-            return null;
-          const version = await profileVersion();
-          const binding = await digest([
-            configuration.namespace,
-            configuration.product,
-            configuration.collectionIds,
-          ]);
-          const receipt = await digest([
-            version,
-            context.ticketId,
-            context.ticketRevision,
-            context.acceptedAt,
-          ]);
-          const closing = Date.parse(clock.now());
-          if (
-            !current() ||
-            signal.aborted ||
-            !Number.isFinite(closing) ||
-            closing < accepted ||
-            closing >= accepted + 300_000
-          )
-            return null;
-          return {
-            ...configuration.product,
-            binding,
-            contextVersion: version,
-            receiptId: 'pg-source-context:' + receipt,
-            verifiedAt: context.acceptedAt,
-            validUntil: new Date(accepted + 300_000).toISOString(),
-          };
-        },
+        resolve: resolveProduct,
       },
     },
     readScheduling: 'sdk',
@@ -270,12 +276,14 @@ export function createSupportLearningBootstrap(
     return Object.freeze({
       configuration,
       current,
+      resolveProduct,
       learning: Object.freeze({ ...learning, testEvidence }),
     });
   }
   return Object.freeze({
     configuration,
     current,
+    resolveProduct,
     learning: Object.freeze(learning),
   });
 }

@@ -121,6 +121,8 @@ export interface SupportLearningRuntimeOptions {
   readonly stagedReviews?: SupportLearningStagedReviewOptions;
   /** Explicit only for the known real SDK read graph; custom ports remain serial. */
   readonly readScheduling?: SupportDeskLearningOptions['readScheduling'];
+  /** Explicit opt-in to SDK delivery checkpoints; omission keeps legacy delivery. */
+  readonly deliveryMode?: SupportDeskLearningOptions['deliveryMode'];
 }
 
 export type SupportLearningUnavailableReason =
@@ -200,6 +202,7 @@ function createLearningRuntime(
     tokenCounter: ports.tokenCounter ?? { count: () => { throw new SupportLearningUnavailableError(); } },
     storageCommandAttempts: 2,
     ...(options.readScheduling === undefined ? {} : { readScheduling: options.readScheduling }),
+    ...(options.deliveryMode === undefined ? {} : { deliveryMode: options.deliveryMode }),
   };
   const coordinator = createSupportDeskLearning(coordinatorOptions);
   function stagedEnabled(): boolean {
