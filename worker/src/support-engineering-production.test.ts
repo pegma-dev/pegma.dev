@@ -20,8 +20,16 @@ import type {
   EngineeringCandidate,
   EngineeringExportRequest,
   EngineeringRepositoryDescriptor,
+  EngineeringExportChecksBinding,
 } from '@pegma/support-desk-application';
-import type { EngineeringProposalPort } from '@pegma/support-desk-ai';
+import type {
+  EngineeringProposalPort,
+  EngineeringChecksPort,
+} from '@pegma/support-desk-ai';
+import {
+  createSupportIndependentChecks,
+  type IndependentCheckCapture,
+} from './support-independent-checks';
 import { createSupportEngineeringHttpFixture } from './support-engineering-http-fixtures';
 import { createSupportRuntime } from './support-desk';
 import { composeSupportEngineeringProcessing } from './support-engineering-processing';
@@ -36,6 +44,7 @@ import {
   createSupportEngineeringLocalProposals,
   type SupportEngineeringProductionOptions,
   type SupportEngineeringProposalSettings,
+  type SupportEngineeringSharedChecks,
 } from './support-engineering-production';
 
 vi.mock('@pegma/storage-cloudflare-d1', async (original) => ({
@@ -378,6 +387,35 @@ describe('server-local engineering proposals', () => {
   });
 });
 
+/** A read-scoped installation-token POST is permitted; every issue mutation
+ * and any wider requested scope remains forbidden before human publication. */
+function readOnlyGitHubRequest([url, init]: readonly [
+  string,
+  RequestInit,
+]): boolean {
+  if (init.method === 'GET') return true;
+  if (
+    url !== 'https://api.github.com/app/installations/201/access_tokens' ||
+    init.method !== 'POST'
+  )
+    return false;
+  try {
+    const body = JSON.parse(String(init.body));
+    return (
+      Object.keys(body).length === 2 &&
+      Array.isArray(body.repository_ids) &&
+      body.repository_ids.length === 1 &&
+      body.repository_ids[0] === 101 &&
+      body.permissions &&
+      Object.keys(body.permissions).length === 2 &&
+      body.permissions.metadata === 'read' &&
+      body.permissions.issues === 'read'
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Actual App/Identity/RoleStore/coordinator/ledger/config/model/GitHub adapters.
  * All independent proof and HTTP provider observations here are fictional local ports. */
 async function fixture() {
@@ -426,8 +464,36 @@ async function fixture() {
         : null,
     ),
   };
+  const observedRepository = {
+    id: 101,
+    name: allowed.name,
+    full_name: allowed.owner + '/' + allowed.name,
+    owner: { id: 401, login: allowed.owner, type: 'Organization' },
+    private: false,
+    visibility: 'public',
+    archived: false,
+    disabled: false,
+    has_issues: true,
+    default_branch: 'main',
+    updated_at: '2026-11-10T11:00:00Z',
+  };
   const githubFetch = vi.fn(async (url: string, init: RequestInit) => {
-    expect(init.method).toBe('GET'); // No implicit publication or token mint before approval.
+    if (url === 'https://api.github.com/app/installations/201/access_tokens') {
+      // Issue reads now use a token restricted to the exact numeric repository.
+      // This credential POST is not issue publication or an issues:write grant.
+      expect(readOnlyGitHubRequest([url, init])).toBe(true);
+      return Response.json(
+        {
+          token: 'FICTIONAL_REPOSITORY_READ_TOKEN',
+          expires_at: validUntil.replace('.000Z', 'Z'),
+          repository_selection: 'selected',
+          permissions: { metadata: 'read', issues: 'read' },
+          repositories: [observedRepository],
+        },
+        { status: 201 },
+      );
+    }
+    expect(init.method).toBe('GET');
     if (url.includes('/search/issues?'))
       return Response.json({
         total_count: 0,
@@ -447,19 +513,7 @@ async function fixture() {
             permissions: { metadata: 'read', issues: 'write' },
             updated_at: '2026-11-10T11:00:00Z',
           }
-        : {
-            id: 101,
-            name: allowed.name,
-            full_name: allowed.owner + '/' + allowed.name,
-            owner: { id: 401, login: allowed.owner, type: 'Organization' },
-            private: false,
-            visibility: 'public',
-            archived: false,
-            disabled: false,
-            has_issues: true,
-            default_branch: 'main',
-            updated_at: '2026-11-10T11:00:00Z',
-          },
+        : observedRepository,
     );
   });
   const config = f.engineering.configuration;
@@ -746,9 +800,7 @@ describe('normal production engineering composition', () => {
     expect(work.approval).toBeUndefined();
     expect(work.dispatch).toBeUndefined();
     expect(t.modelFetch).toHaveBeenCalledOnce();
-    expect(
-      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
   });
   it.each(['off', 'throwing', 'replaced-config'] as const)(
     'keeps %s processing off while retaining intake and independent recovery ports',
@@ -855,9 +907,7 @@ describe('normal production engineering composition', () => {
       ).approval?.decision,
     ).toBe('approve');
     await t.runtime.processWork(command);
-    expect(
-      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
     expect(t.modelFetch).toHaveBeenCalledOnce();
   });
   it.each(['installation', 'independent-checks', 'routing'] as const)(
@@ -894,9 +944,345 @@ describe('normal production engineering composition', () => {
   );
 });
 
+const sharedBinding: EngineeringExportChecksBinding = {
+  sourceBindingHash: 'a'.repeat(64),
+  evidenceFingerprint: 'b'.repeat(64),
+  candidateHash: 'c'.repeat(64),
+  routingBindingHash: 'd'.repeat(64),
+  requestHash: 'e'.repeat(64),
+  policyGeneration: 1,
+  policyHash: 'f'.repeat(64),
+  repositoryMetadataHash: '1'.repeat(64),
+};
+function sharedController(base: EngineeringChecksPort) {
+  const controller = {
+    resolvePolicy: vi.fn(
+      (...args: Parameters<SupportEngineeringSharedChecks['resolvePolicy']>) =>
+        base.resolvePolicy(...args),
+    ),
+    engineeringSdkVerifier: {
+      verify: vi.fn((...args: Parameters<EngineeringChecksPort['verify']>) =>
+        base.verify(...args),
+      ),
+    },
+    engineeringFor: vi.fn(
+      (
+        key: Parameters<SupportEngineeringSharedChecks['engineeringFor']>[0],
+        capture: IndependentCheckCapture = {},
+      ) => ({
+        ...base,
+        async check(...args: Parameters<EngineeringChecksPort['check']>) {
+          capture.onDurablyDeferred?.({
+            kind: 'engineering',
+            operationId: 'a'.repeat(64),
+            scope: { ...key },
+            expiresAt: '2026-11-10T13:00:00.000Z',
+          });
+          return base.check(...args);
+        },
+      }),
+    ),
+    precomputePending: vi.fn(
+      async (
+        ..._args: Parameters<
+          SupportEngineeringSharedChecks['precomputePending']
+        >
+      ) => ({ outcome: 'held' as const }),
+    ),
+    discardTicket: vi.fn(
+      async (
+        ..._args: Parameters<SupportEngineeringSharedChecks['discardTicket']>
+      ) => 0,
+    ),
+  } satisfies SupportEngineeringSharedChecks;
+  return controller;
+}
+
+describe('Root-owned shared engineering check controller', () => {
+  it('takes precedence without reading private pool or bare checker configuration and creates no second attachment', async () => {
+    const t = await fixture();
+    const controller = sharedController(t.configuration.checks!);
+    let privateReads = 0;
+    let legacyReads = 0;
+    const configuration = { ...t.configuration, readChecks: () => controller };
+    Object.defineProperty(configuration, 'independentChecks', {
+      get() {
+        privateReads++;
+        throw new Error('Private pool must not be selected');
+      },
+    });
+    Object.defineProperty(configuration, 'checks', {
+      get() {
+        legacyReads++;
+        throw new Error('Bare verifier must not be selected');
+      },
+    });
+    const production = createProductionSupportEngineering({
+      ...t.options,
+      configuration,
+    });
+    expect(production.application.enabled).toBe(true);
+    expect(production.processing.enabled?.()).toBe(true);
+    expect(production.attachRuntime).toBeUndefined();
+    expect(privateReads).toBe(0);
+    expect(legacyReads).toBe(0);
+    expect(
+      await production.application.checks?.verify(
+        'fictional-no-receipt',
+        sharedBinding,
+      ),
+    ).toBeNull();
+    expect(
+      controller.engineeringSdkVerifier.verify,
+    ).toHaveBeenCalledExactlyOnceWith('fictional-no-receipt', sharedBinding);
+    expect(production.reviewProofs?.checks).toBe(
+      production.processing.configuration?.ports.checks,
+    );
+    expect(t.modelFetch).not.toHaveBeenCalled();
+    expect(t.readApiKey).not.toHaveBeenCalled();
+  });
+  it.each(['absent', 'throwing', 'malformed'] as const)(
+    'fails closed for an %s shared controller without bare/private fallback',
+    async (fault) => {
+      const t = await fixture();
+      const legacy = vi.spyOn(t.configuration.checks!, 'verify');
+      const configuration = {
+        ...t.configuration,
+        readChecks: () => {
+          if (fault === 'throwing')
+            throw new Error('Fictional shared initialization failure');
+          return undefined;
+        },
+      };
+      if (fault === 'malformed')
+        Reflect.set(configuration, 'readChecks', () => ({
+          resolvePolicy: async () => ({ outcome: 'ready' }),
+        }));
+      const production = createProductionSupportEngineering({
+        ...t.options,
+        configuration,
+      });
+      expect(production.processing.enabled?.()).toBe(false);
+      expect(production.attachRuntime).toBeUndefined();
+      const configured = production.processing.configuration;
+      if (
+        !configured?.checksFor ||
+        !configured.precomputeChecks ||
+        !configured.discardChecks
+      )
+        throw new Error('Shared held ports must remain available');
+      const signal = new AbortController().signal;
+      expect(
+        await production.application.checks!.verify(
+          'fictional-no-receipt',
+          sharedBinding,
+        ),
+      ).toBeNull();
+      expect(
+        await configured.ports.checks.resolvePolicy(undefined, signal),
+      ).toEqual({ outcome: 'unavailable' });
+      const scoped = configured.checksFor(
+        { ticketId: 'fictional-known', sourceGeneration: 1 },
+        () => {},
+      );
+      expect(
+        await scoped.verify('fictional-no-receipt', sharedBinding),
+      ).toBeNull();
+      expect(
+        await scoped.check(
+          {
+            candidate: candidate(),
+            exactRequest: await prepared(),
+            binding: sharedBinding,
+            checkPolicyVersion: 'fictional-policy',
+          },
+          context(),
+        ),
+      ).toEqual({ outcome: 'held' });
+      expect(
+        await configured.precomputeChecks(
+          {
+            kind: 'checks',
+            operationId: 'a'.repeat(64),
+            ticketId: 'fictional-known',
+            sourceGeneration: 1,
+            expiresAt: '2026-11-10T13:00:00.000Z',
+          },
+          { deadline: '2026-11-10T12:00:04.000Z', signal, current: () => true },
+        ),
+      ).toEqual({ outcome: 'held' });
+      await configured.discardChecks('fictional-known');
+      await production.discardChecks?.('fictional-known');
+      expect(legacy).not.toHaveBeenCalled();
+      expect(t.modelFetch).not.toHaveBeenCalled();
+      expect(t.readApiKey).not.toHaveBeenCalled();
+    },
+  );
+  it('rebinds retained scoped ports and all proof/lifecycle calls to the current shared controller', async () => {
+    const t = await fixture();
+    const first = sharedController(t.configuration.checks!);
+    const second = sharedController(t.configuration.checks!);
+    const state = { current: first };
+    const selection = { ...t.configuration, readChecks: () => state.current };
+    const production = createProductionSupportEngineering({
+      ...t.options,
+      configuration: selection,
+    });
+    const configured = production.processing.configuration;
+    if (
+      !configured?.checksFor ||
+      !configured.precomputeChecks ||
+      !configured.discardChecks
+    )
+      throw new Error('Actual shared ports required');
+    const original = {
+      ticketId: 'fictional-first-ticket',
+      sourceGeneration: 3,
+    };
+    const onDeferred = vi.fn();
+    const scoped = configured.checksFor(original, onDeferred);
+    original.ticketId = 'caller-reassigned-ticket';
+    original.sourceGeneration = 99;
+    await scoped.verify('first-no-receipt', sharedBinding);
+    expect(first.engineeringFor).toHaveBeenCalledWith(
+      { ticketId: 'fictional-first-ticket', sourceGeneration: 3 },
+      expect.any(Object),
+    );
+    state.current = second;
+    expect(
+      await scoped.check(
+        {
+          candidate: candidate(),
+          exactRequest: await prepared(),
+          binding: sharedBinding,
+          checkPolicyVersion: 'fictional-policy',
+        },
+        context(),
+      ),
+    ).toMatchObject({ outcome: 'checked' });
+    expect(second.engineeringFor).toHaveBeenCalledWith(
+      { ticketId: 'fictional-first-ticket', sourceGeneration: 3 },
+      expect.any(Object),
+    );
+    expect(onDeferred).toHaveBeenCalledExactlyOnceWith({
+      kind: 'checks',
+      operationId: 'a'.repeat(64),
+      ticketId: 'fictional-first-ticket',
+      sourceGeneration: 3,
+      expiresAt: '2026-11-10T13:00:00.000Z',
+    });
+    const other = configured.checksFor(
+      { ticketId: 'fictional-second-ticket', sourceGeneration: 8 },
+      () => {},
+    );
+    await other.verify('other-no-receipt', sharedBinding);
+    expect(second.engineeringFor).toHaveBeenLastCalledWith(
+      { ticketId: 'fictional-second-ticket', sourceGeneration: 8 },
+      expect.any(Object),
+    );
+    await production.reviewProofs!.checks.verify(
+      'current-no-receipt',
+      sharedBinding,
+    );
+    expect(
+      second.engineeringSdkVerifier.verify,
+    ).toHaveBeenCalledExactlyOnceWith('current-no-receipt', sharedBinding);
+    await configured.ports.checks.resolvePolicy(undefined, context().signal);
+    expect(second.resolvePolicy).toHaveBeenCalledOnce();
+    const run = { ...context(), current: () => true };
+    await configured.precomputeChecks(
+      {
+        kind: 'checks',
+        operationId: 'b'.repeat(64),
+        ticketId: 'fictional-second-ticket',
+        sourceGeneration: 8,
+        expiresAt: '2026-11-10T13:00:00.000Z',
+      },
+      run,
+    );
+    expect(second.precomputePending).toHaveBeenCalledExactlyOnceWith(
+      'b'.repeat(64),
+      run,
+      { ticketId: 'fictional-second-ticket', sourceGeneration: 8 },
+      run.current,
+    );
+    await production.discardChecks!('fictional-first-ticket');
+    await configured.discardChecks('fictional-second-ticket');
+    expect(second.discardTicket.mock.calls).toEqual([
+      ['engineering', 'fictional-first-ticket'],
+      ['engineering', 'fictional-second-ticket'],
+    ]);
+    expect(first.precomputePending).not.toHaveBeenCalled();
+    expect(first.discardTicket).not.toHaveBeenCalled();
+    const beforeLoss = second.engineeringFor.mock.calls.length;
+    Reflect.set(selection, 'readChecks', () => undefined);
+    expect(production.processing.enabled?.()).toBe(false);
+    expect(
+      await scoped.verify('after-controller-loss', sharedBinding),
+    ).toBeNull();
+    expect(
+      await scoped.check(
+        {
+          candidate: candidate(),
+          exactRequest: await prepared(),
+          binding: sharedBinding,
+          checkPolicyVersion: 'fictional-policy',
+        },
+        context(),
+      ),
+    ).toEqual({ outcome: 'held' });
+    expect(second.engineeringFor).toHaveBeenCalledTimes(beforeLoss);
+  });
+  it('holds synchronous and asynchronous controller method failures instead of falling back', async () => {
+    const t = await fixture();
+    const controller = sharedController(t.configuration.checks!);
+    const production = createProductionSupportEngineering({
+      ...t.options,
+      configuration: { ...t.configuration, readChecks: () => controller },
+    });
+    controller.resolvePolicy.mockImplementationOnce(() => {
+      throw new Error('Fictional sync controller failure');
+    });
+    expect(
+      await production.processing.configuration!.ports.checks.resolvePolicy(
+        undefined,
+        context().signal,
+      ),
+    ).toEqual({ outcome: 'unavailable' });
+    controller.engineeringSdkVerifier.verify.mockRejectedValueOnce(
+      new Error('Fictional proof failure'),
+    );
+    expect(
+      await production.application.checks!.verify(
+        'fictional-no-receipt',
+        sharedBinding,
+      ),
+    ).toBeNull();
+    controller.precomputePending.mockRejectedValueOnce(
+      new Error('Fictional controller failure'),
+    );
+    expect(
+      await production.processing.configuration!.precomputeChecks!(
+        {
+          kind: 'checks',
+          operationId: 'a'.repeat(64),
+          ticketId: 'fictional-known',
+          sourceGeneration: 1,
+          expiresAt: '2026-11-10T13:00:00.000Z',
+        },
+        {
+          deadline: '2026-11-10T12:00:04.000Z',
+          signal: context().signal,
+          current: () => true,
+        },
+      ),
+    ).toEqual({ outcome: 'held' });
+  });
+});
+
 /** The platform binding selects the genuine existing Memory Store. Host,
  * Identity/RoleStore, App and production adapters all remain real. */
-async function normalEntry(deferredChecks = false) {
+async function normalEntry(deferredChecks: boolean | 'shared' = false) {
   const t = await fixture();
   const deferred = deferredChecks
     ? await createDeferredDriverChecksFixture(
@@ -927,6 +1313,22 @@ async function normalEntry(deferredChecks = false) {
     IDENTITY_EMAIL_ENABLED: 'false',
     PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED: 'true',
   } as unknown as Parameters<ReturnType<typeof createWorker>['fetch']>[1];
+  const shared =
+    deferredChecks === 'shared' && deferred
+      ? createSupportIndependentChecks({
+          ...deferred.configuration,
+          store: t.host.store,
+          clock: t.host.clock,
+          application: () => {
+            const result = instances.mock.results.at(-1);
+            if (result?.type !== 'return' || !result.value)
+              throw new Error('Exact normal root App not constructed');
+            return result.value.application;
+          },
+          repositories: t.production.application.repositoryMetadata,
+          deferred: true,
+        })
+      : undefined;
   const options = {
     engineeringProduction:
       deferred === undefined
@@ -935,7 +1337,9 @@ async function normalEntry(deferredChecks = false) {
             ...t.options,
             configuration: {
               ...t.configuration,
-              independentChecks: deferred.configuration,
+              ...(deferredChecks === 'shared'
+                ? { readChecks: () => shared }
+                : { independentChecks: deferred.configuration }),
             },
           },
     engineering: {
@@ -1011,6 +1415,7 @@ async function normalEntry(deferredChecks = false) {
   return {
     ...t,
     deferred,
+    shared,
     environment,
     options,
     worker,
@@ -1053,9 +1458,7 @@ describe('normal root production engineering integration', () => {
     expect(work.approval).toBeUndefined();
     expect(work.dispatch).toBeUndefined();
     expect(t.modelFetch).toHaveBeenCalledOnce();
-    expect(
-      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
   });
   it.each(['deployment', 'source'] as const)(
     'keeps %s processing OFF without any driver or provider opportunity',
@@ -1189,6 +1592,36 @@ async function queuePhase(
 }
 
 describe('registered engineering Queue and cleanup entries', () => {
+  it('uses one injected shared checker through the normal registered root without a private attachment or pool', async () => {
+    const t = await normalEntry('shared');
+    const { key, runtime } = await t.eligible();
+    expect(t.shared).toBeDefined();
+    await queuePhase(
+      t,
+      async () =>
+        (
+          await runtime.application.readEngineeringWork(
+            t.f.engineering.actors.security,
+            key,
+          )
+        ).proposal !== undefined,
+    );
+    expect(t.modelFetch).toHaveBeenCalledOnce();
+    expect(t.deferred?.state.calls).toBe(1);
+    expect((await t.deferred?.rows())?.entries).toHaveLength(1);
+    expect((await t.deferred?.rows())?.entries[0]).toMatchObject({
+      state: 'checked',
+      request: null,
+    });
+    const work = await runtime.application.readEngineeringWork(
+      t.f.engineering.actors.security,
+      key,
+    );
+    expect(work.proposal).toBeDefined();
+    expect(work.approval).toBeUndefined();
+    expect(work.dispatch).toBeUndefined();
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
+  });
   it('runs the genuine deferred checker in a separate registered Queue phase before preparing a human-review proposal', async () => {
     const t = await normalEntry(true);
     const { key, runtime } = await t.eligible();
@@ -1217,9 +1650,7 @@ describe('registered engineering Queue and cleanup entries', () => {
     expect(work.proposal).toBeDefined();
     expect(work.approval).toBeUndefined();
     expect(work.dispatch).toBeUndefined();
-    expect(
-      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
     expect((await t.deferred?.rows())?.entries[0]).toMatchObject({
       state: 'checked',
       request: null,
@@ -1273,9 +1704,7 @@ describe('registered engineering Queue and cleanup entries', () => {
     ).toBeDefined();
     expect(t.deferred?.state.calls).toBe(1);
     expect(t.modelFetch).toHaveBeenCalledOnce();
-    expect(
-      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
   });
   it('advances historical physical pages across minute seeds without an empty retry chain', async () => {
     const t = await normalEntry();
@@ -1342,9 +1771,7 @@ describe('registered engineering Queue and cleanup entries', () => {
       await t.worker.queue(duplicate.batch, t.environment, t.context);
     }
     expect(t.modelFetch).toHaveBeenCalledOnce();
-    expect(
-      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
   });
   it.each(['deployment', 'configuration', 'authority'] as const)(
     'denies late %s change through the registered queue before paid generation',
@@ -1510,8 +1937,6 @@ describe('registered engineering Queue and cleanup entries', () => {
     );
     expect(t.modelFetch).toHaveBeenCalledOnce();
     expect(forbiddenSend).not.toHaveBeenCalled();
-    expect(
-      t.githubFetch.mock.calls.every(([, init]) => init.method === 'GET'),
-    ).toBe(true);
+    expect(t.githubFetch.mock.calls.every(readOnlyGitHubRequest)).toBe(true);
   });
 });

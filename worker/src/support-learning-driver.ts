@@ -13,8 +13,18 @@ export interface SupportLearningDeferredCheckHint {
 export type SupportLearningPrecomputeResult = {
   readonly outcome: 'checked' | 'held' | 'restricted' | 'unknown';
 };
+/** Additive staged-SDK marker. Only a NON-LLM delivery invocation can return
+ * this after the durable App checkpoint and atomic claim release succeed.
+ * Legacy/unknown pending delivery has no checkpoint and is not resumable here.
+ */
+export interface SupportLearningDeliveryCheckpoint {
+  readonly outcome: 'pending';
+  readonly stage: 'delivery';
+  readonly checkpoint: 'prepared' | 'acknowledged';
+}
 export type SupportLearningDriverProcessResult =
   | Awaited<ReturnType<SDK['processWork']>>
+  | SupportLearningDeliveryCheckpoint
   | {
       readonly outcome: 'checks_pending';
       readonly hint: SupportLearningDeferredCheckHint;
@@ -365,66 +375,89 @@ export function createSupportLearningDriver(
             ),
           );
           let remainingTargets = remaining.length;
+          const deliveryCheckpoint =
+            result.outcome === 'pending' &&
+            result.stage === 'delivery' &&
+            'checkpoint' in result &&
+            (result.checkpoint === 'prepared' ||
+              result.checkpoint === 'acknowledged');
+          let deferred:
+            Exclude<Target, { readonly kind: 'reconciliation' }> | undefined;
           if (result.outcome === 'checks_pending') {
-            const deferred = target(result.hint);
+            const observedHint = target(result.hint);
             if (
-              deferred.kind !== 'checks' ||
-              deferred.ticketId !== hint.ticketId ||
-              deferred.sourceGeneration !== hint.sourceGeneration
+              observedHint.kind !== 'checks' ||
+              observedHint.ticketId !== hint.ticketId ||
+              observedHint.sourceGeneration !== hint.sourceGeneration
             )
               throw new TypeError('Mismatched deferred learning check hint');
-            // Only the nonpaid proposal path emits this outcome. Merge against
-            // the CURRENT head so a concurrent pop/scan is never overwritten.
-            // If full/contended, its durable queued input re-emits on discovery.
-            for (let attempt = 0; attempt < 2; attempt++) {
-              const head = await within(() => collection.getVersioned(KEY));
-              if (head === null) break;
-              const value = checkpoint(head.value);
-              remainingTargets = value.targets.length;
-              const same = value.targets.find(
-                (entry) => targetIdentity(entry) === targetIdentity(deferred),
-              );
-              if (same !== undefined) {
-                if (JSON.stringify(same) !== JSON.stringify(deferred))
-                  throw new TypeError(
-                    'Conflicting deferred learning check hint',
-                  );
-                break;
-              }
-              // A concurrently rediscovered same Work will recapture its own
-              // durable operation. Avoid a duplicate resume beside that ref.
-              if (
-                value.targets.some(
-                  (entry) =>
-                    entry.kind !== 'reconciliation' &&
-                    entry.ticketId === deferred.ticketId &&
-                    entry.sourceGeneration === deferred.sourceGeneration,
+            deferred = observedHint;
+          } else if (deliveryCheckpoint)
+            deferred = {
+              kind: 'work',
+              ticketId: hint.ticketId,
+              sourceGeneration: hint.sourceGeneration,
+            };
+          if (deferred !== undefined) {
+            // Only non-LLM deferred input or confirmed App checkpoint outcomes
+            // enter here. Merge the CURRENT head; never restore a consumed ref.
+            try {
+              for (let attempt = 0; attempt < 2; attempt++) {
+                const head = await within(() => collection.getVersioned(KEY));
+                if (head === null) break;
+                const value = checkpoint(head.value);
+                remainingTargets = value.targets.length;
+                const same = value.targets.find(
+                  (entry) => targetIdentity(entry) === targetIdentity(deferred),
+                );
+                if (same !== undefined) {
+                  if (JSON.stringify(same) !== JSON.stringify(deferred))
+                    throw new TypeError(
+                      'Conflicting deferred learning check hint',
+                    );
+                  break;
+                }
+                // A concurrently rediscovered same Work will recapture its own
+                // durable operation. Avoid a duplicate resume beside that ref.
+                if (
+                  value.targets.some(
+                    (entry) =>
+                      entry.kind !== 'reconciliation' &&
+                      entry.ticketId === deferred.ticketId &&
+                      entry.sourceGeneration === deferred.sourceGeneration,
+                  )
                 )
-              )
-                break;
-              if (
-                value.targets.length === DISCOVERY_ROWS ||
-                value.generation === Number.MAX_SAFE_INTEGER ||
-                Date.parse(deferred.expiresAt) <=
-                  Date.parse(options.clock.now())
-              )
-                break;
-              const targets = [...value.targets, deferred];
-              if (
-                await within(() =>
-                  collection.putIfUnchanged(
-                    {
-                      generation: value.generation + 1,
-                      cursor: value.cursor,
-                      targets,
-                    },
-                    head.version,
-                  ),
+                  break;
+                if (
+                  value.targets.length === DISCOVERY_ROWS ||
+                  value.generation === Number.MAX_SAFE_INTEGER ||
+                  (deferred.kind === 'checks' &&
+                    Date.parse(deferred.expiresAt) <=
+                      Date.parse(options.clock.now()))
                 )
-              ) {
-                remainingTargets = targets.length;
-                break;
+                  break;
+                const targets = [...value.targets, deferred];
+                if (
+                  await within(() =>
+                    collection.putIfUnchanged(
+                      {
+                        generation: value.generation + 1,
+                        cursor: value.cursor,
+                        targets,
+                      },
+                      head.version,
+                    ),
+                  )
+                ) {
+                  remainingTargets = targets.length;
+                  break;
+                }
               }
+            } catch (error) {
+              // The domain checkpoint was acknowledged before this advisory
+              // work began. Its failure must not rewrite accepted SDK progress;
+              // durable Source/Work scanning can recover the exact resume.
+              if (!deliveryCheckpoint) throw error;
             }
           }
           return {

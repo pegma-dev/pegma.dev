@@ -19,6 +19,7 @@ import type { SupportRuntime } from './support-desk';
 import {
   createSupportIndependentChecks,
   type SupportIndependentChecksOptions,
+  type IndependentCheckPendingHint,
 } from './support-independent-checks';
 import { supportEngineeringApplicationOptions } from './support-engineering';
 import {
@@ -56,6 +57,15 @@ export interface SupportEngineeringLocalProposalOptions {
     input: ProposalInput,
   ) => SupportEngineeringProposalSettings | null;
 }
+export type SupportEngineeringSharedChecks = Pick<
+  ReturnType<typeof createSupportIndependentChecks>,
+  | 'resolvePolicy'
+  | 'engineeringSdkVerifier'
+  | 'engineeringFor'
+  | 'precomputePending'
+  | 'discardTicket'
+>;
+
 export interface SupportEngineeringProductionOptions {
   readonly clock?: Clock;
   /** Processing only; intake and repository reads/writes retain their own gates. */
@@ -74,6 +84,10 @@ export interface SupportEngineeringProductionOptions {
     readonly reconciliationAccess: Processing['ports']['reconciliationAccess'];
     readonly routing: Processing['ports']['routing'];
     readonly checks?: Processing['ports']['checks'];
+    /** Root-owned shared pool, selected lazily for the exact App graph. Presence
+     * takes precedence over private independentChecks and legacy bare checks;
+     * an unready or failed controller never falls back to another authority. */
+    readonly readChecks?: () => SupportEngineeringSharedChecks | undefined;
     /** Source-owned checker composition, never an HTTP-supplied bundle. It wins
      * over legacy checks when supplied; unready configuration cannot fall back. */
     readonly independentChecks?: Omit<
@@ -479,30 +493,69 @@ export function createProductionSupportEngineering(
       application: supportEngineeringApplicationOptions(),
       processing: Object.freeze({}),
     });
-  const supplied = options.configuration;
-  if (supplied === undefined) return off();
+  const configured = options.configuration;
+  if (configured === undefined) return off();
+  const supplied = configured;
   try {
-    const checkerOptions = supplied.independentChecks;
+    const shared = supplied.readChecks !== undefined;
+    // Do not even inspect private configuration when Root chose the shared pool.
+    const checkerOptions = shared ? undefined : supplied.independentChecks;
+    const controlled = shared || checkerOptions !== undefined;
     let checker: ReturnType<typeof createSupportIndependentChecks> | undefined;
     let attached = false;
-    const checks: Processing['ports']['checks'] =
-      checkerOptions === undefined
-        ? supplied.checks!
-        : Object.freeze({
-            resolvePolicy: (
-              ...args: Parameters<
-                Processing['ports']['checks']['resolvePolicy']
-              >
-            ) =>
-              checker?.resolvePolicy(...args) ??
-              Promise.resolve({ outcome: 'unavailable' as const }),
-            check: async () => ({ outcome: 'held' as const }),
-            verify: (
-              ...args: Parameters<Processing['ports']['checks']['verify']>
-            ) =>
-              checker?.engineeringSdkVerifier.verify(...args) ??
-              Promise.resolve(null),
-          });
+    function currentChecker(): SupportEngineeringSharedChecks | undefined {
+      if (!shared) return checker;
+      try {
+        const readShared = supplied.readChecks;
+        const current =
+          typeof readShared === 'function' ? readShared() : undefined;
+        return current &&
+          [
+            current.resolvePolicy,
+            current.engineeringSdkVerifier?.verify,
+            current.engineeringFor,
+            current.precomputePending,
+            current.discardTicket,
+          ].every((value) => typeof value === 'function')
+          ? current
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    function invoke<Result>(
+      action: (controller: SupportEngineeringSharedChecks) => Promise<Result>,
+      unavailable: Result,
+    ): Promise<Result> {
+      const current = currentChecker();
+      if (!current) return Promise.resolve(unavailable);
+      // Preserve the existing private-controller error behavior. Shared binding
+      // faults fail closed; they never select the old pool or bare verifier.
+      if (!shared) return action(current);
+      try {
+        return Promise.resolve(action(current)).catch(() => unavailable);
+      } catch {
+        return Promise.resolve(unavailable);
+      }
+    }
+    const checks: Processing['ports']['checks'] = !controlled
+      ? supplied.checks!
+      : Object.freeze({
+          resolvePolicy: (
+            ...args: Parameters<Processing['ports']['checks']['resolvePolicy']>
+          ) =>
+            invoke((controller) => controller.resolvePolicy(...args), {
+              outcome: 'unavailable' as const,
+            }),
+          check: async () => ({ outcome: 'held' as const }),
+          verify: (
+            ...args: Parameters<Processing['ports']['checks']['verify']>
+          ) =>
+            invoke(
+              (controller) => controller.engineeringSdkVerifier.verify(...args),
+              null,
+            ),
+        });
     if (
       ![
         supplied.serviceAccess?.resolve,
@@ -534,7 +587,11 @@ export function createProductionSupportEngineering(
         return (
           options.configuration === supplied &&
           options.enabled?.() === true &&
-          (checkerOptions === undefined || !attached || checker !== undefined)
+          (shared
+            ? currentChecker() !== undefined
+            : checkerOptions === undefined ||
+              !attached ||
+              checker !== undefined)
         );
       } catch {
         return false;
@@ -563,12 +620,16 @@ export function createProductionSupportEngineering(
           model: supplied.model,
           usagePolicy: supplied.usagePolicy,
           ports,
-          ...(checkerOptions === undefined
+          ...(!controlled
             ? {}
             : ({
-                checksFor: (scope, onDurablyDeferred) =>
-                  checker?.engineeringFor(scope, {
-                    onDurablyDeferred(hint) {
+                checksFor(scope, onDurablyDeferred) {
+                  const fixed = Object.freeze({
+                    ticketId: scope.ticketId,
+                    sourceGeneration: scope.sourceGeneration,
+                  });
+                  const capture = {
+                    onDurablyDeferred(hint: IndependentCheckPendingHint) {
                       if (hint.kind !== 'engineering')
                         throw new TypeError('Wrong independent check purpose');
                       onDurablyDeferred({
@@ -579,22 +640,69 @@ export function createProductionSupportEngineering(
                         expiresAt: hint.expiresAt,
                       });
                     },
-                  }) ?? checks,
+                  };
+                  if (!shared)
+                    return checker?.engineeringFor(fixed, capture) ?? checks;
+                  // Scope is immutable, but the selected controller is read afresh for
+                  // every policy/check/verification operation, including retained ports.
+                  return Object.freeze({
+                    resolvePolicy: (
+                      ...args: Parameters<
+                        Processing['ports']['checks']['resolvePolicy']
+                      >
+                    ) =>
+                      invoke(
+                        (controller) => controller.resolvePolicy(...args),
+                        { outcome: 'unavailable' as const },
+                      ),
+                    check: (
+                      ...args: Parameters<
+                        Processing['ports']['checks']['check']
+                      >
+                    ) =>
+                      invoke(
+                        (controller) =>
+                          controller
+                            .engineeringFor(fixed, capture)
+                            .check(...args),
+                        { outcome: 'held' as const },
+                      ),
+                    verify: (
+                      ...args: Parameters<
+                        Processing['ports']['checks']['verify']
+                      >
+                    ) =>
+                      invoke(
+                        (controller) =>
+                          controller
+                            .engineeringFor(fixed, capture)
+                            .verify(...args),
+                        null,
+                      ),
+                  });
+                },
                 precomputeChecks: async (hint, run) => {
-                  if (!checker) return { outcome: 'held' as const };
-                  const result = await checker.precomputePending(
-                    hint.operationId,
-                    run,
-                    {
-                      ticketId: hint.ticketId,
-                      sourceGeneration: hint.sourceGeneration,
-                    },
-                    run.current,
+                  const result = await invoke(
+                    (controller) =>
+                      controller.precomputePending(
+                        hint.operationId,
+                        run,
+                        {
+                          ticketId: hint.ticketId,
+                          sourceGeneration: hint.sourceGeneration,
+                        },
+                        run.current,
+                      ),
+                    { outcome: 'held' as const },
                   );
                   return { outcome: result.outcome };
                 },
                 discardChecks: async (ticketId) => {
-                  await checker?.discardTicket('engineering', ticketId);
+                  await invoke(
+                    (controller) =>
+                      controller.discardTicket('engineering', ticketId),
+                    0,
+                  );
                 },
               } satisfies Pick<
                 Processing,
@@ -608,6 +716,17 @@ export function createProductionSupportEngineering(
         checks: ports.checks,
         github: ports.github,
       }),
+      ...(controlled
+        ? {
+            discardChecks: async (ticketId: string) => {
+              await invoke(
+                (controller) =>
+                  controller.discardTicket('engineering', ticketId),
+                0,
+              );
+            },
+          }
+        : {}),
       ...(checkerOptions === undefined
         ? {}
         : ({
@@ -631,9 +750,6 @@ export function createProductionSupportEngineering(
                 checker = undefined;
                 return false;
               }
-            },
-            discardChecks: async (ticketId: string) => {
-              await checker?.discardTicket('engineering', ticketId);
             },
           } satisfies Pick<
             SupportEngineeringProductionComposition,

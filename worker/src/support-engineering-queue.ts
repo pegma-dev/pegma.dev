@@ -1,30 +1,51 @@
 import type { Clock, Logger } from '@pegma/spine';
 import type { SupportEngineeringDriverResult } from './support-engineering-driver';
+import type { SupportLearningDriverResult } from './support-learning-driver';
 
 export const SUPPORT_ENGINEERING_QUEUE = 'pegma-dev-support-engineering';
 export interface SupportEngineeringWake {
   readonly version: 1;
   readonly kind: 'support-engineering-wake';
 }
-export interface SupportEngineeringQueueOptions {
+export interface SupportLearningWake {
+  readonly version: 1;
+  readonly kind: 'support-learning-wake';
+}
+interface WakeOptions<Wake, Result> {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly enabled: () => boolean;
   /** Lazy platform producer; OFF never reads a binding. */
-  readonly producer?: () =>
-    Pick<Queue<SupportEngineeringWake>, 'send'> | undefined;
+  readonly producer?: () => Pick<Queue<Wake>, 'send'> | undefined;
   /** Creation stays lazy until a current, bounded delivery is accepted. */
-  readonly create?: () =>
-    { runTick(): Promise<SupportEngineeringDriverResult> } | undefined;
+  readonly create?: () => { runTick(): Promise<Result> } | undefined;
 }
+export interface SupportEngineeringQueueOptions extends WakeOptions<
+  SupportEngineeringWake,
+  SupportEngineeringDriverResult
+> {}
+export interface SupportLearningQueueOptions extends WakeOptions<
+  SupportLearningWake,
+  SupportLearningDriverResult
+> {}
 const wake: SupportEngineeringWake = Object.freeze({
   version: 1,
   kind: 'support-engineering-wake',
 });
+const learningWake: SupportLearningWake = Object.freeze({
+  version: 1,
+  kind: 'support-learning-wake',
+});
+type Controls = Pick<WakeOptions<never, never>, 'clock' | 'logger' | 'enabled'>;
+type Event =
+  | 'support.engineering.queue_unavailable'
+  | 'support.learning.queue_unavailable';
+const engineeringEvent: Event = 'support.engineering.queue_unavailable';
+const learningEvent: Event = 'support.learning.queue_unavailable';
 const MAX_DELIVERIES = 8; // Cloudflare Message.attempts starts at 1, including the first delivery.
 const MAX_AGE = 240_000;
 const RETRY_SECONDS = 1;
-function enabled(options: SupportEngineeringQueueOptions): boolean {
+function enabled(options: Controls): boolean {
   try {
     return options.enabled() === true;
   } catch {
@@ -32,38 +53,49 @@ function enabled(options: SupportEngineeringQueueOptions): boolean {
   }
 }
 function diagnostic(
-  options: SupportEngineeringQueueOptions,
+  options: Controls,
+  event: Event,
   stage: 'seed' | 'consume' | 'ack' | 'retry' | 'envelope',
 ): void {
   try {
-    options.logger.log('warn', 'support.engineering.queue_unavailable', {
+    options.logger.log('warn', event, {
       stage,
     });
   } catch {
     /* Preserve domain outcome. */
   }
 }
-function ack(message: Message, options: SupportEngineeringQueueOptions): void {
+function ack(message: Message, options: Controls, event: Event): void {
   try {
     message.ack();
   } catch {
-    diagnostic(options, 'ack');
+    diagnostic(options, event, 'ack');
   }
 }
-function validBody(value: unknown): boolean {
+function validBody(
+  value: unknown,
+  kind: SupportEngineeringWake['kind'] | SupportLearningWake['kind'],
+): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     return false;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  return (
-    Reflect.ownKeys(value).length === 2 &&
-    descriptors.version?.value === 1 &&
-    descriptors.kind?.value === 'support-engineering-wake'
-  );
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    return (
+      Reflect.ownKeys(value).length === 2 &&
+      descriptors.version?.value === 1 &&
+      descriptors.kind?.value === kind
+    );
+  } catch {
+    return false;
+  }
 }
-function currentMessage(
-  message: Message,
-  options: SupportEngineeringQueueOptions,
-): boolean {
+/** Pure routing only; the exact body is never an authority or target hint. */
+export function isSupportLearningWake(
+  value: unknown,
+): value is SupportLearningWake {
+  return validBody(value, 'support-learning-wake');
+}
+function currentMessage(message: Message, options: Controls): boolean {
   const now = Date.parse(options.clock.now());
   const sent = Date.prototype.getTime.call(message.timestamp);
   return (
@@ -76,7 +108,10 @@ function currentMessage(
     message.attempts <= MAX_DELIVERIES
   );
 }
-function continuation(result: SupportEngineeringDriverResult): boolean {
+function continuation(
+  result: SupportEngineeringDriverResult | SupportLearningDriverResult,
+): boolean {
+  if (result.checkpointSaved !== true) return false;
   return result.outcome === 'scanned'
     ? result.selected
     : result.outcome === 'checks'
@@ -88,8 +123,10 @@ function continuation(result: SupportEngineeringDriverResult): boolean {
 
 /** Advisory send only, separate from any SDK/paid stage. A late queue failure
  * cannot rewrite an accepted domain operation; the next cron can seed again. */
-export async function seedSupportEngineeringWake(
-  options: SupportEngineeringQueueOptions,
+async function seedWake<Wake, Result>(
+  options: WakeOptions<Wake, Result>,
+  body: Wake,
+  event: Event,
 ): Promise<void> {
   if (!enabled(options)) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -98,19 +135,19 @@ export async function seedSupportEngineeringWake(
     if (producer === undefined || !enabled(options)) return;
     const sent = Promise.resolve().then(() => {
       if (!enabled(options)) return;
-      return producer.send(wake, { contentType: 'json' });
+      return producer.send(body, { contentType: 'json' });
     });
     await Promise.race([
       sent,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error('Engineering wake unavailable')),
+          () => reject(new Error('Support wake unavailable')),
           1_000,
         );
       }),
     ]);
   } catch {
-    diagnostic(options, 'seed');
+    diagnostic(options, event, 'seed');
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -118,34 +155,37 @@ export async function seedSupportEngineeringWake(
 
 /** One real driver tick per physical delivery. Queue hints never grant access,
  * extend SDK deadlines, or turn a new send into part of a known paid outcome. */
-export async function consumeSupportEngineeringWake(
+async function consumeWake<Wake, Result>(
   batch: MessageBatch,
-  options: SupportEngineeringQueueOptions,
+  options: WakeOptions<Wake, Result>,
+  accepts: (value: unknown) => boolean,
+  continues: (value: Result) => boolean,
+  event: Event,
 ): Promise<void> {
   if (batch.queue !== SUPPORT_ENGINEERING_QUEUE) return;
   if (batch.messages.length !== 1) {
-    diagnostic(options, 'envelope');
+    diagnostic(options, event, 'envelope');
     try {
       batch.ackAll();
     } catch {
-      diagnostic(options, 'ack');
+      diagnostic(options, event, 'ack');
     }
     return;
   }
   const message = batch.messages[0]!;
   try {
     if (!enabled(options)) {
-      ack(message, options);
+      ack(message, options, event);
       return;
     }
-    if (!validBody(message.body) || !currentMessage(message, options)) {
-      diagnostic(options, 'envelope');
-      ack(message, options);
+    if (!accepts(message.body) || !currentMessage(message, options)) {
+      diagnostic(options, event, 'envelope');
+      ack(message, options, event);
       return;
     }
     const runtime = options.create?.();
     if (runtime === undefined || !enabled(options)) {
-      ack(message, options);
+      ack(message, options, event);
       return;
     }
     const result = await runtime.runTick();
@@ -155,19 +195,56 @@ export async function consumeSupportEngineeringWake(
       enabled(options) &&
       currentMessage(message, options) &&
       message.attempts < MAX_DELIVERIES &&
-      continuation(result)
+      continues(result)
     ) {
       try {
         message.retry({ delaySeconds: RETRY_SECONDS });
       } catch {
-        diagnostic(options, 'retry');
-        ack(message, options);
+        diagnostic(options, event, 'retry');
+        ack(message, options, event);
       }
       return;
     }
-    ack(message, options);
+    ack(message, options, event);
   } catch {
-    diagnostic(options, 'consume');
-    ack(message, options);
+    diagnostic(options, event, 'consume');
+    ack(message, options, event);
   }
+}
+
+export function seedSupportEngineeringWake(
+  options: SupportEngineeringQueueOptions,
+): Promise<void> {
+  return seedWake(options, wake, engineeringEvent);
+}
+export function consumeSupportEngineeringWake(
+  batch: MessageBatch,
+  options: SupportEngineeringQueueOptions,
+): Promise<void> {
+  return consumeWake(
+    batch,
+    options,
+    (value) => validBody(value, 'support-engineering-wake'),
+    continuation,
+    engineeringEvent,
+  );
+}
+/** Same physical queue and retry bounds. Two enabled idle minute domains cost
+ * up to 1440*2*3=8640 operations/day before retries and all other account traffic. */
+export function seedSupportLearningWake(
+  options: SupportLearningQueueOptions,
+): Promise<void> {
+  return seedWake(options, learningWake, learningEvent);
+}
+export function consumeSupportLearningWake(
+  batch: MessageBatch,
+  options: SupportLearningQueueOptions,
+): Promise<void> {
+  return consumeWake(
+    batch,
+    options,
+    isSupportLearningWake,
+    continuation,
+    learningEvent,
+  );
 }

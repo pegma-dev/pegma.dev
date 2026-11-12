@@ -1,6 +1,9 @@
 import type { PrivateSourcesVerifier } from "@pegma/knowledge-base-application";
 import type { ResolutionLearningKey } from "@pegma/support-desk-application";
-import type { LearningChecksPort } from "@pegma/support-desk-ai";
+import type {
+  LearningCheckPolicyPort,
+  LearningChecksPort,
+} from "@pegma/support-desk-ai";
 import { createAgentPrincipalResolver } from "./agent-authority";
 import type { SupportRuntime } from "./support-desk";
 import {
@@ -36,6 +39,14 @@ type BrowserRuntime = Omit<SupportLearningRuntimeOptions, "staffAccess">;
 /** Current operator-owned inputs only. The graph creates no identity, role,
  * credential, route approval, timer, queue or publication permission. */
 export interface SupportLearningCompositionOptions {
+  /** Current source authority and review governance, independent of generation.
+   * Policy identity, expiry and revocation belong to the supplied resolver. */
+  readonly source?: Pick<
+    Configuration,
+    "serviceAccess" | "knowledgeAccess" | "retirementAccess"
+  > & {
+    readonly reviewPolicy: LearningCheckPolicyPort;
+  };
   readonly production?: Omit<
     SupportLearningProductionOptions,
     "configuration"
@@ -80,6 +91,22 @@ export function createSupportLearningComposition(
       readChecks()?.resolvePolicy(...args) ??
       Promise.resolve({ outcome: "unavailable" as const }),
   });
+  const source = options.source;
+  const sourcePorts =
+    source === undefined
+      ? production.sourcePorts
+      : [
+            source.serviceAccess?.resolve,
+            source.knowledgeAccess?.resolve,
+            source.retirementAccess?.resolve,
+            source.reviewPolicy?.resolvePolicy,
+          ].every((value) => typeof value === "function")
+        ? Object.freeze({
+            serviceAccess: source.serviceAccess,
+            knowledgeAccess: source.knowledgeAccess,
+            retirementAccess: source.retirementAccess,
+          })
+        : undefined;
   const unscopedChecks: LearningChecksPort = Object.freeze({
     ...policy,
     check: async () => ({ outcome: "held" as const }),
@@ -92,22 +119,18 @@ export function createSupportLearningComposition(
       !failed &&
       support !== undefined &&
       knowledge !== undefined &&
-      checks !== undefined &&
-      production.sourcePorts !== undefined
+      sourcePorts !== undefined &&
+      (source !== undefined || checks !== undefined)
     );
   }
   function sourceVerifier(): PrivateSourcesVerifier | undefined {
-    if (
-      !ready() ||
-      support === undefined ||
-      production.sourcePorts === undefined
-    )
+    if (!ready() || support === undefined || sourcePorts === undefined)
       return undefined;
     verifier ??= createSupportLearningSourceBridge({
       application: support.application,
       clock: support.clock,
-      serviceAccess: production.sourcePorts.serviceAccess,
-      reviewPolicy: policy,
+      serviceAccess: sourcePorts.serviceAccess,
+      reviewPolicy: source === undefined ? policy : source.reviewPolicy,
       ...(options.readScheduling === undefined
         ? {}
         : { readScheduling: options.readScheduling }),
@@ -140,7 +163,7 @@ export function createSupportLearningComposition(
       sources,
       clock: support.clock,
       processingEnabled: () => ready() && production.processingEnabled(),
-      ports: { ...production.sourcePorts, checks: unscopedChecks },
+      ports: { ...sourcePorts, checks: unscopedChecks },
       processingPortsFor: (key, capture) =>
         ready() ? production.createProcessingPorts(key, capture) : undefined,
       ...(options.readScheduling === undefined
@@ -155,26 +178,25 @@ export function createSupportLearningComposition(
     ready,
     processingEnabled: () => ready() && production.processingEnabled(),
     bindSupport(runtime: SupportRuntime): boolean {
-      if (failed || !configured || production.sourcePorts === undefined)
-        return false;
+      if (failed || sourcePorts === undefined) return false;
       if (support !== undefined)
         return support.application === runtime.application &&
           support.store === runtime.store &&
           support.clock === runtime.clock
           ? true
           : refuseBinding();
-      if (!production.attachRuntime(runtime)) return refuseBinding();
+      if (
+        production.sourcePorts !== undefined &&
+        !production.attachRuntime(runtime)
+      )
+        return refuseBinding();
       support = runtime;
       return true;
     },
     /** Forces the shared Store, Clock and verifier into the actual KB factory.
      * Rebinding this graph with different options is a closed configuration error. */
     createKnowledge(input: KnowledgeOptions): KnowledgeRuntime | undefined {
-      if (
-        failed ||
-        support === undefined ||
-        production.sourcePorts === undefined
-      )
+      if (failed || support === undefined || sourcePorts === undefined)
         return undefined;
       const binding = input as KnowledgeOptions &
         Partial<
@@ -203,18 +225,20 @@ export function createSupportLearningComposition(
           clock: current.clock,
           privateSources: sources,
         });
-        checks = createSupportIndependentChecks({
-          ...options.independentChecks!,
-          store: current.store,
-          clock: current.clock,
-          application: () => {
-            if (failed || support !== current)
-              throw new TypeError("Learning Support binding unavailable");
-            return current.application;
-          },
-          knowledge: knowledge.application,
-          knowledgeAccess: production.sourcePorts.knowledgeAccess,
-        });
+        if (configured && production.sourcePorts !== undefined) {
+          checks = createSupportIndependentChecks({
+            ...options.independentChecks!,
+            store: current.store,
+            clock: current.clock,
+            application: () => {
+              if (failed || support !== current)
+                throw new TypeError("Learning Support binding unavailable");
+              return current.application;
+            },
+            knowledge: knowledge.application,
+            knowledgeAccess: production.sourcePorts.knowledgeAccess,
+          });
+        }
         return knowledge;
       } catch {
         refuseBinding();

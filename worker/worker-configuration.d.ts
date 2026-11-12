@@ -9,6 +9,8 @@ interface __BaseEnv_Env {
   PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED: "false";
   PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON: "";
   PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED: "false";
+  PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED: "false";
+  PEGMA_SUPPORT_LEARNING_WORKER_ENABLED: "false";
   PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED: "false";
   PEGMA_AGENT_CLIENTS_JSON: "[{\"clientId\":\"pg-kb-codex-accept-v1\",\"name\":\"Pegma Codex CLI\",\"redirectUris\":[\"http://127.0.0.1/callback\"],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"authorization_code\"]},{\"clientId\":\"pg-kb-claude-accept-v1\",\"name\":\"Pegma Claude Code\",\"redirectUris\":[\"http://localhost:48772/callback\"],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"authorization_code\"]},{\"clientId\":\"pg-kb-device-accept-v1\",\"name\":\"Pegma RFC 8628 control\",\"redirectUris\":[],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"device_code\"]},{\"clientId\":\"pg-kb-grok-accept-v1\",\"name\":\"Pegma Grok Bot\",\"redirectUris\":[\"https://www.cursor.com/agents/mcp/oauth/callback\"],\"allowedScopes\":[\"knowledge.article.draft.read\",\"knowledge.article.draft.write\",\"knowledge.article.evidence.submit\"],\"grantTypes\":[\"authorization_code\"]}]";
   PEGMA_KNOWLEDGE_BROWSER_LIMIT: "120";
@@ -29,7 +31,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
   [Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-  interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "PEGMA_KNOWLEDGE_ENABLED" | "PEGMA_SUPPORT_ASSISTANT_ENABLED" | "PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED" | "PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON" | "PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED" | "PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED" | "PEGMA_AGENT_CLIENTS_JSON" | "PEGMA_KNOWLEDGE_BROWSER_LIMIT" | "PEGMA_AGENT_RESOURCE_LIMIT" | "IDENTITY_EMAIL_FROM" | "IDENTITY_EMAIL_ENABLED" | "GITHUB_ORGANIZATION_ID" | "GITHUB_ALLOWED_REPOSITORY_IDS">> {}
+  interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "PEGMA_KNOWLEDGE_ENABLED" | "PEGMA_SUPPORT_ASSISTANT_ENABLED" | "PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED" | "PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON" | "PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED" | "PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED" | "PEGMA_SUPPORT_LEARNING_WORKER_ENABLED" | "PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED" | "PEGMA_AGENT_CLIENTS_JSON" | "PEGMA_KNOWLEDGE_BROWSER_LIMIT" | "PEGMA_AGENT_RESOURCE_LIMIT" | "IDENTITY_EMAIL_FROM" | "IDENTITY_EMAIL_ENABLED" | "GITHUB_ORGANIZATION_ID" | "GITHUB_ALLOWED_REPOSITORY_IDS">> {}
 }
 
 // Begin runtime types

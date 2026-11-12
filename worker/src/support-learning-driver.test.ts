@@ -2,6 +2,7 @@ import {
   createMemoryStore,
   defineCollection,
   type StoredRecord,
+  type Store,
 } from '@pegma/storage-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -21,6 +22,193 @@ const fixture = (deferredChecks = false, modelAttempts?: 1 | 2) =>
     deferredChecks,
     ...(modelAttempts === undefined ? {} : { modelAttempts }),
   });
+
+/** Confirmed NON-LLM checkpoint port contract plus real Memory CAS only.
+ * These tests do not emulate a staged SDK, domain proof or Native capacity. */
+describe('confirmed delivery checkpoint advisory resume protocol', () => {
+  const work = { kind: 'work', ticketId: 'work', sourceGeneration: 1 };
+  it.each(['prepared', 'acknowledged'] as const)(
+    'queues the exact Work after a confirmed %s checkpoint while preserving FIFO',
+    async (checkpoint) => {
+      const t = referenceProtocol();
+      const other = { kind: 'reconciliation', ticketId: 'other' };
+      await t.write([work, other]);
+      vi.mocked(t.runtime.processWork).mockResolvedValueOnce({
+        outcome: 'pending',
+        stage: 'delivery',
+        checkpoint,
+      });
+      expect(await t.tick()).toMatchObject({
+        outcome: 'work',
+        result: { outcome: 'pending', stage: 'delivery', checkpoint },
+        remainingTargets: 2,
+      });
+      expect(await t.read()).toEqual({
+        generation: 3,
+        cursor: 'learning-cursor',
+        targets: [other, work],
+      });
+      expect(t.runtime.scanCandidates).not.toHaveBeenCalled();
+    },
+  );
+  it('leaves unknown legacy pending delivery without a post-SDK checkpoint write', async () => {
+    const t = referenceProtocol();
+    await t.write([work]);
+    let atCall: unknown;
+    vi.mocked(t.runtime.processWork).mockImplementation(async () => {
+      atCall = await t.read();
+      return { outcome: 'pending', stage: 'delivery' };
+    });
+    expect(await t.tick()).toMatchObject({
+      outcome: 'work',
+      result: { outcome: 'pending', stage: 'delivery' },
+      remainingTargets: 0,
+    });
+    expect(atCall).toEqual({
+      generation: 2,
+      cursor: 'learning-cursor',
+      targets: [],
+    });
+    expect(await t.read()).toEqual(atCall);
+  });
+  it('preserves an acknowledged domain checkpoint if the later advisory read fails', async () => {
+    const t = referenceProtocol();
+    await t.write([work]);
+    let reads = 0;
+    vi.mocked(t.runtime.processWork).mockResolvedValueOnce({
+      outcome: 'pending',
+      stage: 'delivery',
+      checkpoint: 'acknowledged',
+    });
+    const store: Store = {
+      collection(definition) {
+        const actual = t.store.collection(definition);
+        return definition.name !== learningDriverHintRows.name
+          ? actual
+          : {
+              ...actual,
+              async getVersioned(key) {
+                if (++reads === 2)
+                  throw new Error(
+                    'Fictional post-checkpoint advisory read failure',
+                  );
+                return actual.getVersioned(key);
+              },
+            };
+      },
+    };
+    expect(
+      await createSupportLearningDriver({
+        store,
+        clock: { now: () => '2026-11-10T12:00:00.000Z' },
+        isEnabled: () => true,
+        runtime: () => t.runtime,
+      }).runTick(),
+    ).toMatchObject({
+      outcome: 'work',
+      result: { checkpoint: 'acknowledged' },
+      remainingTargets: 0,
+      checkpointSaved: true,
+    });
+    expect((await t.read()).targets).toEqual([]);
+    expect(t.runtime.processWork).toHaveBeenCalledOnce();
+  });
+  it('retains a genuinely committed resume whose advisory CAS acknowledgement is lost', async () => {
+    const t = referenceProtocol();
+    await t.write([work]);
+    let writes = 0;
+    vi.mocked(t.runtime.processWork).mockResolvedValueOnce({
+      outcome: 'pending',
+      stage: 'delivery',
+      checkpoint: 'prepared',
+    });
+    const store: Store = {
+      collection(definition) {
+        const actual = t.store.collection(definition);
+        return definition.name !== learningDriverHintRows.name
+          ? actual
+          : {
+              ...actual,
+              async putIfUnchanged(value, version) {
+                const accepted = await actual.putIfUnchanged(value, version);
+                if (++writes === 2 && accepted)
+                  throw new Error('Lost genuine advisory ACK');
+                return accepted;
+              },
+            };
+      },
+    };
+    expect(
+      await createSupportLearningDriver({
+        store,
+        clock: { now: () => '2026-11-10T12:00:00.000Z' },
+        isEnabled: () => true,
+        runtime: () => t.runtime,
+      }).runTick(),
+    ).toMatchObject({
+      outcome: 'work',
+      result: { checkpoint: 'prepared' },
+      checkpointSaved: true,
+    });
+    expect(await t.read()).toEqual({
+      generation: 3,
+      cursor: 'learning-cursor',
+      targets: [work],
+    });
+    expect(t.runtime.processWork).toHaveBeenCalledOnce();
+  });
+  it('merges a resume into the current cursor without restoring a concurrently consumed reference', async () => {
+    const t = referenceProtocol();
+    await t.write([work, { kind: 'reconciliation', ticketId: 'consumed' }]);
+    vi.mocked(t.runtime.processWork).mockImplementation(async () => {
+      await t.store.collection(learningDriverHintRows).put({
+        ...learningDriverHintKey,
+        format: 1,
+        payload: JSON.stringify({
+          generation: 3,
+          cursor: 'concurrent-cursor',
+          targets: [],
+        }),
+      });
+      return { outcome: 'pending', stage: 'delivery', checkpoint: 'prepared' };
+    });
+    expect(await t.tick()).toMatchObject({
+      outcome: 'work',
+      remainingTargets: 1,
+    });
+    expect(await t.read()).toEqual({
+      generation: 4,
+      cursor: 'concurrent-cursor',
+      targets: [work],
+    });
+  });
+  it('keeps a concurrent full32-reference backlog intact without changing accepted delivery progress', async () => {
+    const t = referenceProtocol();
+    await t.write([work]);
+    const full = Array.from({ length: 32 }, (_, n) => ({
+      kind: 'reconciliation',
+      ticketId: 'other-' + n,
+    }));
+    vi.mocked(t.runtime.processWork).mockImplementation(async () => {
+      await t.write(full, 4);
+      return {
+        outcome: 'pending',
+        stage: 'delivery',
+        checkpoint: 'acknowledged',
+      };
+    });
+    expect(await t.tick()).toMatchObject({
+      outcome: 'work',
+      result: { checkpoint: 'acknowledged' },
+      remainingTargets: 32,
+    });
+    expect(await t.read()).toEqual({
+      generation: 4,
+      cursor: 'learning-cursor',
+      targets: full,
+    });
+  });
+});
 
 describe('automatic learning over real Source, Work, KB and usage', () => {
   it('discovers existing verified-evidence Work, runs one model stage, then a separate private draft stage', async () => {
