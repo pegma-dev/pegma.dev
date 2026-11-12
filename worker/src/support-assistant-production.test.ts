@@ -11,6 +11,7 @@ import {
 import { createSupportAnsweringIngress } from './support-assistant-ingress';
 import { productionAnsweringFixture } from './support-assistant-production-fixtures';
 import { supportAssistantRoutePolicySha256 } from './support-assistant-config';
+import { supportAssistantCheckpoints } from './support-assistant';
 import { defineCollection, type StoredRecord } from '@pegma/storage-core';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -351,6 +352,14 @@ describe('source-owned normal production answering bundle', () => {
         result.outcome === 'scanned' ? result.turn : result.outcome,
       );
       if (result.outcome === 'deferred') {
+        const held = await f.f.runtime.store
+          .collection(supportAssistantCheckpoints)
+          .get({ partition: 'support-answering', id: 'scan' });
+        expect(held?.notBefore).toBe(result.nextAttemptAt);
+        expect(Date.parse(result.nextAttemptAt)).toBeGreaterThan(
+          Date.parse(f.f.runtime.clock.now()),
+        );
+        expect(transport).toHaveBeenCalledTimes(1);
         f.f.advance(
           Math.max(
             0,
@@ -366,7 +375,7 @@ describe('source-owned normal production answering bundle', () => {
       await f.access(),
       command.command.ticketId,
     );
-    expect(outcomes).toEqual(['finished', 'none', 'none', 'none', 'none']);
+    expect(outcomes).toEqual(['finished', 'deferred', 'none', 'none', 'none']);
     expect(view.ticket.handling).toBe('human-pending');
     expect(
       view.messages.filter((message) => message.authorKind === 'assistant'),
