@@ -1,3 +1,4 @@
+import { createSupportEngineeringRouter, type SupportEngineeringRouterOptions } from './support-engineering-router';
 import type { Logger, PrincipalId } from '@pegma/spine';
 import type { SessionStore } from '@pegma/sessions';
 import type { DurableRateLimiter } from '@pegma/rate-limit';
@@ -139,6 +140,7 @@ interface SupportApiOptions {
   readonly learningEnabled?: () => boolean;
   /** Additive trusted staged-review capability; it never enables learning itself. */
   readonly learningStagedReviewsEnabled?: () => boolean;
+  readonly engineering?: SupportEngineeringRouterOptions;
 }
 
 async function requireAuthentication(
@@ -753,6 +755,15 @@ async function stableBrowserMutation(
 export function createSupportApi(
   options: SupportApiOptions,
 ): (request: Request) => Promise<Response> {
+  const engineeringRouter = createSupportEngineeringRouter(options.engineering);
+  const engineeringReady = (): boolean => {
+    if (options.engineering?.configuration === undefined) return false;
+    try { return options.engineering.enabled?.() === true; } catch { return false; }
+  };
+  const engineeringReviewReady = (): boolean => {
+    if (!engineeringReady()) return false;
+    try { return options.engineering?.configuration?.reviewEnabled?.() === true; } catch { return false; }
+  };
   if (options.learningHandler !== undefined && options.learningRuntime !== undefined)
     throw new TypeError('Choose one trusted Support learning composition');
   const learningHandler = options.learningHandler ?? (
@@ -780,6 +791,8 @@ export function createSupportApi(
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      const engineeringResponse = await engineeringRouter(request);
+      if (engineeringResponse !== null) return engineeringResponse;
       if (LEARNING_NAMESPACE.test(path)) {
         if (!learningReady()) throw new ApiError(404, 'not_found');
         let response: Response | null;
@@ -950,7 +963,7 @@ export function createSupportApi(
         request.method === 'GET'
       ) {
         const ticketId = adminMatch[1]!;
-        if (typeof options.learningEnabled === 'function') {
+        if (typeof options.learningEnabled === 'function' || options.engineering !== undefined) {
           // This optional hint comes from current real stored Support authority,
           // active Identity and the same live session, never browser role fields.
           const browser = supportHumanBrowser(request, {
@@ -967,6 +980,14 @@ export function createSupportApi(
             return json({
               ...staffTicketView(view),
               csrfToken: final.authenticated.csrfToken,
+              ...(options.engineering === undefined ? {} : {
+                engineeringEnabled: engineeringReady() && [supportPermissions.engineeringRead,
+                  supportPermissions.engineeringEvidenceSubmit, supportPermissions.engineeringWithdraw,
+                  supportPermissions.engineeringPolicyRead, supportPermissions.engineeringPolicyManage]
+                  .some((permission) => hasPermission(final.access, permission)),
+                engineeringReviewEnabled: engineeringReviewReady() &&
+                  hasPermission(final.access, supportPermissions.engineeringReview),
+              }),
               learningEnabled: learningReady() && hasPermission(final.access, supportPermissions.learningRead),
               learningReviewRecoveryEnabled: learningReady() &&
                 hasPermission(final.access, supportPermissions.learningReview) &&

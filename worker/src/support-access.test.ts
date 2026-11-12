@@ -37,6 +37,11 @@ const staffPermissions = [
   supportPermissions.learningEvidenceSubmit,
   supportPermissions.learningReview,
   supportPermissions.learningWithdraw,
+  supportPermissions.engineeringRead,
+  supportPermissions.engineeringEvidenceSubmit,
+  supportPermissions.engineeringReview,
+  supportPermissions.engineeringWithdraw,
+  supportPermissions.engineeringPolicyRead,
 ];
 
 function roleStore() {
@@ -111,7 +116,13 @@ describe('Support human-control grants', () => {
         staff?.permissions
           .filter((permission) => permission.startsWith('support.'))
           .sort(),
-      ).toEqual([...customerPermissions, ...staffPermissions].sort());
+      ).toEqual([
+        ...customerPermissions,
+        ...staffPermissions,
+        ...(roles.some((role) => role === ADMIN_ROLE)
+          ? [supportPermissions.engineeringPolicyManage]
+          : []),
+      ].sort());
       expect(staff?.permissions).not.toContain(supportPermissions.learningProcess);
 
       const current = await store.getRoleAssignment(

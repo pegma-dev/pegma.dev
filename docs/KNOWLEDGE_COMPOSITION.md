@@ -8,7 +8,7 @@ the existing deployment workflow, which deploys the Worker before the Pages
 site. Confirm that run and the metadata readback below before client tests.
 Native-client acceptance and broader rollout remain pending. The host uses
 exact published `@pegma/agent-access@0.1.1` and all four
-`@pegma/knowledge-base-*` packages at `0.1.5`, over its existing Identity,
+`@pegma/knowledge-base-*` packages at `0.1.6`, over its existing Identity,
 Sessions, stored roles and D1 Store. The public catalog at `/api/mcp` remains
 separate from protected article authoring.
 
@@ -21,23 +21,24 @@ at signed source
 passed independent exact-byte, signature/provenance and registry-consumer
 verification. Existing Identity and Support Desk keep their
 `@pegma/rate-limit@0.2.0` dependency. The current host selects all five Support
-Desk packages at `0.2.5`, including the optional AI coordinator. The separate
+Desk packages at `0.2.7`, including the optional AI coordinator. The separate
 synthetic stage remains default-disabled. The
-[verified Support Desk `0.2.5` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5)
-pins its optional AI dependency on KB application/contracts `0.1.5`.
+[verified Support Desk `0.2.7` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7)
+pins its optional AI dependency on KB application/contracts `0.1.6`.
 
 The learning port forwards actual KB errors without the obsolete `0.1.2`
 constructor alias or class-translation shim. The earlier `0.2.1` / nested `0.1.2`
 assembly and its failed isolated production-layout diagnostic remain historical;
 they neither establish nor replace current-graph qualification.
 
-All four exact KB `0.1.5` packages are installed in the manifest and lockfile.
-The answering read-batching release retains the shared report factory and
-governed authoring-context/report-query APIs. Its producer verification covers
+All four exact KB `0.1.6` packages are installed in the manifest and lockfile.
+The release adds bounded native-client MCP request-metadata compatibility and
+retains the shared report factory and governed authoring-context/report-query
+APIs. Its producer verification covers
 original registry bytes, signatures/source provenance and public-consumer
 checks at signed source
-[`6dae20df8dace50ad961d9c5fe8d28c90bf4918f`](https://github.com/pegma-dev/knowledge-base/commit/6dae20df8dace50ad961d9c5fe8d28c90bf4918f).
-[Verified KB `0.1.5` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.5).
+[`b2946e149078e0ef460f970c2271c196ea9fc759`](https://github.com/pegma-dev/knowledge-base/commit/b2946e149078e0ef460f970c2271c196ea9fc759).
+[Verified KB `0.1.6` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.6).
 
 The historical
 [verified `0.1.4` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.4)
@@ -59,7 +60,7 @@ model. It adds no public ingress or sixth cron to the existing human/KB
 handlers. Actual stage broker and CPU proof remain pending, together with the
 existing production, customer and provider acceptance gates.
 
-The current manifest and lockfile pin released KB `0.1.5`,
+The current manifest and lockfile pin released KB `0.1.6`,
 `@pegma/storage-cloudflare-d1@0.4.7` and genuine `@pegma/storage-core@0.4.0`.
 The D1 adapter itself retains that exact Core `0.4.0` dependency; no source alias,
 local archive, override or forced Core deduplication supplies the canonical
@@ -89,6 +90,9 @@ source-alias runs remain historical diagnostics.
 PG-01's full review, CI and automatic deployment passed at that earlier checkpoint.
 
 ### Public 0.2.5 adoption checkpoint
+
+Release evidence for this historical checkpoint is the
+[verified Support Desk `0.2.5` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.5).
 
 On 2026-11-11, the normal public Support `0.2.5` / D1 `0.4.7` graph passed local
 Node `22.18.0` checks, all 1,125 tests, the static build and the main-Worker
@@ -216,9 +220,11 @@ The [host policy](../worker/src/support-access.ts) keeps authority explicit:
 - `Support` retains its original six Support Desk permissions (queue read,
   staff reply, notes, assignment, management and Audit read) and adds explicit
   human takeover plus explicit learning read, evidence submission, review and
-  withdrawal under policy `pegma.dev-policy-5`.
-  Learning processing is not granted. Existing assignments are not migrated
-  or silently granted KB powers.
+  withdrawal introduced by policy `pegma.dev-policy-5`. Current policy
+  `pegma.dev-policy-6` retains them and adds human engineering read, evidence
+  submission, review, withdrawal and repository-policy read. Learning processing
+  is not granted. Existing assignments are not migrated or silently granted KB
+  powers.
 - `Knowledge` is a separately assigned role for collection reads, draft and
   evidence work, human report review, publication and withdrawal. Admin-only
   collection/governance mutation controls remain separate.
@@ -399,10 +405,13 @@ two isolated rate invocations followed by one ready-hint invocation:
   remain a latency aid, with atomic SDK jobs and physical recovery preserved.
 
 The original four other expressions remain in place. The cleanup rotation
-retains its original 15 lanes and adds one separately gated learning-review
-discovery lane, for 16 exclusive lanes. That lane emits queue hints only; a
-review phase runs in a later Queue invocation. The default root supplies no
-trusted learning bundle and keeps the review flag off. Minutes 58 and 59 have no `RATE_LIMIT_CRON` invocation. Before
+retains its original 15 lanes, the separately gated learning-review discovery
+lane and two engineering limiter lanes, for 18 exclusive lanes. Each lane runs
+once per 18 eligible ticks, a nominal 18-19 minutes because minute 59 is
+omitted. The learning lane emits queue hints only; a review phase runs in a
+later Queue invocation. The default root supplies no trusted learning bundle
+and keeps the review flag off. Minutes 58 and 59 have no `RATE_LIMIT_CRON`
+invocation. Before
 merging, inventory every Worker's current cron triggers in the deployment
 account: pushes to `main` deploy these schedules regardless of the Knowledge
 flag. Deployment replaces this Worker's existing expressions with these
@@ -472,7 +481,7 @@ completions cannot overwrite a newer generation. Already committed projection
 writes are not rolled back after acknowledgement uncertainty.
 
 The existing Knowledge turn in the
-[16-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
+[18-lane cleanup schedule](../worker/src/maintenance-schedule.ts) independently
 calls `repairRetrievalPage` with `limit:1` and `maxBatches:1`. Complete physical
 cycles and the SDK's existing atomic article-change jobs remain the recovery
 path for a lost hint, collection/policy changes and unfinished work. The ready

@@ -170,8 +170,12 @@ export function boundedString(
 
 export async function readJson(
   request: Request,
-  options?: { timeoutMs: number },
+  options?: { timeoutMs?: number; maxBytes?: number },
 ): Promise<unknown> {
+  const maxBytes = options?.maxBytes ?? JSON_LIMIT;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > 128 * 1024) {
+    throw new RangeError('Invalid JSON body limit');
+  }
   const contentType = request.headers.get('Content-Type')?.split(';', 1)[0];
   if (contentType?.trim().toLowerCase() !== 'application/json') {
     throw new ApiError(415, 'json_required');
@@ -179,7 +183,7 @@ export async function readJson(
   const declaredLength = request.headers.get('Content-Length');
   if (
     declaredLength !== null &&
-    (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > JSON_LIMIT)
+    (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > maxBytes)
   ) {
     throw new ApiError(413, 'request_too_large');
   }
@@ -246,7 +250,7 @@ export async function readJson(
         break;
       }
       length += chunk.value.byteLength;
-      if (length > JSON_LIMIT) {
+      if (length > maxBytes) {
         if (deadline === undefined) await reader.cancel();
         throw new ApiError(413, 'request_too_large');
       }

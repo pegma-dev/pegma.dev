@@ -137,6 +137,44 @@ import Base from '../../../layouts/Base.astro';
 
   <section id="staff-learning-panel" class="account-panel" hidden></section>
 
+  <section id="staff-engineering-panel" class="account-panel" hidden></section>
+  <section id="staff-engineering-recovery" class="account-panel" hidden>
+    <h2>Retained engineering commands</h2>
+    <p id="staff-engineering-recovery-status" role="status" aria-live="polite"></p>
+    <div id="staff-engineering-recovery-owners" class="support-message-body"></div>
+    <button id="staff-engineering-check-access" type="button">Check original account access</button>
+    <a href="/account" target="_blank" rel="noopener noreferrer">Sign in in another tab</a>
+  </section>
+  <script is:inline src="/staff-support-engineering.js"></script>
   <script is:inline src="/staff-support-learning.js"></script>
   <script is:inline type="module" src="/staff-support-ticket.js"></script>
 </Base>
+
+<style is:global>
+  #staff-engineering-panel label {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  #staff-engineering-panel input:not([type='checkbox']),
+  #staff-engineering-panel select,
+  #staff-engineering-panel textarea {
+    display: block;
+    box-sizing: border-box;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  #staff-engineering-panel pre {
+    max-width: 100%;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  #staff-engineering-recovery-owners button {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+</style>

@@ -3,7 +3,7 @@ import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import { createSessionStore } from '@pegma/sessions';
 import { createDurableLimiter } from '@pegma/rate-limit-paged';
 import { systemClock, type Logger } from '@pegma/spine';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   runIdentityMaintenance,
   type IdentityMaintenanceRuntime,
@@ -22,12 +22,20 @@ import {
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import {
   cleanupLaneAt,
+  CLEANUP_LANE_COUNT,
+  CLEANUP_CRON,
   rateKnowledgeLaneAt,
   RATE_LIMIT_CRON,
 } from './maintenance-schedule';
 import worker from './index';
 
 const logger: Logger = { log: vi.fn() };
+let engineeringCleanupBudget: { limiterIndex: number; physicalCalls: number;
+  expiredWindowsSwept: number; otherPurposeWindowsRetained: number } | undefined;
+afterEach(({ task }) => {
+  if (engineeringCleanupBudget !== undefined)
+    Object.assign(task.meta, { engineeringLimiterCleanupD1Budget: engineeringCleanupBudget });
+});
 /** Semantically matches worker/migrations/0001_pegma_storage.sql. */
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS RECORDS (
@@ -67,6 +75,7 @@ beforeAll(async () => {
   }
 });
 beforeEach(async () => {
+  engineeringCleanupBudget = undefined;
   vi.clearAllMocks();
   await env.IDENTITY_DB.prepare('DELETE FROM RECORDS').run();
   await env.IDENTITY_DB.prepare('DELETE FROM PEGMA_STORAGE_D1_TX_GUARD').run();
@@ -184,6 +193,48 @@ function fixture() {
 }
 
 describe('maintenance cursor writes over D1', () => {
+  it.each([4, 5])('runs only engineering limiter %s through the real scheduled root within the physical D1 budget', async (limiterIndex) => {
+    const setup = createProductionSupportMaintenanceRuntime(env);
+    const expired = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    for (const index of [4, 5]) {
+      for (let subject = 0; subject < 24; subject += 1)
+        expect((await setup.limiters[index]!.allow('engineering-cleanup-staff-' + subject, expired)).allowed).toBe(true);
+    }
+    const count = () => env.IDENTITY_DB.prepare('SELECT COUNT(*) AS count FROM RECORDS WHERE deleted = 0').first<number>('count');
+    expect(await count()).toBe(48);
+    const metered = limitedD1(env.IDENTITY_DB);
+    const pending: Promise<unknown>[] = [];
+    const secretRead = vi.fn(() => { throw new Error('Support rate cleanup must not initialize Identity.'); });
+    const environment: Parameters<typeof worker.scheduled>[1] = {
+      ...env, IDENTITY_DB: metered.database, DATADOG_API_KEY: undefined,
+      PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED: 'false',
+      get IDENTITY_EMAIL_CODE_SECRET_BASE64(): string { return secretRead(); },
+    };
+    // Match the generated deployment literal while explicitly testing an
+    // isolated disabled cleanup invocation, as the parent root fixtures do.
+    Object.defineProperty(environment, 'PEGMA_KNOWLEDGE_ENABLED', {
+      value: 'false', writable: true, enumerable: true, configurable: true,
+    });
+    const start = Math.floor(Date.now() / 60_000) * 60_000;
+    const scheduledTime = Array.from({ length: 120 }, (_, offset) => start + offset * 60_000).find((time) => {
+      const lane = cleanupLaneAt(time);
+      return new Date(time).getUTCMinutes() <= 58 && lane.kind === 'support' &&
+        lane.task === 'rate_limits' && lane.limiterIndex === limiterIndex;
+    });
+    if (scheduledTime === undefined) throw new Error('Expected the bounded exclusive engineering cleanup lane');
+    worker.scheduled({ cron: CLEANUP_CRON, scheduledTime, noRetry() {} }, environment,
+      { waitUntil: (promise: Promise<unknown>) => { pending.push(promise); },
+        passThroughOnException() {}, props: {}, exports: {} } as ExecutionContext);
+    await Promise.all(pending);
+    expect(pending).toHaveLength(1); expect(secretRead).not.toHaveBeenCalled();
+    expect(metered.calls()).toBeGreaterThan(0); expect(metered.calls()).toBeLessThanOrEqual(50);
+    // One complete purpose was swept; the other 24 genuine expired windows
+    // remain for their own physical invocation rather than sharing its budget.
+    expect(await count()).toBe(24);
+    engineeringCleanupBudget = { limiterIndex, physicalCalls: metered.calls(),
+      expiredWindowsSwept: 24, otherPurposeWindowsRetained: 24 };
+  });
+
   it('runs two actual isolated scheduled pages within 50 D1 calls each and persists their continuation', async () => {
     const { store } = fixture();
     const start = new Date(Date.now() - 180_000).toISOString();
@@ -380,7 +431,7 @@ describe('maintenance cursor writes over D1', () => {
     expect(
       createProductionSupportMaintenanceRuntime(env).limiters,
     ).toHaveLength(supportLimiters.length);
-    const lanes = Array.from({ length: 16 }, (_, index) =>
+    const lanes = Array.from({ length: CLEANUP_LANE_COUNT }, (_, index) =>
       cleanupLaneAt(Date.parse('2026-10-15T12:01:00Z') + index * 60_000),
     );
     for (const [kind, limiters] of [

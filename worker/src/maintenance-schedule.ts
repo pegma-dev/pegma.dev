@@ -5,7 +5,7 @@ import type { SupportMaintenanceTask } from './support-maintenance';
 export const MAIL_CRON = '* * * * *';
 // Skip minute zero so every trigger has a distinct schedule.
 export const MAIL_RECONCILE_CRON = '1-59 * * * *';
-// Cleanup skips minute 59 and rotates through 16 exclusive small lanes.
+// Cleanup skips minute 59 and rotates through 18 exclusive small lanes.
 export const CLEANUP_CRON = '0-58 * * * *';
 // Two ticks clean rate windows, then one advances a ready KB hint.
 export const RATE_LIMIT_CRON = '0-57 * * * *';
@@ -39,7 +39,7 @@ const CLEANUP_LANES: readonly CleanupLane[] = [
   })),
   { kind: 'support', task: 'queue_repair' },
   { kind: 'support', task: 'queue_inactive_sweep' },
-  ...[0, 1, 2, 3].map((limiterIndex) => ({
+  ...[0, 1, 2, 3, 4, 5].map((limiterIndex) => ({
     kind: 'support' as const,
     task: 'rate_limits' as const,
     limiterIndex,
@@ -48,12 +48,15 @@ const CLEANUP_LANES: readonly CleanupLane[] = [
   { kind: 'learning_reviews' },
 ];
 
+/** Shared with optional compositions that alternate an exclusive cleanup lane. */
+export const CLEANUP_LANE_COUNT = CLEANUP_LANES.length;
+
 /** Deterministic across cold starts, delayed delivery, and UTC hour boundaries. */
 export function cleanupLaneAt(scheduledTime: number): CleanupLane {
   const minute = Math.floor(scheduledTime / 60_000);
   // Count only eligible minutes so skipping minute 59 never skips a lane.
   const tick = minute - Math.floor((minute + 1) / 60);
-  const length = CLEANUP_LANES.length;
+  const length = CLEANUP_LANE_COUNT;
   return CLEANUP_LANES[((tick % length) + length) % length]!;
 }
 

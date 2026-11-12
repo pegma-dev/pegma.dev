@@ -31,6 +31,11 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
   supportPermissions.learningEvidenceSubmit,
   supportPermissions.learningReview,
   supportPermissions.learningWithdraw,
+  supportPermissions.engineeringRead,
+  supportPermissions.engineeringEvidenceSubmit,
+  supportPermissions.engineeringReview,
+  supportPermissions.engineeringWithdraw,
+  supportPermissions.engineeringPolicyRead,
 ] as const);
 
 /** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */
@@ -108,10 +113,11 @@ export const APPLICATION_SCOPE = Object.freeze({
  * administrator-only agent linking without replacing any stored assignment.
  * Version 4 adds owned human requests and explicit Support takeover.
  * Version 5 adds human learning review; processing and KB grants stay separate.
+ * Version 6 adds human engineering intake and explicit repository policy grants.
  */
 export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
   schemaVersion: 1,
-  version: 'pegma.dev-policy-5',
+  version: 'pegma.dev-policy-6',
   defaults: [...SUPPORT_CUSTOMER_PERMISSIONS, knowledgePermissions.articleRead],
   roles: Object.freeze({
     [SUPPORT_ROLE]: [...SUPPORT_STAFF_PERMISSIONS],
@@ -120,6 +126,8 @@ export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
       ...ADMIN_PERMISSIONS,
       AGENT_LINK_PERMISSION,
       ...KNOWLEDGE_ADMIN_PERMISSIONS,
+      supportPermissions.engineeringPolicyRead,
+      supportPermissions.engineeringPolicyManage,
     ],
   }),
 });

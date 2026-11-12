@@ -20,6 +20,17 @@ const handoffPanel = select('#staff-handoff');
 const handoffStatus = select('#staff-handoff-status');
 const handoffList = select('#staff-handoff-list');
 const learningRoot = select('#staff-learning-panel');
+const engineeringRoot = select('#staff-engineering-panel');
+const engineeringRecovery = select('#staff-engineering-recovery');
+const engineeringOwnerList = select('#staff-engineering-recovery-owners');
+const engineeringRecoveryStatus = select('#staff-engineering-recovery-status');
+let engineering = null;
+let engineeringRequests = 0;
+let engineeringBusy = false;
+let engineeringOwners = Object.freeze([]);
+let engineeringOwnershipInvalid = false;
+let engineeringPolicyRecovery = null;
+let engineeringAccountRecovery = false;
 const ticketId = new URL(window.location.href).searchParams.get('id') ?? '';
 let learning = null;
 let learningRequests = 0;
@@ -52,7 +63,8 @@ function onThisTicket() {
   return new URL(window.location.href).searchParams.get('id') === ticketId;
 }
 function isCurrent(generation) {
-  return generation === readGeneration && onThisTicket() && !suspended;
+  return generation === readGeneration && !suspended &&
+    (onThisTicket() || engineeringPolicyRecovery !== null || engineeringAccountRecovery);
 }
 function guard(generation) {
   if (!isCurrent(generation))
@@ -67,6 +79,10 @@ function beginOperation() {
   // ordinary mutation or current-ticket reload can await anything.
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
+  engineeringPolicyRecovery = null;
+  engineering?.suspend();
+  if (engineeringRoot !== null) engineeringRoot.hidden = true;
+  renderEngineeringRecovery();
   suspended = false;
   const operation = { generation: ++readGeneration };
   cancelRequests();
@@ -88,6 +104,10 @@ function clearHandoff() {
 function hideAll() {
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
+  engineeringPolicyRecovery = null;
+  engineering?.suspend();
+  if (engineeringRoot !== null) engineeringRoot.hidden = true;
+  renderEngineeringRecovery();
   currentView = null;
   signedOut.hidden = true;
   forbidden.hidden = true;
@@ -136,15 +156,15 @@ function selectedComposeMode() {
 function updateControls() {
   composeForm.noValidate = ordinaryPacket !== null && ordinaryPacket.kind !== 'patch';
   for (const link of signInLinks) {
-    link.node.target = ordinaryPacket === null && !learningPending() ? link.target : '_blank';
-    link.node.rel = ordinaryPacket === null && !learningPending() ? link.rel : 'noopener noreferrer';
+    link.node.target = ordinaryPacket === null && !learningPending() && !engineeringPending() ? link.target : '_blank';
+    link.node.rel = ordinaryPacket === null && !learningPending() && !engineeringPending() ? link.rel : 'noopener noreferrer';
   }
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
   const state = ticket === undefined ? '' : effectiveHandling(ticket).state;
   const seconds = retrySeconds();
   const blocked =
-    learningOccupied() ||
+    extensionOccupied() ||
     busy !== null ||
     viewer === null ||
     authorityReloadRequired ||
@@ -316,7 +336,9 @@ function validateView(view) {
     view.csrfToken !== viewer?.csrfToken
   )
     throw Object.assign(new Error('invalid_response'), { status: 502 });
-  if ((view.learningReviewRecoveryEnabled !== undefined && typeof view.learningReviewRecoveryEnabled !== 'boolean') ||
+  if ((view.engineeringEnabled !== undefined && typeof view.engineeringEnabled !== 'boolean') ||
+    (view.engineeringReviewEnabled !== undefined && typeof view.engineeringReviewEnabled !== 'boolean') ||
+    (view.learningReviewRecoveryEnabled !== undefined && typeof view.learningReviewRecoveryEnabled !== 'boolean') ||
     (view.learningEnabled !== undefined && typeof view.learningEnabled !== 'boolean') ||
     (view.learningStagedReviewEnabled !== undefined && typeof view.learningStagedReviewEnabled !== 'boolean'))
     throw Object.assign(new Error('invalid_response'), { status: 502 });
@@ -415,7 +437,7 @@ function failure(error, action, generation) {
   } else
     showStatus(
       error.status === 401
-        ? ordinaryPacket !== null || learningPending()
+        ? ordinaryPacket !== null || learningPending() || engineeringPending()
           ? 'Sign in to the original account in another tab, then return here and reload this ticket. The action already sent may have completed.'
           : 'Sign in, then reload this ticket. Any request already sent may have completed.'
         : error.status === 403
@@ -535,7 +557,7 @@ async function loadTicket() {
     // Private handoff availability does not lock a fully refreshed ticket view.
     finishOperation(operation);
     // Admission opens only after the ACK (if any) and this complete current GET.
-    syncLearning(view);
+    void syncExtensions(view);
     await loadHandoff();
     return {
       generation,
@@ -609,7 +631,7 @@ async function sendOrdinaryPacket(packet, label) {
 }
 async function patchTicket(action, extra = {}) {
   if (
-    learningOccupied() ||
+    extensionOccupied() ||
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
@@ -641,7 +663,7 @@ async function patchTicket(action, extra = {}) {
 }
 takeoverButton.addEventListener('click', async () => {
   if (
-    learningOccupied() ||
+    extensionOccupied() ||
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
@@ -724,7 +746,7 @@ composeForm.addEventListener('submit', async (event) => {
   const mode = selectedComposeMode();
   const body = composeBody.value.trim();
   if (
-    learningOccupied() ||
+    extensionOccupied() ||
     busy !== null ||
     retrySeconds() > 0 ||
     suspended ||
@@ -766,9 +788,9 @@ composeForm.addEventListener('submit', async (event) => {
   );
 });
 select('#staff-ticket-reload').addEventListener('click', () => {
-  if (!onThisTicket() && learningPending()) {
+  if (!onThisTicket() && (learningPending() || engineeringPending())) {
     invalidate();
-    showStatus('Return to the original ticket address before reloading. An earlier learning action may have completed.', true);
+    showStatus('Return to the original ticket address before reloading. An earlier retained action may have completed.', true);
   } else if (!onThisTicket()) window.location.reload();
   else void loadTicket();
 });
@@ -782,7 +804,7 @@ function learningOccupied() {
   return learningRequests > 0 || learningPending();
 }
 function requireLearningAdmission(reviewRecovery = false) {
-  if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null ||
+  if (engineeringOccupied() || busy !== null || ordinaryPacket !== null || takeoverPacket !== null ||
     ordinaryAcknowledged || suspended || authorityReloadRequired ||
     viewer === null || currentView === null ||
     (currentView.learningEnabled !== true && !(reviewRecovery && learning?.hasPendingReview?.() === true &&
@@ -803,14 +825,14 @@ async function learningRequest(run, reviewRecovery = false) {
 }
 function syncLearning(view) {
   if (learning === null || learningRoot === null) return;
-  if (busy !== null || (view.learningEnabled !== true && !(learning.hasPendingReview?.() === true &&
+  if (engineeringOccupied() || busy !== null || (view.learningEnabled !== true && !(learning.hasPendingReview?.() === true &&
     view.learningReviewRecoveryEnabled === true)) || ordinaryPacket !== null || takeoverPacket !== null) {
     learning.suspend();
     learningRoot.hidden = true;
     return;
   }
   learningRoot.hidden = false;
-  void learning.showTicket({ ticketId: view.ticket.id, revision: view.ticket.revision,
+  return learning.showTicket({ ticketId: view.ticket.id, revision: view.ticket.revision,
     actorSubject: viewer.subject, status: view.ticket.status, resolvedAt: view.ticket.resolvedAt },
     { recoveryOnly: view.learningEnabled !== true });
 }
@@ -846,8 +868,119 @@ if (learningRoot !== null && typeof globalThis.PegmaSupportLearning?.createPanel
     },
   });
 }
+function engineeringPending() {
+  return engineeringOwnershipInvalid || engineeringOwners.length > 0;
+}
+function engineeringOccupied() {
+  return engineeringPending() || engineeringBusy || engineeringRequests > 0;
+}
+function extensionOccupied() { return learningOccupied() || engineeringOccupied(); }
+function renderEngineeringRecovery() {
+  if (!engineeringRecovery || !engineeringOwnerList || !engineeringRecoveryStatus) return;
+  engineeringRecovery.hidden = !engineeringPending();
+  engineeringOwnerList.replaceChildren();
+  engineeringRecoveryStatus.textContent = engineeringOwnershipInvalid
+    ? 'Retained owner metadata could not be confirmed. Keep this tab open.'
+    : 'Keep this tab open. Restore the original account, then choose its retained owner. Reads never settle unknown commands.';
+  for (const owner of engineeringOwners) {
+    // No different account sees an owner's ticket, body, or recovery controls.
+    if (viewer?.subject !== owner.actorSubject) continue;
+    const button = document.createElement('button'); button.type = 'button';
+    button.textContent = owner.domain === 'policy' ? 'Recover repository policy command'
+      : 'Recover engineering command for ' + owner.ticketId;
+    button.disabled = busy !== null || engineeringBusy || engineeringRequests > 0 || learningOccupied();
+    button.addEventListener('click', () => { void recoverEngineeringOwner(owner); });
+    engineeringOwnerList.append(button);
+  }
+}
+function requireEngineeringAdmission() {
+  const policyMode = engineeringPolicyRecovery !== null;
+  if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || ordinaryAcknowledged ||
+    learningOccupied() || suspended || authorityReloadRequired || viewer === null ||
+    (!policyMode && (currentView?.engineeringEnabled !== true || !onThisTicket())) ||
+    (policyMode && viewer.subject !== engineeringPolicyRecovery.actorSubject))
+    throw Object.assign(new Error('engineering_suspended'), { stale: true });
+}
+async function engineeringRequest(run) {
+  requireEngineeringAdmission(); const generation = readGeneration;
+  ++engineeringRequests; updateControls();
+  try { const value = await run(); guard(generation); requireEngineeringAdmission(); return value; }
+  finally { --engineeringRequests; updateControls(); renderEngineeringRecovery(); }
+}
+async function syncExtensions(view) {
+  const generation = readGeneration;
+  await syncLearning(view);
+  if (!isCurrent(generation) || currentView !== view || engineering === null) return;
+  if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || learningOccupied() || view.engineeringEnabled !== true) {
+    engineering.suspend(); engineeringRoot.hidden = true; renderEngineeringRecovery(); return;
+  }
+  engineeringPolicyRecovery = null; engineeringRoot.hidden = false;
+  await engineering.showTicket({ ticketId: view.ticket.id, revision: view.ticket.revision, actorSubject: viewer.subject });
+  renderEngineeringRecovery();
+}
+async function readEngineeringRecoveryAccount() {
+  if (engineeringAccountRecovery || !engineeringPending() || busy !== null || ordinaryPacket !== null || takeoverPacket !== null || learningOccupied()) return;
+  const generation = ++readGeneration; suspended = false; cancelRequests(); hideAll();
+  viewer = null; csrfToken = ''; engineeringAccountRecovery = true; ++engineeringRequests; renderEngineeringRecovery(); updateControls();
+  try { await readViewer(generation, null); authorityReloadRequired = false; }
+  catch { if (generation === readGeneration) { viewer = null; csrfToken = ''; engineering?.suspend(); } }
+  finally { engineeringAccountRecovery = false; --engineeringRequests; }
+  renderEngineeringRecovery(); updateControls();
+}
+async function recoverEngineeringOwner(owner) {
+  if (!engineeringOwners.includes(owner) || viewer?.subject !== owner.actorSubject || learningOccupied() ||
+    ordinaryPacket !== null || takeoverPacket !== null || busy !== null) return;
+  if (owner.domain === 'policy') {
+    // Global owner recovery needs no old ticket, source, selection or cached
+    // permission. The actual policy GET checks the strict bundle/flag and the
+    // current Admin+Support roles before any editor or mutation is admitted.
+    ++readGeneration; cancelRequests(); suspended = false;
+    engineeringPolicyRecovery = owner; engineeringRoot.hidden = false;
+    await engineering.showPolicy({ actorSubject: owner.actorSubject });
+  } else {
+    if (owner.ticketId !== ticketId || !onThisTicket()) {
+      engineeringRecoveryStatus.textContent = 'Return to the original ticket address in this same tab before recovery.';
+      return;
+    }
+    await loadTicket();
+  }
+  renderEngineeringRecovery();
+}
+if (engineeringRoot !== null && typeof globalThis.PegmaSupportEngineering?.createPanel === 'function') {
+  engineering = globalThis.PegmaSupportEngineering.createPanel({
+    root: engineeringRoot,
+    isEnabled: () => engineeringPolicyRecovery !== null || currentView?.engineeringEnabled === true,
+    isReviewEnabled: () => currentView?.engineeringReviewEnabled === true,
+    canRequest: () => busy === null && ordinaryPacket === null && takeoverPacket === null &&
+      !ordinaryAcknowledged && !learningOccupied() && !suspended && !authorityReloadRequired,
+    request: (path, init) => engineeringRequest(() => api(path, init)),
+    readSession: () => engineeringRequest(() => readViewer(readGeneration)),
+    readCurrentTicket: (id) => engineeringRequest(async () => {
+      if (id !== ticketId || !onThisTicket()) throw Object.assign(new Error('stale_view'), { stale: true });
+      const generation = readGeneration; const original = await readViewer(generation);
+      const value = await api('/api/support/admin/tickets/' + encodeURIComponent(id));
+      guard(generation); validateView(value); await readViewer(generation, original); return value;
+    }),
+    onPendingChange: (owners) => {
+      if (!Array.isArray(owners) || owners.some((owner) => !owner ||
+        !['ticket', 'policy'].includes(owner.domain) || typeof owner.actorSubject !== 'string' ||
+        typeof owner.acknowledged !== 'boolean' || (owner.domain === 'ticket' && typeof owner.ticketId !== 'string'))) {
+        engineeringOwnershipInvalid = true;
+      } else { engineeringOwners = Object.freeze([...owners]); engineeringOwnershipInvalid = false; }
+      updateControls(); renderEngineeringRecovery();
+    },
+    onBusyChange: (value) => { engineeringBusy = value === true; updateControls(); renderEngineeringRecovery(); },
+    onAccessLost: ({ status }) => {
+      ++readGeneration; cancelRequests(); busy = null; viewer = null; csrfToken = '';
+      authorityReloadRequired = true; hideAll(); signedOut.hidden = status !== 401; forbidden.hidden = status !== 403;
+      showStatus('Current engineering access could not be confirmed. Keep this tab open and sign in to the original account in another tab.', true);
+      renderEngineeringRecovery(); updateControls();
+    },
+  });
+  select('#staff-engineering-check-access')?.addEventListener('click', () => { void readEngineeringRecoveryAccount(); });
+}
 window.addEventListener('beforeunload', (event) => {
-  if (!learningPending()) return;
+  if (!learningPending() && !engineeringPending() && ordinaryPacket === null && takeoverPacket === null) return;
   event.preventDefault();
   event.returnValue = '';
 });

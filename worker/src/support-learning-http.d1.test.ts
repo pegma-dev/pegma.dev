@@ -16,6 +16,7 @@ import { createIdentityRuntime } from './identity-runtime';
 import { APPLICATION_SCOPE, KNOWLEDGE_ROLE, SUPPORT_ROLE } from './support-access';
 import { createSupportApi } from './support-api';
 import { createSupportRuntime } from './support-desk';
+import { composeSupportEngineeringHuman, type SupportEngineeringHumanComposition } from './support-engineering-composition';
 import { createWorker } from './index';
 import { createSupportLearningRuntime, type SupportLearningRuntimeOptions } from './support-learning';
 import { createSupportLearningReviewQueue, type SupportLearningReviewQueueMessage } from './support-learning-review-queue';
@@ -211,7 +212,7 @@ function meter(backing: D1Database) {
   };
 }
 
-async function fixture() {
+async function fixture(withEngineering = false) {
   const binding = meter(env.IDENTITY_DB);
   const backing = createCloudflareD1Store({
     database: binding.database, createSchemaIfMissing: false, readBatchSize: 512,
@@ -369,12 +370,21 @@ async function fixture() {
     await hooks.afterLimiter?.();
     return result;
   } };
-  const api = createSupportApi({
+  const api = (engineering?: SupportEngineeringHumanComposition) => createSupportApi({
     ...authority, application: learning.application,
     createLimiter: host.createLimiter, replyLimiter: limiter,
     learningRuntime, learningEnabled: enabled, learningStagedReviewsEnabled: enabled,
+    ...(engineering === undefined ? {} : {
+      engineering: composeSupportEngineeringHuman({ ...host, application: learning.application }, logger, engineering),
+    }),
   });
-  const worker = () => createWorker({ learningReviews: { enabled, create: () => ({ api, queue }) } });
+  const engineeringState = { enabled: true };
+  const engineering = { enabled: () => engineeringState.enabled,
+    configuration: { application: { enabled: true }, repositories: [] } };
+  const worker = () => createWorker({
+    ...(withEngineering ? { engineering } : {}),
+    learningReviews: { enabled, create: (_environment, _logger, engineering) => ({ api: api(engineering), queue }) },
+  });
   const broker: Queue<SupportLearningReviewQueueMessage> = {
     async metrics() { return { backlogCount: messages.length, backlogBytes: 0 }; },
     async send(message) {
@@ -479,7 +489,7 @@ async function fixture() {
     });
   }
   return { learning, principalId, invoke, request, send, deliver, revokeKnowledge, revokeRole,
-    grantRole, destroySession, prepareSdk, runtime, hooks, rewriteTicketVersion };
+    grantRole, destroySession, prepareSdk, runtime, hooks, rewriteTicketVersion, engineeringState };
 
 }
 
@@ -918,4 +928,52 @@ describe('enabled learning HTTP namespace on real Native D1', () => {
       expect(f.learning.state.modelCalls).toBe(2);
     });
   }
+});
+
+
+describe('combined registered staged-learning and human engineering composition', () => {
+  it('emits both current capabilities and preserves both routed SDK paths within each physical budget', async () => {
+    const f = await fixture(true); await f.learning.enrollAndVerify();
+    const delivered = await f.learning.delivered();
+    const ticketPath = '/api/support/admin/tickets/' + learningTicketId;
+    const detailRequest = () => new Request(IDENTITY_ISSUER + ticketPath,
+      { headers: new Headers(f.request('').headers) });
+    const current = await f.send('combined.detail', detailRequest());
+    expect(current.status).toBe(200);
+    expect(await envelope(current)).toMatchObject({ learningEnabled: true,
+      learningStagedReviewEnabled: true, engineeringEnabled: true, engineeringReviewEnabled: false });
+    const inspected = await inspect(f, delivered, 'COMBINED-EXACT-UPPERCASE-REVIEW');
+    expect(inspected.intent).toMatchObject({ ticketId: learningTicketId, reviewerId: f.principalId });
+    const ticket = (await f.learning.application.readStaffTicket(f.learning.actors.staff, learningTicketId)).ticket;
+    const enrollment = JSON.stringify({ commandId: 'COMBINED-EXACT-UPPERCASE-ENROLL', expectedRevision: ticket.revision });
+    const enrollRequest = () => new Request(IDENTITY_ISSUER + ticketPath + '/engineering/enroll',
+      { method: 'POST', headers: new Headers(f.request('', enrollment).headers), body: enrollment });
+    const accepted = await f.send('combined.engineering.enroll', enrollRequest());
+    expect(accepted.status).toBe(200); const acknowledgement = await envelope(accepted);
+    const rows = await f.learning.rows();
+    const replay = await f.send('combined.engineering.replay', enrollRequest());
+    expect(replay.status).toBe(200); expect(await envelope(replay)).toEqual(acknowledgement);
+    expect(await f.learning.rows()).toEqual(rows);
+    f.engineeringState.enabled = false;
+    const learningOnly = await f.send('combined.detail.engineering-off', detailRequest());
+    expect(learningOnly.status).toBe(200);
+    expect(await envelope(learningOnly)).toMatchObject({ learningEnabled: true,
+      learningStagedReviewEnabled: true, engineeringEnabled: false, engineeringReviewEnabled: false });
+    expect(f.learning.state.modelCalls).toBe(1); expect(await f.learning.rows()).toEqual(rows);
+  });
+
+  it('requires current stored Support authority on both surfaces after either factory observed it', async () => {
+    const f = await fixture(true); await f.learning.enrollAndVerify(); await f.learning.delivered();
+    const path = '/api/support/admin/tickets/' + learningTicketId;
+    const current = await f.send('combined.detail.before-revoke', new Request(IDENTITY_ISSUER + path,
+      { headers: new Headers(f.request('').headers) }));
+    expect(current.status).toBe(200); expect(await envelope(current)).toMatchObject({ engineeringEnabled: true });
+    await f.revokeRole(SUPPORT_ROLE); const rows = await f.learning.rows();
+    for (const suffix of ['', '/engineering']) {
+      const denied = await f.send('combined.role-denied' + suffix, new Request(IDENTITY_ISSUER + path + suffix,
+        { headers: new Headers(f.request('').headers) }));
+      expect(denied.status).toBe(403); expect(await envelope(denied)).not.toHaveProperty('result');
+    }
+    expect(await f.learning.rows()).toEqual(rows); expect(f.learning.state.modelCalls).toBe(1);
+  });
 });

@@ -97,7 +97,7 @@ The queue and dead-letter queue are provisioned in the deployment account.
 
 The account boundary is fixed to issuer `https://pegma.dev` and WebAuthn RP ID
 `pegma.dev`. Cloudflare D1 is consumed only through
-`@pegma/storage-cloudflare-d1`; `@pegma/sessions@0.2.0` stores SHA-256-hashed
+`@pegma/storage-cloudflare-d1`; `@pegma/sessions@0.2.1` stores SHA-256-hashed
 opaque session identifiers. The browser receives a cryptographically random
 `__Host-pegma_session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, and
 `Path=/`.
@@ -216,10 +216,10 @@ Idle runs do not import an unused HMAC key; secret validation remains eager. A s
 `0-58 * * * *` trigger runs one cleanup lane per invocation: challenge cleanup,
 email-operation repair, Mail retention, expired Sessions, each of the four
 Identity rate-limit policies, Support queue repair/inactive sweep, and each of
-the four Support/Admin rate-limit policies, Knowledge maintenance and the
-separately gated learning-review discovery lane. The 16 lanes rotate through
+the six Support/Admin/engineering rate-limit policies, Knowledge maintenance and the
+separately gated learning-review discovery lane. The 18 lanes rotate through
 eligible scheduled UTC ticks, including across hour boundaries, so each runs
-every 16 ticks (a nominal 16-17 minutes because minute 59 is omitted). This gives cleanup its own invocation CPU budget instead of
+every 18 ticks (a nominal 18-19 minutes because minute 59 is omitted). This gives cleanup its own invocation CPU budget instead of
 combining every task under the Workers Free 10 ms limit. Authentication and
 rate-limit checks still enforce expiry on access; cleanup only reclaims or
 repairs stored data. Paged Identity and Support cleanup also consumes at most
@@ -247,7 +247,7 @@ public acknowledgement endpoint.
 
 ## Support Desk composition
 
-Authenticated product feedback composes exact `0.2.5` versions of
+Authenticated product feedback composes exact `0.2.7` versions of
 `@pegma/support-desk-contracts`, `@pegma/support-desk-core`,
 `@pegma/support-desk-application`, and `@pegma/support-desk-templates` over
 the same `IDENTITY_DB` D1 binding. Support Desk collections
@@ -258,9 +258,9 @@ via AccessContext defaults (not a paid entitlement). Categories:
 `feedback`, `bug`, `feature_request`, `documentation`, `question`. Subject
 marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/ticket/?id=…`.
 
-The optional `@pegma/support-desk-ai@0.2.5` package is installed for the
+The optional `@pegma/support-desk-ai@0.2.7` package is installed for the
 [isolated scripted answering stage](../docs/SUPPORT_ASSISTANT_STAGE.md). The
-normal public `0.2.5` graph passed the 1,125-test local/CI
+earlier public `0.2.5` graph passed the 1,125-test local/CI
 [adoption checkpoint](../docs/KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint);
 review and deployment acceptance remain pending for the changed source.
 
@@ -366,8 +366,8 @@ the Workers Free 10 ms allowance; they cannot guarantee an absolute CPU ceiling.
 One-record pages trade throughput for headroom: mail scans at most 60 send and 59 reconciliation operation
 records per hour, including retained terminal records. A full scan
 must remain comfortably shorter than the email-code lifetime; inspect scan
-backlogs as usage grows. Cleanup pages advance once per lane every 16 eligible
-ticks (a nominal 16-17 minutes). The published Sessions and rate-limit packages still expose
+backlogs as usage grows. Cleanup pages advance once per lane every 18 eligible
+ticks (a nominal 18-19 minutes). The published Sessions and rate-limit packages still expose
 whole-partition sweeps, so their work grows with partition size. Sustained
 backlogs need indexed discovery and paginated component APIs, or a larger CPU
 allowance. Reducing frequency alone does not raise the per-invocation limit.
