@@ -12,6 +12,13 @@ export const CLEANUP_CRON = '0-58 * * * *';
 // With answering OFF, the dispatcher retains the former minutes0..57 work.
 export const RATE_LIMIT_CRON = '*/1 * * * *';
 
+/** OFF-mode background work retains the former 0..57 minute window. */
+export function rateKnowledgeBackgroundEligibleAt(
+  scheduledTime: number,
+): boolean {
+  return new Date(scheduledTime).getUTCMinutes() < 58;
+}
+
 export type CleanupLane =
   | {
       readonly kind: 'identity';

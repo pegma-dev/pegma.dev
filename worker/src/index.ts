@@ -59,6 +59,7 @@ import {
   MAIL_RECONCILE_CRON,
   CLEANUP_CRON,
   RATE_LIMIT_CRON,
+  rateKnowledgeBackgroundEligibleAt,
   cleanupLaneAt,
   rateKnowledgeLaneAt,
 } from './maintenance-schedule';
@@ -585,7 +586,7 @@ return {
       }
       // Preserve default/OFF throughput and zero Store work on the two newly
       // eligible minutes. No optional qualification or credential is read.
-      if (new Date(controller.scheduledTime).getUTCMinutes() >= 58) return;
+      if (!rateKnowledgeBackgroundEligibleAt(controller.scheduledTime)) return;
       ctx.waitUntil(
         (async () => {
           try {
