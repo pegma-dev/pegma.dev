@@ -960,6 +960,78 @@ describe('actual AA approval authority after delayed browser input', () => {
   );
 });
 
+describe('current browser authority after bounded empty revocation input', () => {
+  it.each(['session', 'role', 'headers'] as const)(
+    'refuses %s changes during an empty DELETE read before the actual active grant mutation',
+    async (kind) => {
+      const f = await fixture();
+      const approval = await f.pendingApproval('device_code');
+      const consent = await f.runtime.api(
+        f.browser('/api/agent-access/approval', 'POST', approval.input),
+      );
+      expect(consent?.status).toBe(200);
+      await approval.issue(await value(consent));
+      const path = '/api/agent-access/grants/' + approval.requestId;
+      expect(await value(await f.runtime.api(f.browser(path)))).toMatchObject({
+        status: 'active',
+      });
+      const reading = barrier();
+      const resume = barrier();
+      let reads = 0;
+      let commits = 0;
+      f.hooks.afterGrantRead = async () => {
+        reads += 1;
+      };
+      f.hooks.afterGrantCommit = async () => {
+        commits += 1;
+      };
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            reading.release();
+            await resume.ready;
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const base = f.browser(path, 'DELETE');
+      const init = {
+        method: 'DELETE',
+        headers: base.headers,
+        body: stream,
+        duplex: 'half',
+      };
+      const request = new Request(base.url, init);
+      const pending = f.runtime.api(request);
+      await Promise.race([
+        reading.ready,
+        pending.then(() => {
+          throw new Error('The actual empty body was not read');
+        }),
+      ]);
+      try {
+        if (kind === 'session') await f.revokeSession();
+        else if (kind === 'role') await f.revokeAdmin();
+        else request.headers.set('Cookie', f.cookie(other));
+      } finally {
+        resume.release();
+      }
+      const result = await pending;
+      expect(result?.status).toBe(kind === 'session' ? 401 : 403);
+      expect(reads).toBe(0);
+      expect(commits).toBe(0);
+      f.hooks.afterGrantRead = undefined;
+      f.hooks.afterGrantCommit = undefined;
+      if (kind === 'session') await f.restoreSession();
+      if (kind === 'role') await f.restoreAdmin();
+      expect(await value(await f.runtime.api(f.browser(path)))).toMatchObject({
+        status: 'active',
+      });
+    },
+  );
+});
+
 describe('staff KB command browser authority around bounded input and real SDK work', () => {
   it('executes a current authorized browser command through the actual KB service', async () => {
     const f = await fixture();

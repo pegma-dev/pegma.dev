@@ -22,6 +22,61 @@ export interface AgentAccessApiOptions extends AgentBrowserOptions {
   readonly limit: (request: Request) => Promise<void>;
 }
 
+/** A transport may represent an empty DELETE as a stream rather than null. */
+async function requireEmptyBody(request: Request): Promise<void> {
+  if (request.body === null) return;
+  const reader = request.body.getReader();
+  const invalid = new ApiError(400, 'invalid_request');
+  const timeout = new ApiError(408, 'request_timeout');
+  const expiresAt = performance.now() + 10_000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  let cancelled = false;
+  const cancel = (reason: unknown): void => {
+    if (cancelled) return;
+    cancelled = true;
+    // A source may never settle cancellation; it cannot hold this route open.
+    try {
+      void reader.cancel(reason).catch(() => {});
+    } catch {
+      /* Best effort. */
+    }
+  };
+  const boundary = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      reject(timeout);
+      cancel(timeout);
+    };
+    timer = setTimeout(onAbort, 10_000);
+    request.signal.addEventListener('abort', onAbort, { once: true });
+    if (request.signal.aborted) onAbort();
+  });
+  // Also observe an already-aborted boundary if header validation fails first.
+  void boundary.catch(() => {});
+  try {
+    const declared = request.headers.get('Content-Length');
+    if (declared !== null && !/^0+$/u.test(declared)) throw invalid;
+    // No payload bytes are buffered. Bound even a source yielding only empty chunks.
+    for (let reads = 0; reads < 16; reads += 1) {
+      if (performance.now() >= expiresAt) throw timeout;
+      const chunk = await Promise.race([reader.read(), boundary]);
+      if (performance.now() >= expiresAt || request.signal.aborted)
+        throw timeout;
+      if (chunk.done) return;
+      if (chunk.value.byteLength !== 0) throw invalid;
+    }
+    throw invalid;
+  } catch (error) {
+    cancel(error);
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort !== undefined)
+      request.signal.removeEventListener('abort', onAbort);
+    reader.releaseLock();
+  }
+}
+
 /** Existing-login consent and owner-only views. Public OAuth routes live in AA. */
 export function createAgentAccessApi(
   options: AgentAccessApiOptions,
@@ -90,16 +145,30 @@ export function createAgentAccessApi(
           scopes: options.configuration.scopes,
         });
       } else if (grant !== null) {
-        if (
-          url.search !== '' ||
-          (request.method === 'DELETE' && request.body !== null)
-        )
-          throw new ApiError(400, 'invalid_request');
+        if (url.search !== '') throw new ApiError(400, 'invalid_request');
         const grantId = boundedString(grant[1], 1, 128);
         if (request.method === 'GET')
           response = json(await options.service.getGrant(context, grantId));
         else {
-          await options.service.revokeGrant(context, grantId);
+          let currentContext = context;
+          if (request.body !== null) {
+            await requireEmptyBody(request);
+            // Empty input still adds an awaited boundary before a protected mutation.
+            sameBrowserHeaders();
+            const current = await requireAgentBrowserContext(
+              request,
+              options,
+              true,
+            );
+            sameBrowserHeaders();
+            if (
+              current.authenticated.rawSessionId !== sessionId ||
+              current.context.access.principalId !== principalId
+            )
+              throw new ApiError(403, 'browser_credential_changed');
+            currentContext = current.context;
+          }
+          await options.service.revokeGrant(currentContext, grantId);
           response = new Response(null, {
             status: 204,
             headers: {
