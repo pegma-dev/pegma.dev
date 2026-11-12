@@ -14,15 +14,16 @@ const NO_STAGES: Record<string, string | null> = Object.fromEntries(
 );
 
 /**
- * Deterministic released-version fixture for recipe/catalog evaluations.
- * The site's manifest/lockfile define its separate installed graph; these
- * recipe pins are not a claim about that graph. Never hits the network.
+ * Deterministic publication data for recipe/catalog evaluations. Current
+ * CI-executed recipe dependencies match their root-resolved imports; other
+ * component releases remain independent fixture data. Never hits the network
+ * or claims that every live catalog package is ready.
  */
 const EVAL_NPM: Record<string, string | null> = {
   '@pegma/spine': '0.1.1',
   '@pegma/storage-core': '0.4.0',
   '@pegma/storage-azure-tables': '0.4.0',
-  '@pegma/storage-cloudflare-d1': '0.4.6',
+  '@pegma/storage-cloudflare-d1': '0.4.7',
   '@pegma/storage-dynamodb': '0.4.5',
   '@pegma/storage-blobs': '0.1.0',
   '@pegma/storage-azure-blob': '0.1.0',
@@ -38,12 +39,12 @@ const EVAL_NPM: Record<string, string | null> = {
   '@pegma/authorization-tokens': '0.4.0',
   '@pegma/authorization-identity': '0.4.0',
   '@pegma/audit': '0.2.0',
-  '@pegma/support-desk-contracts': '0.1.1',
-  '@pegma/support-desk-core': '0.1.1',
-  '@pegma/support-desk-application': '0.1.1',
+  '@pegma/support-desk-contracts': '0.2.7',
+  '@pegma/support-desk-core': '0.2.7',
+  '@pegma/support-desk-application': '0.2.7',
   '@pegma/support-desk-templates': '0.1.1',
   '@pegma/webhooks': '0.1.1',
-  '@pegma/sessions': '0.2.0',
+  '@pegma/sessions': '0.2.1',
   '@pegma/mail': '0.1.1',
   '@pegma/billing-core': '0.1.1',
   '@pegma/billing-stripe': '0.1.1',

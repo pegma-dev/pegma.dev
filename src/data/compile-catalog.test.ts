@@ -1,11 +1,17 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   clearNpmVersionCache,
   compileCompositionCatalog,
 } from './compile-catalog';
-import { CATALOG_SCHEMA_VERSION } from './catalog-schema';
+import {
+  CATALOG_SCHEMA_VERSION,
+  parsePackageSpecifier,
+  recipePackagesReady,
+} from './catalog-schema';
 import { components, SNAPSHOT_DATE } from './components';
 import { RECIPE_BACKLOG } from './recipe-backlog';
+import { getRecipe, planComposition } from './mcp-tools';
 
 const FIXED_AT = '2026-07-29T00:00:00.000Z';
 /** Empty stage map → no GitHub plan fetches in unit tests. */
@@ -31,6 +37,114 @@ function compile(npm: Record<string, string | null>) {
 }
 
 describe('compileCompositionCatalog', () => {
+  it.each([
+    {
+      id: 'cf-passkey-accounts',
+      source: '../../recipes/cf-passkey-accounts/composition.ts',
+      imports: ['@pegma/sessions'],
+      pins: ['@pegma/sessions', '@pegma/storage-cloudflare-d1'],
+    },
+    {
+      id: 'support-queue-slice',
+      source: '../../recipes/bench-ticket/composition.ts',
+      imports: ['@pegma/sessions', '@pegma/support-desk-application'],
+      pins: [
+        '@pegma/sessions',
+        '@pegma/support-desk-application',
+        '@pegma/support-desk-core',
+        '@pegma/support-desk-contracts',
+      ],
+    },
+  ])(
+    'ties the current $id fixture and its catalog pins to the installed root composition',
+    async ({ id, source, imports, pins }) => {
+      const { dependencies } = JSON.parse(
+        readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+      );
+      const fixtureUrl = new URL(source, import.meta.url);
+      const fixture = readFileSync(fixtureUrl, 'utf8');
+      expect(existsSync(new URL('./package.json', fixtureUrl))).toBe(false);
+      for (const name of imports) {
+        expect(fixture).toContain("from '" + name + "'");
+        const installed = JSON.parse(
+          readFileSync(new URL('../package.json', import.meta.resolve(name)), 'utf8'),
+        );
+        expect(installed).toMatchObject({ name, version: dependencies[name] });
+      }
+      const catalog = await compile({});
+      const recipe = getRecipe(catalog, id);
+      expect(recipe?.fixture.status).toBe('green');
+      for (const name of pins) expect(recipe?.packages).toContain(name + '@' + dependencies[name]);
+      if (id === 'cf-passkey-accounts') {
+        // The recipe tests a Store injection with Memory, not the D1 adapter.
+        // Its declared deployment adapter follows the actual host manifest.
+        expect(fixture).toContain('Production Workers should inject');
+        const adapter = JSON.parse(
+          readFileSync(
+            new URL('../package.json', import.meta.resolve('@pegma/storage-cloudflare-d1')),
+            'utf8',
+          ),
+        );
+        expect(adapter).toMatchObject({
+          name: '@pegma/storage-cloudflare-d1',
+          version: dependencies['@pegma/storage-cloudflare-d1'],
+        });
+        expect(readFileSync(new URL('../../README.md', import.meta.url), 'utf8')).toContain(
+          '@pegma/storage-cloudflare-d1@' + dependencies['@pegma/storage-cloudflare-d1'],
+        );
+      }
+    },
+  );
+
+  it.each(['matching', 'older-session', 'unmatched-session'] as const)(
+    'preserves exact publication readiness through compiled MCP plans for %s metadata',
+    async (mode) => {
+      const { dependencies } = JSON.parse(
+        readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+      );
+      // A deterministic publication fixture, not an assertion of npm's live
+      // latest versions. Independent recipe/component releases remain intact.
+      const published = Object.fromEntries(
+        RECIPE_BACKLOG.flatMap((recipe) =>
+          recipe.packages
+            .map(parsePackageSpecifier)
+            .filter((pin) => pin.version)
+            .map((pin) => [pin.name, pin.version]),
+        ),
+      );
+      for (const name of [
+        '@pegma/sessions',
+        '@pegma/storage-cloudflare-d1',
+        '@pegma/support-desk-application',
+        '@pegma/support-desk-contracts',
+        '@pegma/support-desk-core',
+      ])
+        published[name] = dependencies[name];
+      if (mode !== 'matching')
+        published['@pegma/sessions'] = mode === 'older-session' ? '0.2.0' : '9.9.9';
+      const catalog = await compile(published);
+      for (const id of ['cf-passkey-accounts', 'support-queue-slice']) {
+        const recipe = getRecipe(catalog, id);
+        if (!recipe) throw new Error('Expected the actual compiled recipe.');
+        expect(recipePackagesReady(catalog, recipe)).toBe(mode === 'matching');
+        const plan = planComposition(catalog, {
+          capabilityTags: recipe.capabilityTags,
+          host: 'cloudflare',
+          productionOnly: true,
+        });
+        if (mode === 'matching') expect(plan.recipes.map((entry) => entry.id)).toContain(id);
+        else {
+          expect(plan.recipes.map((entry) => entry.id)).not.toContain(id);
+          expect(plan.skipped).toContainEqual({
+            id,
+            kind: 'recipe',
+            reason: 'recipe packages not published with pins',
+          });
+        }
+      }
+    },
+  );
+
   it('lists sixteen registry components including published cache, flags, and billing', () => {
     expect(SNAPSHOT_DATE).toBe('2026-08-15');
     expect(components).toHaveLength(16);
