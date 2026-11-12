@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Clock } from '@pegma/spine';
 import { createSupportApi } from './support-api';
@@ -25,6 +26,33 @@ async function fixture(clock?: Clock) {
 }
 
 describe('optional public engineering root composition', () => {
+  it('reports the current package pins through the normal health entrypoint', async () => {
+    const { dependencies } = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    const worker = createWorker();
+    const env = {} as Parameters<typeof worker.fetch>[1];
+    const pending: Promise<unknown>[] = [];
+    const unavailable = (): never => { throw new Error('Health detail must not access context authority.'); };
+    const context: ExecutionContext = {
+      waitUntil(promise) { pending.push(promise); },
+      passThroughOnException: unavailable,
+      props: {},
+      get exports(): Cloudflare.Exports { return unavailable(); },
+      get tracing(): Tracing { return unavailable(); },
+      abort: unavailable,
+    };
+    const response = await worker.fetch(new Request('https://pegma.dev/api/health'), env, context);
+    await Promise.all(pending);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ checks: {
+      supportDesk: { detail: { packages: '@pegma/support-desk-application@' + dependencies['@pegma/support-desk-application'] } },
+      identity: { detail: {
+        sessions: '@pegma/sessions@' + dependencies['@pegma/sessions'],
+        runtime: '@pegma/identity@' + dependencies['@pegma/identity'],
+        authorizationAdapter: '@pegma/authorization-identity@' + dependencies['@pegma/authorization-identity'],
+      } },
+    } });
+  });
+
   it.each(['absent', 'flag-only', 'false', 'throwing'] as const)('keeps %s entry composition OFF before any production dependencies', async (mode) => {
     const configuration = { application: { enabled: true }, repositories: [] };
     const options = mode === 'absent' ? {} : mode === 'flag-only' ? { enabled: () => true }

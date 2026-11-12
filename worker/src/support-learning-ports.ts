@@ -40,7 +40,7 @@ export type DirectLearningKnowledge = Pick<
 >;
 
 /**
- * Support 0.2.6 uses the same exact KB 0.1.5 public contracts as this host.
+ * Support 0.2.7 uses the same exact KB 0.1.6 public contracts as this host.
  * Forward the narrow capability surface and preserve actual error identity.
  */
 export function createSupportLearningKnowledgePort(

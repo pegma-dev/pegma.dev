@@ -97,7 +97,7 @@ The queue and dead-letter queue are provisioned in the deployment account.
 
 The account boundary is fixed to issuer `https://pegma.dev` and WebAuthn RP ID
 `pegma.dev`. Cloudflare D1 is consumed only through
-`@pegma/storage-cloudflare-d1`; `@pegma/sessions@0.2.0` stores SHA-256-hashed
+`@pegma/storage-cloudflare-d1`; `@pegma/sessions@0.2.1` stores SHA-256-hashed
 opaque session identifiers. The browser receives a cryptographically random
 `__Host-pegma_session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, and
 `Path=/`.
@@ -247,7 +247,7 @@ public acknowledgement endpoint.
 
 ## Support Desk composition
 
-Authenticated product feedback composes exact `0.2.6` versions of
+Authenticated product feedback composes exact `0.2.7` versions of
 `@pegma/support-desk-contracts`, `@pegma/support-desk-core`,
 `@pegma/support-desk-application`, and `@pegma/support-desk-templates` over
 the same `IDENTITY_DB` D1 binding. Support Desk collections
@@ -258,7 +258,7 @@ via AccessContext defaults (not a paid entitlement). Categories:
 `feedback`, `bug`, `feature_request`, `documentation`, `question`. Subject
 marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/ticket/?id=…`.
 
-The optional `@pegma/support-desk-ai@0.2.6` package is installed for the
+The optional `@pegma/support-desk-ai@0.2.7` package is installed for the
 [isolated scripted answering stage](../docs/SUPPORT_ASSISTANT_STAGE.md). The
 earlier public `0.2.5` graph passed the 1,125-test local/CI
 [adoption checkpoint](../docs/KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint);

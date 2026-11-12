@@ -245,7 +245,7 @@ return {
         probe: 'disabled' | 'ok' | 'fail';
       } = {
         storage: 'cloudflare-d1',
-        packages: '@pegma/support-desk-application@0.2.6',
+        packages: '@pegma/support-desk-application@0.2.7',
         probe: 'disabled',
       };
       if (supportHealthProbeEnabled(env)) {
@@ -278,7 +278,7 @@ return {
           }),
           createDetailCheck('identity', {
             storage: 'cloudflare-d1',
-            sessions: '@pegma/sessions@0.2.0',
+            sessions: '@pegma/sessions@0.2.1',
             runtime: '@pegma/identity@0.1.2',
             authorizationAdapter: '@pegma/authorization-identity@0.4.0',
             emailDelivery:
