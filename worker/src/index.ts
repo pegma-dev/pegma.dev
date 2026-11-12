@@ -231,6 +231,7 @@ function createSupportHandler(
   const shared = configured || answerConfigured || followupConfigured || learningGraph !== undefined;
   const identityRuntime = createProductionIdentityRuntime(env, logger, shared ? 512 : undefined);
   let supportRuntime: ReturnType<typeof createSupportRuntime>;
+  let learningIntakeAvailable = learningGraph !== undefined;
   if (production.attachRuntime?.({ store: identityRuntime.store,
     clock: engineeringProduction.clock ?? systemClock, application: () => supportRuntime.application }) === false)
     logSupportCompositionFailure(logger, 'engineering_checks');
@@ -245,7 +246,7 @@ function createSupportHandler(
         logger,
         ...(workerConfigured || learningGraph !== undefined ? { clock: engineeringProduction.clock ?? systemClock } : {}),
         ...(intake === undefined ? {} : { engineering: intake }),
-        ...(learningGraph === undefined ? {} : { resolutionLearning: learningGraph.application }),
+        ...(!learningIntakeAvailable ? {} : { resolutionLearning: learningGraph!.application }),
         ...(followupConfigured ? { engineeringFollowup: supportReleaseFollowupApplicationOptions(releaseFollowup) } : {}),
         ...(!withAnswering || selectedAnswering.configuration === undefined
           ? {} : { assistantTurns: supportAnsweringTurns(selectedAnswering) }),
@@ -254,6 +255,13 @@ function createSupportHandler(
         ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
         : createProductionSupportRuntime(env, dependencies);
     } catch (error) {
+      if (learningIntakeAvailable) {
+        // Retry once with the ordinary App defaults. Keep the source graph for
+        // binding to the final real App; a base failure still escapes this retry.
+        learningIntakeAvailable = false;
+        logSupportCompositionFailure(logger, 'learning_runtime');
+        return construct(withEngineering, withAnswering);
+      }
       if (withEngineering || withAnswering)
         logSupportCompositionFailure(logger, 'support_runtime', { engineering: withEngineering, answering: withAnswering });
       throw error;
@@ -329,7 +337,7 @@ function createSupportHandler(
     onCustomerMessageAccepted: answeringRuntime?.hintAccepted,
     ...(learningRuntime === undefined ? {} : { learningRuntime }),
     ...(learning === undefined ? {} : { learningEnabled: () =>
-      env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === 'true' && learningGraph?.ready() === true }),
+      learningIntakeAvailable && env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === 'true' && learningGraph?.ready() === true }),
     ...(configured ? { engineering: composeSupportEngineeringHuman(supportRuntime, logger, selectedEngineering) } : {}),
     ...(followupConfigured ? { releaseFollowup: composeSupportReleaseFollowup(supportRuntime, logger, releaseFollowup) } : {}),
     // The stored Support ROLE is the only staff gate (fail closed).

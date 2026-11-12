@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createMemoryStore } from '@pegma/storage-core';
+import { createMemoryStore, type Store } from '@pegma/storage-core';
+import { supportRecords } from '@pegma/support-desk-application';
 import * as d1 from '@pegma/storage-cloudflare-d1';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
@@ -531,6 +532,176 @@ describe('normal root learning composition', () => {
     const unavailable = await read();
     expect(unavailable.status).toBe(404);
     expect(await unavailable.text()).not.toContain(learningCanary);
+  });
+
+  it('isolates invalid learning application limits from ordinary human intake and preserves source-only KB reopen guards', async () => {
+    const t = await rootFixture();
+    const articleId = await t.published();
+    const observed = await t.f.ports.configuration.resolve(
+      undefined,
+      new AbortController().signal,
+    );
+    if (observed.outcome !== 'ready')
+      throw new Error('Actual fixture configuration required');
+    const config = observed.configuration;
+    const validUntil = config.dataControls.validUntil;
+    const keyReads = vi.fn(() => undefined);
+    const modelCalls = vi.fn(async (): Promise<Response> => {
+      throw new Error('Generation must stay OFF');
+    });
+    const source = await t.f.application.readResolutionLearningSource(
+      t.f.actors.staff,
+      learningTicketId,
+    );
+    const learning: SupportLearningCompositionOptions = {
+      ...t.options,
+      production: {
+        intakeEnabled: true,
+        enabled: () => false,
+        configuration: {
+          // The real released App accepts at most 300000ms; the host factory's
+          // supported numeric option must not take down ordinary first messages.
+          application: { maxLeaseMilliseconds: 300_001 },
+          productContext: { resolve: async () => source.product ?? null },
+          serviceAccess: t.f.ports.serviceAccess,
+          knowledgeAccess: t.f.ports.knowledgeAccess,
+          retirementAccess: t.f.ports.retirementAccess,
+          targets: t.f.ports.targets,
+          model: {
+            readRoute: () => undefined,
+            allowlist: [
+              {
+                model: config.model,
+                provider: config.provider,
+                endpointTag: 'fictional/learning',
+                outputTokenParameter: 'max_tokens',
+              },
+            ],
+            counter: {
+              count: (value) => value.length,
+              qualification: {
+                model: config.model,
+                modelVersion: config.modelVersion,
+                wireVersion: SUPPORT_LEARNING_WIRE_VERSION,
+                framingTokens: config.framingTokens,
+                evidenceRef: 'fictional-root-tokenizer',
+                verifiedAt: t.f.clock.now(),
+                validUntil,
+              },
+            },
+            readApiKey: keyReads,
+            fetch: modelCalls,
+          },
+          usagePolicy: {
+            version: 'fictional-root-invalid-limit-funding',
+            scopeRef: 'synthetic-learning-only-usage',
+            configurationVersion: config.version,
+            modelVersion: config.modelVersion,
+            pricingRef: config.pricingRef,
+            currency: 'USD',
+            maxCostMicros: 100_000,
+            maxReservationCostMicros: 10_000,
+            maxReservations: 8,
+            validFrom: t.f.clock.now(),
+            validUntil,
+            terminalRetentionMilliseconds: 60_000,
+          },
+        },
+      },
+      independentChecks: {
+        authority: t.f.ports.serviceAccess,
+        enabled: () => false,
+        readApiKey: keyReads,
+        fetch: modelCalls,
+      },
+    };
+    Reflect.set(t.env, 'PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED', 'true');
+    const runtimes = vi.spyOn(supportDesk, 'createSupportRuntime');
+    const graphs = vi.spyOn(
+      learningComposition,
+      'createSupportLearningComposition',
+    );
+    const worker = createWorker({ learning });
+    const created = await t.call(
+      worker,
+      t.request(
+        '/api/support/tickets',
+        {
+          subject:
+            'Fictional first human question with invalid optional learning',
+          body: 'How do I export?',
+          category: 'question',
+        },
+        'customer',
+      ),
+    );
+    expect(created.status).toBe(201);
+    const createdView = (await created.json()) as { ticket: { id: string } };
+    expect(runtimes.mock.results.some((entry) => entry.type === 'throw')).toBe(
+      true,
+    );
+    expect(runtimes.mock.calls.at(-1)?.[0].resolutionLearning).toBeUndefined();
+    expect(
+      graphs.mock.results.at(-1)?.value?.browserRuntime()?.application,
+    ).toBe(runtimes.mock.results.at(-1)?.value?.application);
+    const detail = await t.call(
+      worker,
+      t.request('/api/support/admin/tickets/' + createdView.ticket.id),
+    );
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ learningEnabled: false });
+    const read = () =>
+      t.call(
+        worker,
+        t.request(
+          '/api/knowledge/portal',
+          {
+            operation: 'getPublishedArticle',
+            input: { articleId },
+          },
+          'customer',
+        ),
+      );
+    expect((await read()).status).toBe(200);
+    expect(
+      (
+        await t.call(
+          worker,
+          t.request(
+            '/api/support/tickets/' + learningTicketId + '/replies',
+            {
+              body: 'The fictional solution needs another look.',
+            },
+            'customer',
+          ),
+        )
+      ).status,
+    ).toBe(201);
+    expect((await read()).status).toBe(404);
+    expect(keyReads).not.toHaveBeenCalled();
+    expect(modelCalls).not.toHaveBeenCalled();
+    // A real base Store failure still refuses intake after the bounded retry.
+    const unavailable: Store = {
+      collection(definition) {
+        if (definition.name === supportRecords.name)
+          throw new Error('Fictional Support Store unavailable');
+        return t.f.store.collection(definition);
+      },
+    };
+    vi.mocked(d1.createCloudflareD1Store).mockReturnValue(unavailable);
+    const failed = await t.call(
+      worker,
+      t.request(
+        '/api/support/tickets',
+        {
+          subject: 'Fictional unavailable base',
+          body: 'Export question.',
+          category: 'question',
+        },
+        'customer',
+      ),
+    );
+    expect(failed.status).toBe(503);
   });
 
   it('honors current source review-policy revocation while route/key and worker flags are absent', async () => {
