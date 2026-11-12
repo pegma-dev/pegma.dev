@@ -424,7 +424,12 @@ describe('Agent Access host composition', () => {
     ).rejects.toThrow();
   });
 
-  it.each(['null', 'empty-stream', 'zero-byte-array'] as const)(
+  it.each([
+    'null',
+    'empty-stream',
+    'zero-byte-array',
+    'finite-empty-chunks',
+  ] as const)(
     'revokes an actual active grant with a %s DELETE body and invalidates access and refresh',
     async (shape) => {
       const f = await fixture();
@@ -433,16 +438,22 @@ describe('Agent Access host composition', () => {
       expect(await body(await f.runtime.api(f.request(path)))).toMatchObject({
         status: 'active',
       });
+      let emptyChunks = 0;
       const input =
         shape === 'null'
           ? undefined
           : shape === 'zero-byte-array'
             ? new Uint8Array(0)
-            : new ReadableStream<Uint8Array>({
-                start(controller) {
-                  controller.close();
+            : new ReadableStream<Uint8Array>(
+                {
+                  pull(controller) {
+                    if (shape === 'finite-empty-chunks' && emptyChunks++ < 33)
+                      controller.enqueue(new Uint8Array(0));
+                    else controller.close();
+                  },
                 },
-              });
+                { highWaterMark: 0 },
+              );
       const init = {
         method: 'DELETE',
         ...(input === undefined ? {} : { body: input }),
@@ -477,7 +488,6 @@ describe('Agent Access host composition', () => {
     'chunked',
     'false-zero-length',
     'declared-nonempty',
-    'endless-empty',
   ] as const)(
     'rejects a %s DELETE body, cancels without waiting and leaves the active grant usable',
     async (shape) => {
@@ -489,10 +499,7 @@ describe('Agent Access host composition', () => {
         {
           pull(controller) {
             reads += 1;
-            if (
-              shape === 'endless-empty' ||
-              (shape === 'chunked' && reads === 1)
-            )
+            if (shape === 'chunked' && reads === 1)
               controller.enqueue(new Uint8Array(0));
             else
               controller.enqueue(
@@ -520,13 +527,7 @@ describe('Agent Access host composition', () => {
       expect(cancel).toHaveBeenCalledOnce();
       expect(request.body?.locked).toBe(false);
       expect(reads).toBe(
-        shape === 'declared-nonempty'
-          ? 0
-          : shape === 'endless-empty'
-            ? 16
-            : shape === 'chunked'
-              ? 2
-              : 1,
+        shape === 'declared-nonempty' ? 0 : shape === 'chunked' ? 2 : 1,
       );
       expect(
         await body(
@@ -549,6 +550,7 @@ describe('Agent Access host composition', () => {
     'empty-trickle',
     'cancel-rejects',
     'signal-abort',
+    'immediate-empty',
   ] as const)(
     'bounds a %s DELETE body without revoking the active grant',
     async (shape) => {
@@ -569,8 +571,10 @@ describe('Agent Access host composition', () => {
           start(controller) {
             source = controller;
           },
-          pull() {
+          pull(controller) {
             entered();
+            if (shape === 'immediate-empty')
+              controller.enqueue(new Uint8Array(0));
           },
           cancel,
         },
@@ -598,6 +602,8 @@ describe('Agent Access host composition', () => {
         });
         await reading;
         if (shape === 'signal-abort') controller.abort();
+        else if (shape === 'immediate-empty')
+          await vi.advanceTimersByTimeAsync(10_000);
         else {
           await vi.advanceTimersByTimeAsync(9_000);
           if (shape === 'empty-trickle') source!.enqueue(new Uint8Array(0));

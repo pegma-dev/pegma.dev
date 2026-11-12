@@ -16,6 +16,8 @@ import {
   type AgentBrowserOptions,
 } from './agent-authority';
 
+const browserBodyTimeoutMs = 10_000;
+
 export interface AgentAccessApiOptions extends AgentBrowserOptions {
   readonly service: AgentAccessServicePort;
   readonly configuration: AgentAccessConfiguration;
@@ -28,7 +30,7 @@ async function requireEmptyBody(request: Request): Promise<void> {
   const reader = request.body.getReader();
   const invalid = new ApiError(400, 'invalid_request');
   const timeout = new ApiError(408, 'request_timeout');
-  const expiresAt = performance.now() + 10_000;
+  const expiresAt = performance.now() + browserBodyTimeoutMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   let cancelled = false;
@@ -47,25 +49,41 @@ async function requireEmptyBody(request: Request): Promise<void> {
       reject(timeout);
       cancel(timeout);
     };
-    timer = setTimeout(onAbort, 10_000);
+    timer = setTimeout(onAbort, browserBodyTimeoutMs);
     request.signal.addEventListener('abort', onAbort, { once: true });
     if (request.signal.aborted) onAbort();
   });
-  // Also observe an already-aborted boundary if header validation fails first.
+  // Input validation can fail before the race; keep any boundary rejection handled.
   void boundary.catch(() => {});
   try {
     const declared = request.headers.get('Content-Length');
     if (declared !== null && !/^0+$/u.test(declared)) throw invalid;
-    // No payload bytes are buffered. Bound even a source yielding only empty chunks.
-    for (let reads = 0; reads < 16; reads += 1) {
+    // No bytes are buffered. Empty chunks periodically yield so deadline/abort
+    // callbacks can run even when a source completes every read immediately.
+    let emptyReads = 0;
+    while (true) {
       if (performance.now() >= expiresAt) throw timeout;
       const chunk = await Promise.race([reader.read(), boundary]);
       if (performance.now() >= expiresAt || request.signal.aborted)
         throw timeout;
       if (chunk.done) return;
       if (chunk.value.byteLength !== 0) throw invalid;
+      emptyReads += 1;
+      if (emptyReads === 16) {
+        emptyReads = 0;
+        let yieldTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            boundary,
+            new Promise<void>((resolve) => {
+              yieldTimer = setTimeout(resolve, 0);
+            }),
+          ]);
+        } finally {
+          if (yieldTimer !== undefined) clearTimeout(yieldTimer);
+        }
+      }
     }
-    throw invalid;
   } catch (error) {
     cancel(error);
     throw error;
@@ -137,6 +155,21 @@ export function createAgentAccessApi(
       sameBrowserHeaders();
       const principalId = context.access.principalId;
       const sessionId = authenticated.rawSessionId;
+      async function currentMutationContext() {
+        sameBrowserHeaders();
+        const current = await requireAgentBrowserContext(
+          request,
+          options,
+          true,
+        );
+        sameBrowserHeaders();
+        if (
+          current.authenticated.rawSessionId !== sessionId ||
+          current.context.access.principalId !== principalId
+        )
+          throw new ApiError(403, 'browser_credential_changed');
+        return current.context;
+      }
       if (path === '/api/agent-access/state') {
         if (url.search !== '') throw new ApiError(400, 'invalid_request');
         response = json({
@@ -154,19 +187,7 @@ export function createAgentAccessApi(
           if (request.body !== null) {
             await requireEmptyBody(request);
             // Empty input still adds an awaited boundary before a protected mutation.
-            sameBrowserHeaders();
-            const current = await requireAgentBrowserContext(
-              request,
-              options,
-              true,
-            );
-            sameBrowserHeaders();
-            if (
-              current.authenticated.rawSessionId !== sessionId ||
-              current.context.access.principalId !== principalId
-            )
-              throw new ApiError(403, 'browser_credential_changed');
-            currentContext = current.context;
+            currentContext = await currentMutationContext();
           }
           await options.service.revokeGrant(currentContext, grantId);
           response = new Response(null, {
@@ -194,7 +215,7 @@ export function createAgentAccessApi(
       } else {
         if (url.search !== '') throw new ApiError(400, 'invalid_request');
         const body = optionalKeysObject(
-          await readJson(request, { timeoutMs: 10_000 }),
+          await readJson(request, { timeoutMs: browserBodyTimeoutMs }),
           ['requestId', 'decision'],
           ['approvedScopes', 'userCode'],
         );
@@ -221,21 +242,8 @@ export function createAgentAccessApi(
         };
         // Body input is an awaited browser boundary. Account/role authority in
         // AA cannot establish that the original host session is still live.
-        sameBrowserHeaders();
-        const current = await requireAgentBrowserContext(
-          request,
-          options,
-          true,
-        );
-        sameBrowserHeaders();
-        if (
-          current.authenticated.rawSessionId !== sessionId ||
-          current.context.access.principalId !== principalId
-        )
-          throw new ApiError(403, 'browser_credential_changed');
-        response = json(
-          await options.service.approve(current.context, command),
-        );
+        const currentContext = await currentMutationContext();
+        response = json(await options.service.approve(currentContext, command));
       }
       // The service may have awaited private reads or a committed mutation.
       // Withhold its response if the original browser no longer has authority;
