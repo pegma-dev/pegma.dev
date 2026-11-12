@@ -1,3 +1,5 @@
+import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
+import type { SupportLearningHandlerOptions } from './support-learning-handlers';
 import { createSupportReleaseFollowupHandlers, type SupportReleaseFollowupHandlerOptions } from './support-release-followup-handlers';
 import {
   bestEffortSupportAssistantHint,
@@ -139,8 +141,8 @@ interface SupportApiOptions {
   readonly replyLimiter: DurableRateLimiter;
   readonly logger: Logger;
   /**
-   * Audited role store — the ONLY staff gate (docs/ROLE_ADOPTION_PLAN.md
-   * Phase 4). Absent ⇒ staff routes are a controlled 503, fail closed.
+   * Audited role store â€” the ONLY staff gate (docs/ROLE_ADOPTION_PLAN.md
+   * Phase 4). Absent â‡’ staff routes are a controlled 503, fail closed.
    */
   readonly roleStore?: SupportRoleReader & BootstrapRoleStore;
   /** One-time Support bootstrap principals (Phase 3). */
@@ -151,6 +153,8 @@ interface SupportApiOptions {
   readonly learningRuntime?: Omit<SupportLearningRuntimeOptions, 'staffAccess'>;
   /** Current server flag. Only strict true plus a handler enables this surface. */
   readonly learningEnabled?: () => boolean;
+  readonly learningTestReceiptPreparation?: SupportLearningHandlerOptions['testReceiptPreparation'];
+  readonly learningTestReceiptEnabled?: () => boolean;
   /** Additive trusted staged-review capability; it never enables learning itself. */
   readonly learningStagedReviewsEnabled?: () => boolean;
   readonly engineering?: SupportEngineeringRouterOptions;
@@ -167,7 +171,7 @@ async function requireAuthentication(
   }
   // One-time Support bootstrap (docs/ROLE_ADOPTION_PLAN.md Phase 3): any
   // authenticated support touch by a listed principal seeds the audited
-  // grant. Fail OPEN — a seed failure must not break the request; it
+  // grant. Fail OPEN â€” a seed failure must not break the request; it
   // retries on the next touch. The set-membership check short-circuits for
   // everyone not listed.
   if (
@@ -770,9 +774,9 @@ async function stableBrowserMutation(
  *
  * Session cookie `__Host-pegma_session`, CSRF `X-Pegma-CSRF`, same-origin
  * Fetch Metadata for mutations. Principal is the Identity subject from the
- * session — never taken from the request body.
+ * session â€” never taken from the request body.
  *
- * Staff routes live under `/api/support/admin/…` and require the stored,
+ * Staff routes live under `/api/support/admin/â€¦` and require the stored,
  * audited `Support` role.
  */
 export function createSupportApi(
@@ -813,6 +817,10 @@ export function createSupportApi(
           ...(options.learningEnabled === undefined
             ? {}
             : { enabled: options.learningEnabled }),
+          ...(options.learningTestReceiptPreparation === undefined ? {} : {
+            testReceiptPreparation: options.learningTestReceiptPreparation,
+            testReceiptPreparationEnabled: options.learningTestReceiptEnabled,
+          }),
           limiter: options.replyLimiter,
           learning: options.learningRuntime,
         })
@@ -828,6 +836,12 @@ export function createSupportApi(
     } catch {
       return false;
     }
+  };
+  const testReceiptsReady = (): boolean => {
+    try {
+      return learningReady() && options.learningTestReceiptPreparation !== undefined &&
+        options.learningTestReceiptEnabled?.() === true;
+    } catch { return false; }
   };
   const stagedReviewsReady = (): boolean => {
     if (
@@ -1131,6 +1145,12 @@ export function createSupportApi(
                   supportPermissions.learningReview,
                 ) &&
                 hasPermission(final.access, supportPermissions.queueRead),
+              ...(options.learningTestReceiptEnabled === undefined ? {} : {
+                learningTestReceiptEnabled: testReceiptsReady() &&
+                  hasPermission(final.access, supportPermissions.learningEvidenceSubmit) &&
+                  hasPermission(final.access, knowledgePermissions.draftRead) &&
+                  hasPermission(final.access, knowledgePermissions.evidenceRead),
+              }),
               ...(options.learningStagedReviewsEnabled === undefined
                 ? {}
                 : {
@@ -1179,7 +1199,7 @@ export function createSupportApi(
           ['priority'],
         );
         const action = parseStaffPatchAction(body.action);
-        // priority is only meaningful for change_priority — reject silent ignore.
+        // priority is only meaningful for change_priority â€” reject silent ignore.
         if (action !== 'change_priority' && Object.hasOwn(body, 'priority')) {
           throw new ApiError(400, 'invalid_request');
         }
@@ -1276,7 +1296,7 @@ export function createSupportApi(
         const messageBody = boundedString(body.body, 1, 20_000, {
           allowMultiline: true,
         });
-        // Mail/outbound notification deferred (Task 10) — omit notification.
+        // Mail/outbound notification deferred (Task 10) â€” omit notification.
         const view = await options.application.replyAsStaff(access, {
           commandId: mintSupportId(),
           correlationId: mintSupportId(),

@@ -1,3 +1,7 @@
+import { resolveAccess, type AccessContext } from '@pegma/authorization-core';
+import { createAgentPrincipalResolver } from './agent-authority';
+import { createKnowledgeEvidenceService } from './knowledge-evidence';
+import type { ResolutionProductContextPort } from '@pegma/support-desk-application';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryStore, type Store } from '@pegma/storage-core';
 import { supportRecords } from '@pegma/support-desk-application';
@@ -1012,5 +1016,394 @@ describe('normal root learning composition', () => {
     expect(ready.mock.calls.at(-1)?.[0].store).toBe(t.f.store);
     expect(ready.mock.calls.at(-1)?.[0].privateSources).toBeUndefined();
     expect(identity).not.toHaveBeenCalled();
+  });
+});
+
+async function testEvidenceRootFixture() {
+  const t = await rootFixture();
+  const resolve = createAgentPrincipalResolver(t.support);
+  const reporterId = t.f.actors.runner.principalId;
+  await t.identity.identity.provisionVerifiedUser({
+    principalId: reporterId,
+    email: "reporter@example.test",
+  });
+  await t.support.roleStore.grantRoleAssignmentWithAudit({
+    assignment: {
+      id: "root-reporting-knowledge",
+      principalId: reporterId,
+      role: KNOWLEDGE_ROLE,
+      scope: APPLICATION_SCOPE,
+      grantedBy: { kind: "system", systemId: "fictional-root-test" },
+      grantedAtEpochMs: Date.now(),
+      status: "active",
+    },
+    auditEventId: "root-reporting-knowledge-grant",
+  });
+  const staff = await resolve(t.f.actors.staff.principalId);
+  const reporter = await resolve(reporterId);
+  if (staff === null || reporter === null)
+    throw new Error("Actual root principals missing");
+  const reports = createKnowledgeEvidenceService({
+    store: t.f.store,
+    clock: t.f.clock,
+    resolvePrincipal: resolve,
+    authoringContext: t.f.knowledge,
+    async readContext(access, articleId) {
+      return (
+        await t.f.knowledge.getAuthoringContext(access, {
+          articleId,
+          includeEvidence: true,
+        })
+      ).context;
+    },
+  });
+  const articleId = "registered-test-report-guide";
+  const collectionId = "learning-guides";
+  await t.f.knowledge.createDraft(t.f.actors.admin, {
+    ...t.f.command("registered-test-draft"),
+    articleId,
+    collectionId,
+    draft: {
+      kind: "explanation",
+      title: "Fictional export test",
+      summary: "Controlled public SDK test.",
+      content: {
+        format: "plain_text",
+        text: "Export the fictional workspace.",
+      },
+      tags: ["synthetic"],
+      applicability: t.f.product,
+    },
+  });
+  const draft = await t.f.knowledge.getDraft(staff, { articleId });
+  const requirements = await t.f.knowledge.getValidationRequirements(staff, {
+    collectionId,
+    kind: draft.revision.kind,
+  });
+  const check = requirements.checks[0];
+  if (check === undefined) throw new Error("Actual test requirement missing");
+  const reported = await reports.report(reporter, {
+    commandId: "registered-root-report",
+    articleId,
+    ledgerEpoch: 1,
+    evidence: {
+      id: "registered-root-test-evidence",
+      articleId,
+      articleRevision: draft.revision.number,
+      contentHash: draft.revision.contentHash,
+      validationPolicy: draft.revision.validationPolicy,
+      checkId: check.id,
+      testKind: check.testKind,
+      applicability: draft.revision.applicability,
+      stagingBuildId: requirements.expectedStagingBuildId,
+      steps: ["Export the fictional workspace."],
+      result: "passed",
+      executedAt: t.f.clock.now(),
+      runnerId: reporterId,
+      artifacts: [],
+    },
+    report: {
+      summary: "The fictional export passed",
+      details: "FICTIONAL_PRIVATE_REPORT_DETAILS",
+    },
+  });
+  const key = {
+    articleId,
+    ledgerEpoch: reported.ledgerEpoch,
+    reportId: reported.reportId,
+  };
+  const observed = await reports.read(staff, key);
+  await reports.decide(
+    staff,
+    {
+      ...key,
+      commandId: "registered-root-confirm",
+      expectedReportGeneration: observed.reportGeneration,
+      reviewBindingHash: observed.reviewBindingHash,
+    },
+    "confirmed",
+  );
+  const report = await reports.read(staff, key);
+  const productContext: ResolutionProductContextPort = {
+    async resolve(context) {
+      return {
+        productId: t.f.product.productId,
+        version: t.f.product.productVersion,
+        buildId: t.f.product.buildId,
+        binding: "registered-root-product-v1",
+        contextVersion: "registered-root-context-v1",
+        receiptId: "registered-root-product",
+        verifiedAt: context.acceptedAt,
+        validUntil: new Date(
+          Date.parse(context.acceptedAt) + 60_000,
+        ).toISOString(),
+      };
+    },
+  };
+  const access = resolveAccess(
+    { principalId: "fictional-intrinsic-governance", roles: ["reader"] },
+    {
+      version: "fictional-governance-service-v1",
+      roles: { reader: [knowledgePermissions.validationManage] },
+    },
+  );
+  const hooks = {
+    beforeGovernance: undefined as (() => Promise<void>) | undefined,
+  };
+  const governance = vi.fn(
+    async (selectedCollection: string, signal: AbortSignal) => {
+      await hooks.beforeGovernance?.();
+      if (signal.aborted || selectedCollection !== collectionId) return null;
+      return { access, authorityVersion: "fictional-governance-authority-v1" };
+    },
+  );
+  const options = {
+    ...t.options,
+    intake: { enabled: true, productContext },
+    testEvidence: {
+      retentionMilliseconds: 120_000,
+      governanceAccess: { resolve: governance },
+    },
+  };
+  Reflect.set(t.env, "PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED", "true");
+  const worker = createWorker({ learning: options });
+  const ticket = await t.f.terminal();
+  const enrolled = await t.call(
+    worker,
+    t.request(
+      "/api/support/admin/tickets/" + learningTicketId + "/learning/enroll",
+      {
+        commandId: "REGISTERED-TEST-ENROLL",
+        expectedRevision: ticket.revision,
+      },
+    ),
+  );
+  expect(enrolled.status).toBe(200);
+  const source = (await enrolled.json()) as {
+    result: { resolutionCycle: number };
+  };
+  const packet = {
+    commandId: "REGISTERED-TEST-PREPARE",
+    expectedPrincipalId: staff.principalId,
+    expectedRevision: ticket.revision,
+    resolutionCycle: source.result.resolutionCycle,
+    solutionMessageId: "learning-solution",
+    report: {
+      ...key,
+      expectedReportGeneration: report.reportGeneration,
+      reviewBindingHash: report.reviewBindingHash,
+      receipt: report.receipt,
+    },
+  };
+  const path =
+    "/api/support/admin/tickets/" + learningTicketId + "/learning/test-receipt";
+  return {
+    ...t,
+    reports,
+    key,
+    staff,
+    reporter,
+    options,
+    worker,
+    packet,
+    path,
+    hooks,
+    governance,
+  };
+}
+
+describe("registered staff test association", () => {
+  it("prepares for different staff from a confirmed report before KB evidence acceptance and replays its lost ACK", async () => {
+    const t = await testEvidenceRootFixture();
+    expect(t.reporter.principalId).not.toBe(t.staff.principalId);
+    expect(
+      (
+        await t.f.knowledge.getEvidence(t.staff, {
+          articleId: t.packet.report.articleId,
+        })
+      ).evidence,
+    ).toEqual([]);
+    const first = await t.call(t.worker, t.request(t.path, t.packet));
+    expect(first.status).toBe(200);
+    const acknowledged = (await first.json()) as {
+      result: {
+        actorId: string;
+        ticketId: string;
+        commandId: string;
+        receipt: string;
+        validUntil: string;
+      };
+    };
+    expect(Object.keys(acknowledged.result).sort()).toEqual(
+      ["actorId", "ticketId", "commandId", "receipt", "validUntil"].sort(),
+    );
+    expect(acknowledged.result).toMatchObject({
+      actorId: t.staff.principalId,
+      ticketId: learningTicketId,
+      commandId: t.packet.commandId,
+    });
+    expect(acknowledged.result.receipt.length).toBeLessThanOrEqual(200);
+    expect(JSON.stringify(acknowledged)).not.toContain(
+      "FICTIONAL_PRIVATE_REPORT_DETAILS",
+    );
+    const retry = await t.call(t.worker, t.request(t.path, t.packet));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual(acknowledged);
+    const view = await t.call(
+      t.worker,
+      t.request("/api/support/admin/tickets/" + learningTicketId),
+    );
+    expect(await view.json()).toMatchObject({
+      learningTestReceiptEnabled: true,
+    });
+  });
+
+  it("keeps original SDK evidence ACK recovery after the preparation configuration and KB flag are removed", async () => {
+    const t = await testEvidenceRootFixture();
+    const response = await t.call(t.worker, t.request(t.path, t.packet));
+    expect(response.status).toBe(200);
+    const prepared = (await response.json()) as { result: { receipt: string } };
+    const evidence = {
+      kind: "successful_test",
+      commandId: "REGISTERED-EVIDENCE-EXACT",
+      expectedRevision: t.packet.expectedRevision,
+      resolutionCycle: t.packet.resolutionCycle,
+      solutionMessageId: t.packet.solutionMessageId,
+      receipt: prepared.result.receipt,
+    };
+    const path =
+      "/api/support/admin/tickets/" + learningTicketId + "/learning/evidence";
+    const accepted = await t.call(t.worker, t.request(path, evidence));
+    expect(accepted.status).toBe(200);
+    const ack = await accepted.json();
+    const before = await t.f.rows();
+    const { testEvidence: omitted, ...withoutPreparation } = t.options;
+    expect(omitted).toBeDefined();
+    Reflect.set(t.env, "PEGMA_KNOWLEDGE_ENABLED", "false");
+    const changed = createWorker({ learning: withoutPreparation });
+    const recovered = await t.call(
+      changed,
+      t.request(path + "-recovery", evidence),
+    );
+    expect(recovered.status).toBe(200);
+    const result = (await recovered.json()) as {
+      result: { outcome: string; result: unknown };
+    };
+    expect(result.result).toMatchObject({
+      outcome: "accepted",
+      result: (ack as { result: unknown }).result,
+    });
+    expect(await t.f.rows()).toEqual(before);
+  });
+
+  it.each(["cookie", "role"] as const)(
+    "closes actual %s loss during preparation without a link ACK",
+    async (kind) => {
+      const t = await testEvidenceRootFixture();
+      t.hooks.beforeGovernance = async () => {
+        t.hooks.beforeGovernance = undefined;
+        if (kind === "cookie")
+          await t.identity.sessions.destroy("2".repeat(43));
+        else {
+          const role = await t.support.roleStore.getRoleAssignment(
+            "root-learning-" + KNOWLEDGE_ROLE,
+          );
+          if (role === null) throw new Error("Actual role absent");
+          await t.support.roleStore.revokeRoleAssignmentWithAudit({
+            assignmentId: "root-learning-" + KNOWLEDGE_ROLE,
+            expectedConcurrencyToken: role.concurrencyToken,
+            revokedBy: { kind: "system", systemId: "fictional-root" },
+            revokedAtEpochMs: Date.now(),
+            auditEventId: "root-test-receipt-revoke",
+          });
+        }
+      };
+      const response = await t.call(t.worker, t.request(t.path, t.packet));
+      expect(response.status).toBe(kind === "cookie" ? 401 : 403);
+      expect(await response.json()).not.toHaveProperty("result");
+    },
+  );
+
+  it("rejects an actor-mismatched preparation packet and keeps OFF inputs before the governance port", async () => {
+    const t = await testEvidenceRootFixture();
+    const wrong = await t.call(
+      t.worker,
+      t.request(t.path, {
+        ...t.packet,
+        expectedPrincipalId: "another-account",
+      }),
+    );
+    expect(wrong.status).toBe(403);
+    expect(t.governance).not.toHaveBeenCalled();
+    Reflect.set(t.env, "PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED", "false");
+    const off = await t.call(t.worker, t.request(t.path, t.packet));
+    expect(off.status).toBe(404);
+    expect(t.governance).not.toHaveBeenCalled();
+  });
+
+  it("uses the normal method, cookie, Origin, CSRF and closed-packet guards", async () => {
+    const t = await testEvidenceRootFixture();
+    const valid = t.request(t.path, t.packet);
+    const wrongMethod = await t.call(t.worker, t.request(t.path));
+    expect(wrongMethod.status).toBe(405);
+    for (const [header, value, expected] of [
+      ["Origin", "https://outside.example.test", 403],
+      ["X-Pegma-CSRF", "not-the-session-token", 403],
+      ["Cookie", "", 401],
+    ] as const) {
+      const headers = new Headers(valid.headers);
+      headers.set(header, value);
+      const response = await t.call(
+        t.worker,
+        new Request(valid.url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(t.packet),
+        }),
+      );
+      expect(response.status).toBe(expected);
+    }
+    const extraField = await t.call(
+      t.worker,
+      t.request(t.path, { ...t.packet, unexpected: true }),
+    );
+    expect(extraField.status).toBe(400);
+    expect(t.governance).not.toHaveBeenCalled();
+  });
+
+  it("closes a changed intrinsic governance version even when its resolver reuses a record", async () => {
+    const t = await testEvidenceRootFixture();
+    const resolve = t.governance.getMockImplementation();
+    if (resolve === undefined)
+      throw new Error("Actual governance resolver missing");
+    let observation:
+      { access: AccessContext; authorityVersion: string } | undefined;
+    t.governance.mockImplementation(async (collectionId, signal) => {
+      const value = await resolve(collectionId, signal);
+      if (value === null) return null;
+      if (observation === undefined) observation = { ...value };
+      else observation.authorityVersion = "fictional-governance-authority-v2";
+      return observation;
+    });
+    const response = await t.call(t.worker, t.request(t.path, t.packet));
+    expect(response.status).toBe(503);
+    expect(await response.json()).not.toHaveProperty("result");
+  });
+
+  it("does not attach a malformed optional bridge and keeps ordinary intake usable", async () => {
+    const t = await testEvidenceRootFixture();
+    const malformed = createWorker({
+      learning: {
+        ...t.options,
+        testEvidence: { ...t.options.testEvidence, retentionMilliseconds: -1 },
+      },
+    });
+    const response = await t.call(malformed, t.request(t.path, t.packet));
+    expect(response.status).toBe(503);
+    const source = await t.call(
+      malformed,
+      t.request("/api/support/admin/tickets/" + learningTicketId + "/learning"),
+    );
+    expect(source.status).toBe(200);
   });
 });

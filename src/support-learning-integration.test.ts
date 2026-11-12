@@ -10,7 +10,8 @@ import { createSupportApi } from '../worker/src/support-api';
 import { createSupportRuntime } from '../worker/src/support-desk';
 import { createSupportLearningRuntime } from '../worker/src/support-learning';
 import { createSupportLearningFixture, learningTicketId } from '../worker/src/support-learning-fixtures';
-import { createSupportLearningHandlers } from '../worker/src/support-learning-handlers';
+import { createSupportLearningHandlers, type SupportLearningHandlerOptions } from '../worker/src/support-learning-handlers';
+import type { PrepareLearningTestReceipt } from '../worker/src/support-learning-test-receipts';
 
 type Actor = 'staff' | 'support' | 'customer' | 'admin' | 'knowledge';
 const base = '/api/support/admin/tickets/' + learningTicketId;
@@ -18,7 +19,7 @@ function isLearningPath(path: string) {
   const pathname = new URL(path, IDENTITY_ISSUER).pathname;
   return pathname === base + '/learning' || pathname.startsWith(base + '/learning/');
 }
-async function backend() {
+async function backend(testPreparation = false) {
   const store = createMemoryStore();
   const learning = await createSupportLearningFixture(store);
   const logger = { log() {} };
@@ -54,9 +55,25 @@ async function backend() {
     sources: learning.sources, clock: learning.clock, ports: learning.ports,
     staffAccess: { resolve }, processingEnabled: () => learning.state.enabled });
   const state = { enabled: true, flagResult: true as unknown, flagThrows: false,
+    testCapability: true as unknown,
     afterDetail: undefined as (() => Promise<void>) | undefined,
     afterHandler: undefined as (() => Promise<void>) | undefined };
-  const actualHandler = createSupportLearningHandlers({ ...authority,
+  // A controlled preparation ACK covers controller transport only. The registered
+  // Root tests separately exercise the real report/bridge/Store preparation.
+  const preparationCalls: { principalId: string; input: PrepareLearningTestReceipt }[] = [];
+  const preparation: NonNullable<SupportLearningHandlerOptions['testReceiptPreparation']> = {
+    async prepare(current, input) {
+      const access = await current.current(current.signal ?? new AbortController().signal);
+      expect(access.principalId).toBe(current.principalId);
+      preparationCalls.push({ principalId: current.principalId, input: structuredClone(input) });
+      return { receipt: 'controller-prepared-opaque-receipt', validUntil: '2099-01-01T00:00:00.000Z' };
+    },
+  };
+  const preparationOptions = testPreparation ? {
+    testReceiptPreparation: preparation,
+    testReceiptPreparationEnabled: () => state.testCapability === true,
+  } : {};
+  const actualHandler = createSupportLearningHandlers({ ...authority, ...preparationOptions,
     enabled: () => state.enabled, runtime: () => runtime, limiter: host.replyLimiter });
   const learningHandler = async (request: Request) => {
     const response = await actualHandler(request); await state.afterHandler?.(); return response;
@@ -68,7 +85,10 @@ async function backend() {
   const configured = { learningHandler, learningEnabled: () => {
     if (state.flagThrows) throw new Error('Synthetic flag unavailable');
     return state.flagResult === true;
-  } };
+  }, ...(testPreparation ? {
+    learningTestReceiptPreparation: preparation,
+    learningTestReceiptEnabled: () => state.testCapability === true,
+  } : {}) };
   const api = createSupportApi({ ...options, ...configured });
   function request(path = base, actor: Actor = 'staff', body?: unknown, extra: Record<string, string> = {}) {
     return new Request(IDENTITY_ISSUER + path, { method: body === undefined ? 'GET' : 'POST',
@@ -84,7 +104,7 @@ async function backend() {
       revokedBy: { kind: 'system', systemId: 'synthetic-routing' }, revokedAtEpochMs: Date.now(), auditEventId: 'routing-revoke-' + actor + '-' + role });
   }
   return { learning, identityRuntime, identity, sessions, host, options, configured, api, request, state, revoke,
-    cookies, csrf, ids, principals, actualHandler };
+    cookies, csrf, ids, principals, actualHandler, preparationCalls };
 }
 
 import { randomUUID } from 'node:crypto';
@@ -138,7 +158,10 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
     pauseLearning: undefined as ReturnType<typeof browserGate<void>> | undefined,
     pauseOrdinaryAck: undefined as ReturnType<typeof browserGate<void>> | undefined,
     pauseCurrentDetail: undefined as ReturnType<typeof browserGate<void>> | undefined,
-    loseMutationAck: false };
+    loseMutationAck: false,
+    losePreparationAck: false,
+    reportRead: undefined as unknown,
+    detailCapability: undefined as unknown };
   let reloads = 0;
   let activeRequests = 0;
   const window = Object.assign(new EventTarget(), { location: {
@@ -167,8 +190,24 @@ async function browser(f: Awaited<ReturnType<typeof backend>>, legacy = false) {
       calls.push(observed);
       if (isLearningPath(path) && state.pauseLearning) await state.pauseLearning.promise;
       const incoming = new Request(IDENTITY_ISSUER + path, { ...init, headers });
-      const response = path.startsWith('/api/identity/') ? await f.identityRuntime.api(incoming) : await api(incoming);
+      // Synthetic report DTOs isolate the actual page/controller wire contract;
+      // the registered Root suite owns real Knowledge report/bridge proof.
+      let response = path === '/api/staff/knowledge/command' && state.reportRead !== undefined
+        ? new Response(JSON.stringify(state.reportRead), { headers: { 'Content-Type': 'application/json' } })
+        : path.startsWith('/api/identity/') ? await f.identityRuntime.api(incoming) : await api(incoming);
+      if (path === base && response.ok && state.detailCapability !== undefined) {
+        const detail = await response.json();
+        if (detail === null || typeof detail !== 'object' || Array.isArray(detail))
+          throw new Error('The actual fixture detail must be an object.');
+        response = new Response(JSON.stringify({ ...detail, learningTestReceiptEnabled: state.detailCapability }),
+          { headers: { 'Content-Type': 'application/json' } });
+      }
       observed.serverStatus = response.status;
+      if (path.endsWith('/learning/test-receipt') && response.ok && state.losePreparationAck) {
+        state.losePreparationAck = false;
+        observed.status = 503;
+        return new Response(JSON.stringify({ error: 'synthetic_lost_preparation_ack' }), { status: 503 });
+      }
       const pathname = new URL(path, IDENTITY_ISSUER).pathname;
       const ordinaryMutation = (init.method === 'PATCH' && pathname === base) ||
         (init.method === 'POST' && (pathname === base + '/messages' || pathname === base + '/take-over'));
@@ -701,5 +740,182 @@ describe('registered public staff ticket and learning panel with real auth/SDK r
     expect(page.node('staff-learning-panel').textContent).not.toContain('Source ');
     page.state.pauseLearning.resolve();
     await page.idle();
+  });
+});
+
+function controllerReport() {
+  return {
+    articleId: 'Controller-Article',
+    ledgerEpoch: 1,
+    reportId: 'Controller-Report',
+    reportGeneration: 2,
+    expectedReportGeneration: 2,
+    status: 'confirmed',
+    receipt: 'e1.1.Controller-Report',
+    reviewBindingHash: 'b'.repeat(64),
+    confirmation: {
+      reviewerId: 'separate-fictional-reviewer',
+      confirmedAt: '2026-11-12T12:00:00.000Z',
+    },
+    report: {
+      summary: 'Controller transport fixture',
+      details: '<script>inert private report text</script>',
+    },
+    evidence: { result: 'passed' },
+  };
+}
+
+async function readControllerReport(page: Awaited<ReturnType<typeof browser>>) {
+  page.state.reportRead = controllerReport();
+  page.field('solution').value = 'learning-solution';
+  page.field('evidence-kind').value = 'successful_test';
+  page.field('evidence-kind').fire('change');
+  page.field('report-article').value = 'Controller-Article';
+  page.field('report-ledger').value = '1';
+  page.field('report-id').value = 'Controller-Report';
+  page.action('report-read');
+  await page.wait(() => !page.control('report-associate').disabled);
+  await page.idle();
+}
+
+describe('actual staff controller report-association wire with a controlled preparation ACK', () => {
+  it('forwards the real detail capability and genuine cookie/CSRF/current-role prepare route without permitting an ordinary race', async () => {
+    const f = await backend(true);
+    const enrolled = await f.learning.enrollAndVerify();
+    const page = await browser(f);
+    await page.ready();
+    expect(page.control('report-read').disabled).toBe(false);
+    await readControllerReport(page);
+    expect(page.node('staff-learning-panel').textContent).toContain(
+      '<script>inert private report text</script>',
+    );
+    page.action('report-associate');
+    await page.wait(() =>
+      page.node('staff-learning-panel').textContent.includes('Report associated.'),
+    );
+    await page.idle();
+    expect(page.pending()).toBe(true);
+    expect(page.node('action-assign').disabled).toBe(true);
+    expect(page.node('action-reopen').disabled).toBe(true);
+    expect(page.control('evidence').disabled).toBe(false);
+    expect(f.preparationCalls).toHaveLength(1);
+    expect(f.preparationCalls[0]).toMatchObject({
+      principalId: f.principals.staff,
+      input: {
+        ticketId: learningTicketId,
+        expectedRevision: enrolled.expectedRevision,
+        resolutionCycle: enrolled.resolutionCycle,
+        solutionMessageId: 'learning-solution',
+        report: {
+          articleId: 'Controller-Article',
+          reportId: 'Controller-Report',
+          ledgerEpoch: 1,
+          expectedReportGeneration: 2,
+          reviewBindingHash: 'b'.repeat(64),
+          receipt: 'e1.1.Controller-Report',
+        },
+      },
+    });
+    const reportRead = page.writes().find((call) => call.path === '/api/staff/knowledge/command')!;
+    expect(JSON.parse(reportRead.body!)).toEqual({
+      operation: 'reportRead',
+      input: {
+        articleId: 'Controller-Article',
+        ledgerEpoch: 1,
+        reportId: 'Controller-Report',
+      },
+    });
+    const prepare = page.writes().find((call) => call.path.endsWith('/learning/test-receipt'))!;
+    expect(prepare.status).toBe(200);
+    expect(prepare.csrf).toBe(f.csrf.get('staff'));
+    expect(JSON.parse(prepare.body!).expectedPrincipalId).toBe(f.principals.staff);
+    expect(page.writes().filter((call) => call.path.endsWith('/learning/evidence'))).toHaveLength(
+      0,
+    );
+    expect(f.learning.state.modelCalls).toBe(0);
+    page.window.dispatchEvent(new Event('pagehide'));
+    expect(page.node('staff-learning-panel').hidden).toBe(true);
+    expect(page.node('staff-learning-panel').textContent).not.toContain(
+      'inert private report text',
+    );
+  });
+
+  it('keeps the same unknown prepare packet across a normal reload and keeps prepared evidence when only preparation is disabled', async () => {
+    const f = await backend(true);
+    await f.learning.enrollAndVerify();
+    const page = await browser(f);
+    await page.ready();
+    await readControllerReport(page);
+    page.state.losePreparationAck = true;
+    page.action('report-associate');
+    await page.wait(() =>
+      page
+        .writes()
+        .some((call) => call.path.endsWith('/learning/test-receipt') && call.status === 503),
+    );
+    await page.idle();
+    const original = page.writes().find((call) => call.path.endsWith('/learning/test-receipt'))!;
+    expect(original.serverStatus).toBe(200);
+    expect(page.pending()).toBe(true);
+    await page.reload();
+    await page.ready('unresolved');
+    page.action('retry');
+    await page.wait(() =>
+      page.node('staff-learning-panel').textContent.includes('Report associated.'),
+    );
+    await page.idle();
+    const repeats = page.writes().filter((call) => call.path.endsWith('/learning/test-receipt'));
+    expect(repeats).toHaveLength(2);
+    expect(repeats[1]!.path).toBe(original.path);
+    expect(repeats[1]!.body).toBe(original.body);
+    expect(f.preparationCalls).toHaveLength(2);
+    expect(f.preparationCalls[1]).toEqual(f.preparationCalls[0]);
+    f.state.testCapability = false;
+    await page.reload();
+    await page.ready('unresolved');
+    expect(page.control('report-read').disabled).toBe(true);
+    expect(page.control('report-associate').disabled).toBe(true);
+    expect(page.control('retry').disabled).toBe(false);
+    expect(page.control('evidence').disabled).toBe(false);
+    expect(page.control('retry').textContent).toBe('Record evidence from the associated report');
+    expect(
+      page.writes().filter((call) => call.path === '/api/staff/knowledge/command'),
+    ).toHaveLength(1);
+    expect(f.learning.state.modelCalls).toBe(0);
+  });
+
+  it.each([false, 'true', 1])(
+    'keeps new preparation OFF for nontrue actual capability input %s',
+    async (capability) => {
+      const f = await backend(true);
+      f.state.testCapability = capability;
+      await f.learning.enrollAndVerify();
+      const page = await browser(f);
+      await page.ready();
+      expect(page.control('report-read').disabled).toBe(true);
+      expect(page.control('report-associate').disabled).toBe(true);
+      page.action('report-read');
+      page.action('report-associate');
+      await page.idle();
+      expect(page.writes()).toHaveLength(0);
+      expect(f.preparationCalls).toHaveLength(0);
+    },
+  );
+
+  it('refuses a malformed truthy capability in the staff detail DTO', async () => {
+    const f = await backend(true);
+    await f.learning.enrollAndVerify();
+    const page = await browser(f);
+    await page.ready();
+    page.state.detailCapability = 'true';
+    page.node('staff-ticket-reload').fire('click');
+    await page.wait(() =>
+      page.node('staff-ticket-status').textContent.includes('Could not confirm'),
+    );
+    await page.idle();
+    expect(page.node('staff-learning-panel').hidden).toBe(true);
+    expect(page.control('report-associate').disabled).toBe(true);
+    expect(f.preparationCalls).toHaveLength(0);
+    expect(page.writes()).toHaveLength(0);
   });
 });

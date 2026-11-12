@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BrowserNode,
+  browserGate,
   disposeSupportBrowsers,
   supportBrowser,
   type BrowserCall,
@@ -200,12 +201,27 @@ describe("staff successful test UI packet compatibility", () => {
     ).PegmaSupportLearning;
     const panel = factory.createPanel({
       root,
+      testReceiptEnabled: () => true,
       readSession: async () => identity,
       async request(path: string, init: RequestInit) {
         calls.push({
           path,
           body: typeof init?.body === "string" ? init.body : undefined,
         });
+        if (path === "/api/staff/knowledge/command") return confirmedReport();
+        if (path.endsWith("/test-receipt")) {
+          const command = JSON.parse(String(init.body));
+          return {
+            result: {
+              actorId: identity.subject,
+              ticketId: "ticket-example",
+              commandId: command.commandId,
+              receipt: "opaque-actually-verified-receipt",
+              validUntil: "2099-01-01T00:00:00.000Z",
+            },
+            csrfToken: identity.csrfToken,
+          };
+        }
         return {
           result: {
             ticketId: "ticket-example",
@@ -234,22 +250,29 @@ describe("staff successful test UI packet compatibility", () => {
     }
     field("solution").value = "solution-1";
     field("evidence-kind").value = "successful_test";
-    field("test-receipt").value = "opaque-actually-verified-receipt";
+    field("report-article").value = "Article-A";
+    field("report-ledger").value = "1";
+    field("report-id").value = "Report-A";
+    button("report-read").fire("click");
+    for (let turn = 0; turn < 100; turn++) await Promise.resolve();
+    button("report-associate").fire("click");
+    for (let turn = 0; turn < 100; turn++) await Promise.resolve();
     button("evidence").fire("click");
     for (let turn = 0; turn < 100; turn++) await Promise.resolve();
     expect(
-      JSON.parse(calls.find((call) => call.body)?.body ?? "{}"),
+      JSON.parse(calls.find((call) => call.path.endsWith("/evidence"))?.body ?? "{}"),
     ).toMatchObject({
       kind: "successful_test",
       solutionMessageId: "solution-1",
       receipt: "opaque-actually-verified-receipt",
     });
     expect(
-      JSON.parse(calls.find((call) => call.body)!.body!),
+      JSON.parse(calls.find((call) => call.path.endsWith("/evidence"))!.body!),
     ).not.toHaveProperty("verificationReference");
     await panel.refresh();
     field("solution").value = "solution-1";
     field("evidence-kind").value = "staff_verified_fix";
+    field("evidence-kind").fire("change");
     field("verification").value = "explicit-staff-reference";
     button("evidence").fire("click");
     for (let turn = 0; turn < 100; turn++) await Promise.resolve();
@@ -257,5 +280,536 @@ describe("staff successful test UI packet compatibility", () => {
     expect(flat.verificationReference).toBe("explicit-staff-reference");
     expect(flat).not.toHaveProperty("kind");
     expect(flat).not.toHaveProperty("receipt");
+  });
+});
+function confirmedReport() {
+  return {
+    articleId: "Article-A",
+    ledgerEpoch: 1,
+    reportId: "Report-A",
+    reportGeneration: 2,
+    expectedReportGeneration: 2,
+    status: "confirmed",
+    receipt: "e1.1.Report-A",
+    reviewBindingHash: "a".repeat(64),
+    confirmation: {
+      reviewerId: "separate-knowledge-reviewer",
+      confirmedAt: "2026-11-12T12:00:00.000Z",
+    },
+    report: {
+      summary: "<img src=x onerror=alert(1)>",
+      details: "A fictional confirmed report, displayed as inert text.",
+    },
+    evidence: { result: "passed" },
+  };
+}
+
+type TestReportCall = {
+  path: string;
+  body?: string;
+  csrf: string | null;
+  signal?: AbortSignal | null;
+};
+
+function reportPanel() {
+  const root = new BrowserNode("section");
+  const calls: TestReportCall[] = [];
+  const state = {
+    subject: "staff-a",
+    csrfToken: "csrf-a",
+    capability: true as unknown,
+    sessionError: 0,
+    report: confirmedReport(),
+    onRequest: undefined as ((call: TestReportCall) => Promise<unknown> | unknown) | undefined,
+  };
+  let nextCommand = 0;
+  const sandbox = {
+    document: { createElement: (tag: string) => new BrowserNode(tag) },
+    AbortController,
+    crypto: { randomUUID: () => "unused-random-id" },
+  };
+  runInNewContext(
+    readFileSync(new URL("../public/staff-support-learning.js", import.meta.url), "utf8"),
+    sandbox,
+  );
+  const factory = (
+    sandbox as typeof sandbox & {
+      PegmaSupportLearning: {
+        createPanel(options: unknown): {
+          showTicket(ticket: unknown): Promise<void>;
+          refresh(): Promise<void>;
+          suspend(): void;
+          hasPending(): boolean;
+        };
+      };
+    }
+  ).PegmaSupportLearning;
+  const panel = factory.createPanel({
+    root,
+    testReceiptEnabled: () => state.capability,
+    commandId: () => `Original-Command-${++nextCommand}`,
+    readSession: async () => {
+      if (state.sessionError)
+        throw Object.assign(new Error("Current access unavailable"), {
+          status: state.sessionError,
+        });
+      return { subject: state.subject, csrfToken: state.csrfToken };
+    },
+    async request(path: string, init: RequestInit = {}) {
+      const call = {
+        path,
+        body: typeof init.body === "string" ? init.body : undefined,
+        csrf: new Headers(init.headers).get("X-Pegma-CSRF"),
+        signal: init.signal,
+      };
+      calls.push(call);
+      const overridden = await state.onRequest?.(call);
+      if (overridden !== undefined) return overridden;
+      if (path === "/api/staff/knowledge/command") return state.report;
+      const ticketId = decodeURIComponent(path.split("/")[5]!);
+      const input = call.body ? JSON.parse(call.body) : undefined;
+      const source = {
+        ticketId,
+        sourceGeneration: 1,
+        resolutionCycle: 3,
+        state: "eligible",
+        reconciliationPending: false,
+      };
+      const result = path.endsWith("/test-receipt")
+        ? {
+            actorId: input.expectedPrincipalId,
+            ticketId,
+            commandId: input.commandId,
+            receipt: "opaque-support-receipt",
+            validUntil: "2099-01-01T00:00:00.000Z",
+          }
+        : path.endsWith("/evidence-recovery")
+          ? {
+              outcome: "accepted",
+              ticketId,
+              commandId: input.commandId,
+              operation: "evidence",
+              result: source,
+            }
+          : source;
+      return { result, csrfToken: state.csrfToken };
+    },
+  });
+  const field = (key: string) => {
+    const found = root.all().find((node) => node.dataset.learningField === key);
+    if (!found) throw new Error("Missing learning field " + key);
+    return found;
+  };
+  const button = (key: string) => {
+    const found = root.all().find((node) => node.dataset.learningAction === key);
+    if (!found) throw new Error("Missing learning action " + key);
+    return found;
+  };
+  const selected = (ticketId = "Ticket-A", revision = 7) => ({
+    ticketId,
+    revision,
+    actorSubject: state.subject,
+    status: "resolved",
+    resolvedAt: "2026-11-12T12:00:00.000Z",
+  });
+  const settle = async () => {
+    for (let turn = 0; turn < 150; turn++) await Promise.resolve();
+  };
+  async function readReport() {
+    field("solution").value = "Solution-A";
+    field("evidence-kind").value = "successful_test";
+    field("report-article").value = "Article-A";
+    field("report-ledger").value = "1";
+    field("report-id").value = "Report-A";
+    button("report-read").fire("click");
+    await settle();
+  }
+  return {
+    root,
+    calls,
+    state,
+    panel,
+    field,
+    button,
+    selected,
+    settle,
+    readReport,
+    writes: () => calls.filter((call) => call.body !== undefined),
+  };
+}
+
+describe("staff report association ownership in the actual learning panel", () => {
+  it.each([undefined, false, "true", 1])(
+    "does not prepare new receipts without strict capability %s",
+    async (capability) => {
+      const page = reportPanel();
+      page.state.capability = capability;
+      await page.panel.showTicket(page.selected());
+      expect(page.button("report-read").disabled).toBe(true);
+      expect(page.button("report-associate").disabled).toBe(true);
+      expect(
+        page.root.all().find((node) => node.dataset.learningField === "test-receipt"),
+      ).toBeUndefined();
+      page.button("report-read").fire("click");
+      await page.settle();
+      expect(page.writes()).toHaveLength(0);
+    },
+  );
+
+  it("reads a direct permitted report and freezes the original case-sensitive preparation and evidence coordinates", async () => {
+    const page = reportPanel();
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    const read = page.writes()[0]!;
+    expect(read.path).toBe("/api/staff/knowledge/command");
+    expect(JSON.parse(read.body!)).toEqual({
+      operation: "reportRead",
+      input: { articleId: "Article-A", ledgerEpoch: 1, reportId: "Report-A" },
+    });
+    expect(read.csrf).toBe("csrf-a");
+    expect(read.signal).toBeInstanceOf(AbortSignal);
+    expect(page.root.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(page.button("report-associate").disabled).toBe(false);
+    page.button("report-associate").fire("click");
+    await page.settle();
+    expect(page.panel.hasPending()).toBe(true);
+    const prepare = page.writes()[1]!;
+    expect(prepare.path).toBe("/api/support/admin/tickets/Ticket-A/learning/test-receipt");
+    expect(JSON.parse(prepare.body!)).toEqual({
+      commandId: "Original-Command-1",
+      expectedPrincipalId: "staff-a",
+      expectedRevision: 7,
+      resolutionCycle: 3,
+      solutionMessageId: "Solution-A",
+      report: {
+        articleId: "Article-A",
+        ledgerEpoch: 1,
+        reportId: "Report-A",
+        expectedReportGeneration: 2,
+        reviewBindingHash: "a".repeat(64),
+        receipt: "e1.1.Report-A",
+      },
+    });
+    expect(page.writes().filter((call) => call.path.endsWith("/evidence"))).toHaveLength(0);
+    page.button("evidence").fire("click");
+    await page.settle();
+    expect(JSON.parse(page.writes()[2]!.body!)).toEqual({
+      commandId: "Original-Command-2",
+      expectedRevision: 7,
+      resolutionCycle: 3,
+      solutionMessageId: "Solution-A",
+      kind: "successful_test",
+      receipt: "opaque-support-receipt",
+    });
+    expect(page.panel.hasPending()).toBe(false);
+  });
+
+  it.each([
+    { status: "pending" },
+    { status: "rejected" },
+    { evidence: { result: "failed" } },
+    { confirmation: null },
+  ])("shows an unqualified report without allowing association: %j", async (changed) => {
+    const page = reportPanel();
+    Object.assign(page.state.report, changed);
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    expect(page.root.textContent).toContain("existing Knowledge confirmation workflow");
+    expect(page.button("report-associate").disabled).toBe(true);
+    page.button("report-associate").fire("click");
+    await page.settle();
+    expect(page.writes()).toHaveLength(1);
+  });
+
+  it.each([
+    { articleId: "Other-Article" },
+    { reportId: "other-report" },
+    { ledgerEpoch: 2 },
+    { receipt: "r".repeat(201) },
+    { expectedReportGeneration: 1 },
+    { reviewBindingHash: "A".repeat(64) },
+  ])("refuses malformed or differently scoped report pins: %j", async (changed) => {
+    const page = reportPanel();
+    Object.assign(page.state.report, changed);
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    expect(page.button("report-associate").disabled).toBe(true);
+    expect(page.panel.hasPending()).toBe(false);
+    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("replays an unknown prepare using the exact original packet despite changed fields and ticket revision", async () => {
+    const page = reportPanel();
+    let lost = true;
+    page.state.onRequest = (call) => {
+      if (call.path.endsWith("/test-receipt") && lost) {
+        lost = false;
+        throw new TypeError("Fictional lost prepare ACK");
+      }
+    };
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.button("report-associate").fire("click");
+    await page.settle();
+    const original = page.writes()[1]!;
+    expect(page.panel.hasPending()).toBe(true);
+    await page.panel.showTicket(page.selected("Ticket-A", 99));
+    page.field("solution").value = "Changed-solution";
+    page.field("report-id").value = "Changed-report";
+    page.state.capability = false;
+    page.button("retry").fire("click");
+    await page.settle();
+    const repeated = page.writes()[2]!;
+    expect(repeated.path).toBe(original.path);
+    expect(repeated.body).toBe(original.body);
+    expect(page.root.textContent).toContain("Report associated");
+    page.button("evidence").fire("click");
+    await page.settle();
+    expect(JSON.parse(page.writes()[3]!.body!)).toMatchObject({
+      expectedRevision: 7,
+      resolutionCycle: 3,
+      solutionMessageId: "Solution-A",
+    });
+  });
+
+  it("retains prepared evidence and its receipt-first recovery after report/config removal", async () => {
+    const page = reportPanel();
+    let loseEvidence = true;
+    page.state.onRequest = (call) => {
+      if (call.path.endsWith("/evidence") && loseEvidence) {
+        loseEvidence = false;
+        throw new TypeError("Fictional lost SDK ACK");
+      }
+      if (call.path === "/api/staff/knowledge/command" && page.state.capability === false)
+        throw Object.assign(new Error("Unavailable old report"), { status: 404 });
+    };
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.button("report-associate").fire("click");
+    await page.settle();
+    page.state.capability = false;
+    await page.panel.showTicket(page.selected("Ticket-A", 8));
+    page.button("retry").fire("click");
+    await page.settle();
+    const original = page.writes().find((call) => call.path.endsWith("/evidence"))!;
+    expect(original).toBeDefined();
+    await page.panel.refresh();
+    page.button("retry").fire("click");
+    await page.settle();
+    const recovered = page.writes().find((call) => call.path.endsWith("/evidence-recovery"))!;
+    expect(recovered.body).toBe(original.body);
+    expect(page.panel.hasPending()).toBe(false);
+    expect(page.calls.filter((call) => call.path === "/api/staff/knowledge/command")).toHaveLength(
+      1,
+    );
+    expect(page.calls.filter((call) => call.path.endsWith("/test-receipt"))).toHaveLength(1);
+  });
+
+  it.each(["actorId", "ticketId", "commandId", "receipt", "validUntil", "extra"])(
+    "retains the raw prepare owner after an invalid ACK %s",
+    async (key) => {
+      const page = reportPanel();
+      page.state.onRequest = (call) => {
+        if (!call.path.endsWith("/test-receipt")) return;
+        const input = JSON.parse(call.body!);
+        const result: Record<string, unknown> = {
+          actorId: "staff-a",
+          ticketId: "Ticket-A",
+          commandId: input.commandId,
+          receipt: "opaque-support-receipt",
+          validUntil: "2099-01-01T00:00:00.000Z",
+        };
+        result[key] = key === "receipt" ? "r".repeat(201) : "wrong-scope";
+        return { result, csrfToken: "csrf-a" };
+      };
+      await page.panel.showTicket(page.selected());
+      await page.readReport();
+      page.button("report-associate").fire("click");
+      await page.settle();
+      expect(page.panel.hasPending()).toBe(true);
+      expect(page.button("evidence").disabled).toBe(true);
+      expect(page.root.textContent).not.toContain("Report associated");
+      expect(page.writes().filter((call) => call.path.endsWith("/evidence"))).toHaveLength(0);
+    },
+  );
+
+  it("fences an old report-read callback after navigating to another ticket", async () => {
+    const page = reportPanel();
+    const barrier = browserGate<unknown>();
+    page.state.onRequest = (call) =>
+      call.path === "/api/staff/knowledge/command" ? barrier.promise : undefined;
+    await page.panel.showTicket(page.selected());
+    const reading = page.readReport();
+    await page.settle();
+    const request = page.writes()[0]!;
+    await page.panel.showTicket(page.selected("Ticket-B", 20));
+    barrier.resolve(confirmedReport());
+    await reading;
+    await page.settle();
+    expect(request.signal?.aborted).toBe(true);
+    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+    expect(page.button("report-associate").disabled).toBe(true);
+    expect(page.panel.hasPending()).toBe(false);
+  });
+
+  it("does not let A's late prepare ACK overwrite B or issue evidence on B", async () => {
+    const page = reportPanel();
+    const barrier = browserGate<unknown>();
+    page.state.onRequest = (call) =>
+      call.path.endsWith("/test-receipt") ? barrier.promise : undefined;
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.button("report-associate").fire("click");
+    await page.settle();
+    const original = page.writes()[1]!;
+    await page.panel.showTicket(page.selected("Ticket-B", 20));
+    barrier.resolve({
+      result: {
+        actorId: "staff-a",
+        ticketId: "Ticket-A",
+        commandId: "Original-Command-1",
+        receipt: "opaque-support-receipt",
+        validUntil: "2099-01-01T00:00:00.000Z",
+      },
+      csrfToken: "csrf-a",
+    });
+    await page.settle();
+    expect(page.panel.hasPending()).toBe(true);
+    expect(page.root.textContent).not.toContain("Report associated");
+    expect(page.button("retry").disabled).toBe(true);
+    expect(page.button("evidence").disabled).toBe(true);
+    expect(page.writes()).toHaveLength(2);
+    page.state.onRequest = undefined;
+    await page.panel.showTicket(page.selected());
+    page.button("retry").fire("click");
+    await page.settle();
+    expect(page.writes()[2]!.body).toBe(original.body);
+    expect(page.root.textContent).toContain("Report associated");
+  });
+
+  it.each(["subject", "csrfToken"] as const)(
+    "requires closing same-session access after prepare: %s",
+    async (changed) => {
+      const page = reportPanel();
+      page.state.onRequest = (call) => {
+        if (!call.path.endsWith("/test-receipt")) return;
+        const input = JSON.parse(call.body!);
+        page.state[changed] = "changed-owner-or-session";
+        return {
+          result: {
+            actorId: "staff-a",
+            ticketId: "Ticket-A",
+            commandId: input.commandId,
+            receipt: "opaque-support-receipt",
+            validUntil: "2099-01-01T00:00:00.000Z",
+          },
+          csrfToken: "csrf-a",
+        };
+      };
+      await page.panel.showTicket(page.selected());
+      await page.readReport();
+      page.button("report-associate").fire("click");
+      await page.settle();
+      expect(page.panel.hasPending()).toBe(true);
+      expect(page.root.textContent).not.toContain("Report associated");
+      expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+      expect(page.writes().filter((call) => call.path.endsWith("/evidence"))).toHaveLength(0);
+    },
+  );
+  it("requires a new report read after changing its visible coordinates", async () => {
+    const page = reportPanel();
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.field("report-id").value = "Report-B";
+    page.button("report-associate").fire("click");
+    await page.settle();
+    expect(page.writes()).toHaveLength(1);
+    expect(page.panel.hasPending()).toBe(false);
+    page.field("report-id").fire("input");
+    expect(page.button("report-associate").disabled).toBe(true);
+    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("clears private report presentation when current report access is denied", async () => {
+    const page = reportPanel();
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.state.onRequest = (call) => {
+      if (call.path === "/api/staff/knowledge/command")
+        throw Object.assign(new Error("Current Knowledge access denied"), { status: 403 });
+    };
+    page.button("report-read").fire("click");
+    await page.settle();
+    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+    expect(page.button("report-associate").disabled).toBe(true);
+    expect(page.panel.hasPending()).toBe(false);
+  });
+
+  it("keeps preparation pending if closing current access is revoked", async () => {
+    const page = reportPanel();
+    page.state.onRequest = (call) => {
+      if (call.path.endsWith("/test-receipt")) page.state.sessionError = 403;
+    };
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.button("report-associate").fire("click");
+    await page.settle();
+    const original = page.writes()[1]!;
+    expect(page.panel.hasPending()).toBe(true);
+    expect(page.root.textContent).not.toContain("Report associated");
+    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+    page.state.sessionError = 0;
+    page.state.onRequest = undefined;
+    await page.panel.refresh();
+    page.button("retry").fire("click");
+    await page.settle();
+    expect(page.writes()[2]!.body).toBe(original.body);
+    expect(page.root.textContent).toContain("Report associated");
+  });
+
+  it("retains prepared evidence under its original actor while another account is current", async () => {
+    const page = reportPanel();
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.button("report-associate").fire("click");
+    await page.settle();
+    page.state.subject = "staff-b";
+    page.state.csrfToken = "csrf-b";
+    await page.panel.showTicket(page.selected());
+    expect(page.button("retry").disabled).toBe(true);
+    expect(page.button("evidence").disabled).toBe(true);
+    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+    expect(page.writes()).toHaveLength(2);
+    page.state.subject = "staff-a";
+    page.state.csrfToken = "csrf-a";
+    page.state.capability = false;
+    await page.panel.showTicket(page.selected("Ticket-A", 99));
+    page.button("retry").fire("click");
+    await page.settle();
+    expect(JSON.parse(page.writes()[2]!.body!)).toEqual({
+      commandId: "Original-Command-2",
+      expectedRevision: 7,
+      resolutionCycle: 3,
+      solutionMessageId: "Solution-A",
+      kind: "successful_test",
+      receipt: "opaque-support-receipt",
+    });
+    expect(page.writes()[2]!.csrf).toBe("csrf-a");
+    expect(page.panel.hasPending()).toBe(false);
+  });
+  it("disables association without claiming access loss when its capability turns OFF during a report read", async () => {
+    const page = reportPanel();
+    page.state.onRequest = (call) => {
+      if (call.path === "/api/staff/knowledge/command") page.state.capability = false;
+    };
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    expect(page.root.textContent).toContain("Test-report association is unavailable.");
+    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
+    expect(page.button("report-associate").disabled).toBe(true);
+    expect(page.panel.hasPending()).toBe(false);
+    page.field("evidence-kind").value = "staff_verified_fix";
+    page.field("evidence-kind").fire("change");
+    expect(page.button("evidence").disabled).toBe(false);
   });
 });

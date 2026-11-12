@@ -347,6 +347,7 @@ function validateView(view) {
     (view.engineeringReviewEnabled !== undefined && typeof view.engineeringReviewEnabled !== 'boolean') ||
     (view.learningReviewRecoveryEnabled !== undefined && typeof view.learningReviewRecoveryEnabled !== 'boolean') ||
     (view.learningEnabled !== undefined && typeof view.learningEnabled !== 'boolean') ||
+    (view.learningTestReceiptEnabled !== undefined && typeof view.learningTestReceiptEnabled !== 'boolean') ||
     (view.learningStagedReviewEnabled !== undefined && typeof view.learningStagedReviewEnabled !== 'boolean'))
     throw Object.assign(new Error('invalid_response'), { status: 502 });
   effectiveHandling(view.ticket);
@@ -848,6 +849,7 @@ if (learningRoot !== null && typeof globalThis.PegmaSupportLearning?.createPanel
   learning = globalThis.PegmaSupportLearning.createPanel({
     root: learningRoot,
     stagedReviewsEnabled: () => currentView?.learningStagedReviewEnabled === true,
+    testReceiptEnabled: () => currentView?.learningTestReceiptEnabled === true,
     request: (path, init) => learningRequest(() => api(path, init),
       learning.hasPendingReview?.() === true && /\/review(?:-receipt|-cancel|-queue(?:-status|-cancel)?)?$/u.test(path)),
     readSession: () => learningRequest(async () => {

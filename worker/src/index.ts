@@ -1,3 +1,7 @@
+import { hasPermission, serializeAccessContext, type AccessContext } from '@pegma/authorization-core';
+import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
+import { createAgentPrincipalResolver } from './agent-authority';
+import { createSupportLearningTestReceipts } from './support-learning-test-receipts';
 import { SUPPORT_ANSWERING_DISCLOSURE_VERSION, composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, supportAnsweringAdmissionEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
 import { createProductionSupportAnswering, type SupportAssistantProductionEnvironment } from './support-assistant-production';
 import { runSupportAssistantTimer } from './support-assistant-timer';
@@ -117,12 +121,24 @@ function knowledgeRetrievalEnabled(environment: {
   return environment.PEGMA_KNOWLEDGE_ENABLED === 'true';
 }
 
-function learningConfigured(options?: SupportLearningCompositionOptions): boolean {
+export type SupportLearningRootComposition = SupportLearningCompositionOptions & {
+  readonly testEvidence?: {
+    readonly retentionMilliseconds: number;
+    readonly governanceAccess: {
+      resolve(collectionId: string, signal: AbortSignal): Promise<{
+        readonly access: AccessContext;
+        readonly authorityVersion: string;
+      } | null>;
+    };
+  };
+};
+
+function learningConfigured(options?: SupportLearningRootComposition): boolean {
   try { return options !== undefined && (options.source !== undefined || options.production?.configuration !== undefined); }
   catch { return true; }
 }
 
-function learningWorkerEnabled(env: AppEnv, options?: SupportLearningCompositionOptions): boolean {
+function learningWorkerEnabled(env: AppEnv, options?: SupportLearningRootComposition): boolean {
   return env.PEGMA_SUPPORT_LEARNING_WORKER_ENABLED === 'true' && learningConfigured(options);
 }
 
@@ -153,7 +169,7 @@ function answeringInvocationEnvironment(environment: AppEnv): AppEnv {
  * without logging credentials, configuration, provider payloads or exceptions. */
 function logSupportCompositionFailure(
   logger: ReturnType<typeof createAppLogger>,
-  stage: 'answering_validation' | 'support_runtime' | 'answering_runtime' | 'engineering_checks' | 'learning_runtime',
+  stage: 'answering_validation' | 'support_runtime' | 'answering_runtime' | 'engineering_checks' | 'learning_runtime' | 'learning_test_receipts',
   surfaces?: { readonly engineering: boolean; readonly answering: boolean },
 ): void {
   try {
@@ -203,7 +219,7 @@ function createSupportHandler(
   answering: SupportAnsweringComposition = {},
   releaseFollowup: SupportReleaseFollowupComposition = {},
   engineeringProduction: SupportEngineeringProductionOptions = {},
-  learning?: SupportLearningCompositionOptions,
+  learning?: SupportLearningRootComposition,
 ) {
   let learningGraph: ReturnType<typeof createSupportLearningComposition> | undefined;
   if (learningConfigured(learning)) {
@@ -231,6 +247,102 @@ function createSupportHandler(
   const shared = configured || answerConfigured || followupConfigured || learningGraph !== undefined;
   const identityRuntime = createProductionIdentityRuntime(env, logger, shared ? 512 : undefined);
   let supportRuntime: ReturnType<typeof createSupportRuntime>;
+  let knowledgeHost: KnowledgeHostRuntime | null | undefined;
+  let testReceiptPreparation:
+    ReturnType<typeof createSupportLearningTestReceipts> | undefined;
+  let testReceiptAttached = false;
+  const testReceiptEnabled = () =>
+    testReceiptAttached &&
+    env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === "true" &&
+    knowledgeRetrievalEnabled(env);
+  if (
+    env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === "true" &&
+    knowledgeRetrievalEnabled(env) &&
+    learningGraph?.application.enabled === true
+  ) {
+    try {
+      const selected = learning?.testEvidence;
+      const productContext = learningGraph.application.productContext;
+      if (
+        selected !== undefined &&
+        typeof selected.governanceAccess?.resolve === "function" &&
+        productContext !== undefined
+      ) {
+        const sameAuthority = (value: {
+          access: AccessContext;
+          authorityVersion: string;
+        }) =>
+          JSON.stringify([
+            value.authorityVersion,
+            serializeAccessContext(value.access),
+          ]);
+        testReceiptPreparation = createSupportLearningTestReceipts({
+          store: identityRuntime.store,
+          clock: engineeringProduction.clock ?? systemClock,
+          support: () =>
+            testReceiptAttached ? supportRuntime?.application : undefined,
+          knowledge: () =>
+            testReceiptEnabled()
+              ? knowledgeHost?.knowledge().application
+              : undefined,
+          reports: () =>
+            testReceiptEnabled()
+              ? knowledgeHost?.knowledge().evidence
+              : undefined,
+          productContext,
+          retentionMilliseconds: selected.retentionMilliseconds,
+          async resolvePrincipal(principalId, signal) {
+            if (signal.aborted || !testReceiptEnabled()) return null;
+            const access =
+              await createAgentPrincipalResolver(supportRuntime)(principalId);
+            return signal.aborted || !testReceiptEnabled() ? null : access;
+          },
+          async readGovernance(collectionId, signal) {
+            if (signal.aborted || !testReceiptEnabled()) return null;
+            const before = await selected.governanceAccess.resolve(
+              collectionId,
+              signal,
+            );
+            if (
+              before === null ||
+              !hasPermission(
+                before.access,
+                knowledgePermissions.validationManage,
+              ) ||
+              typeof before.authorityVersion !== "string" ||
+              before.authorityVersion.length < 1 ||
+              before.authorityVersion.length > 200 ||
+              /[\u0000-\u001f\u007f]/u.test(before.authorityVersion) ||
+              signal.aborted ||
+              !testReceiptEnabled()
+            )
+              return null;
+            const authority = sameAuthority(before);
+            const application = knowledgeHost?.knowledge().application;
+            if (application === undefined) return null;
+            const value = await application.getGovernanceConfiguration(
+              before.access,
+              { collectionId },
+            );
+            const after = await selected.governanceAccess.resolve(
+              collectionId,
+              signal,
+            );
+            if (
+              after === null ||
+              signal.aborted ||
+              !testReceiptEnabled() ||
+              authority !== sameAuthority(after)
+            )
+              return null;
+            return value;
+          },
+        });
+      }
+    } catch {
+      logSupportCompositionFailure(logger, "learning_test_receipts");
+    }
+  }
   let learningIntakeAvailable = learningGraph !== undefined;
   if (production.attachRuntime?.({ store: identityRuntime.store,
     clock: engineeringProduction.clock ?? systemClock, application: () => supportRuntime.application }) === false)
@@ -246,14 +358,18 @@ function createSupportHandler(
         logger,
         ...(workerConfigured || learningGraph !== undefined ? { clock: engineeringProduction.clock ?? systemClock } : {}),
         ...(intake === undefined ? {} : { engineering: intake }),
-        ...(!learningIntakeAvailable ? {} : { resolutionLearning: learningGraph!.application }),
+        ...(!learningIntakeAvailable ? {} : { resolutionLearning: testReceiptPreparation === undefined
+          ? learningGraph!.application
+          : { ...learningGraph!.application, testReceipts: { verify: testReceiptPreparation.verify } } }),
         ...(followupConfigured ? { engineeringFollowup: supportReleaseFollowupApplicationOptions(releaseFollowup) } : {}),
         ...(!withAnswering || selectedAnswering.configuration === undefined
           ? {} : { assistantTurns: supportAnsweringTurns(selectedAnswering) }),
       };
-      return shared
+      const selected = shared
         ? createSupportRuntime({ ...dependencies, store: identityRuntime.store })
         : createProductionSupportRuntime(env, dependencies);
+      testReceiptAttached = learningIntakeAvailable && testReceiptPreparation !== undefined;
+      return selected;
     } catch (error) {
       if (learningIntakeAvailable) {
         // Retry once with the ordinary App defaults. Keep the source graph for
@@ -310,7 +426,6 @@ function createSupportHandler(
         () => env.PEGMA_SUPPORT_ASSISTANT_ENABLED === 'true');
     }
   }
-  let knowledgeHost: KnowledgeHostRuntime | null | undefined;
   if (learningConfigured(learning)) {
     try {
       if (learningGraph?.bindSupport(supportRuntime) !== true)
@@ -336,6 +451,10 @@ function createSupportHandler(
     logger,
     onCustomerMessageAccepted: answeringRuntime?.hintAccepted,
     ...(learningRuntime === undefined ? {} : { learningRuntime }),
+    ...(!testReceiptAttached || testReceiptPreparation === undefined ? {} : {
+      learningTestReceiptPreparation: testReceiptPreparation,
+      learningTestReceiptEnabled: testReceiptEnabled,
+    }),
     ...(learning === undefined ? {} : { learningEnabled: () =>
       learningIntakeAvailable && env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === 'true' && learningGraph?.ready() === true }),
     ...(configured ? { engineering: composeSupportEngineeringHuman(supportRuntime, logger, selectedEngineering) } : {}),
@@ -407,7 +526,7 @@ export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<type
   engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {},
   releaseFollowup: SupportReleaseFollowupComposition = {},
   engineeringProduction: SupportEngineeringProductionOptions = {},
-  learning?: SupportLearningCompositionOptions) {
+  learning?: SupportLearningRootComposition) {
   return async (request: Request): Promise<Response> => {
     const selectedAnswering = checkedAnswering(answering, logger);
     if (isSupportReleaseFollowupRequest(new URL(request.url).pathname) && !supportReleaseFollowupEnabled(releaseFollowup))
@@ -446,7 +565,7 @@ export function createWorker(options: {
   readonly engineeringProduction?: SupportEngineeringProductionOptions;
   readonly answering?: SupportAnsweringComposition;
   readonly releaseFollowup?: SupportReleaseFollowupComposition;
-  readonly learning?: SupportLearningCompositionOptions;
+  readonly learning?: SupportLearningRootComposition;
 } = {}) {
 const answeringFor = (env: AppEnv) => options.answering === undefined
   ? createProductionSupportAnswering(env)
@@ -467,14 +586,50 @@ const engineeringFor = (env: AppEnv): SupportEngineeringProductionOptions => {
   } };
   } catch { return {}; }
 };
-const learningFor = (env: AppEnv): SupportLearningCompositionOptions | undefined => {
+const learningFor = (env: AppEnv): SupportLearningRootComposition | undefined => {
   const supplied = options.learning;
   if (supplied === undefined) return undefined;
   try {
+    const intake = supplied.intake;
+    let selected: SupportLearningRootComposition =
+      intake === undefined
+        ? supplied
+        : {
+            ...supplied,
+            intake: {
+              ...intake,
+              enabled:
+                env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === "true" &&
+                intake.enabled === true,
+            },
+          };
+    const evidence = supplied.testEvidence;
+    if (evidence !== undefined) {
+      const governance = evidence.governanceAccess;
+      const current = () =>
+        options.learning === supplied &&
+        supplied.testEvidence === evidence &&
+        evidence.governanceAccess === governance &&
+        env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === "true" &&
+        knowledgeRetrievalEnabled(env);
+      selected = {
+        ...selected,
+        testEvidence: {
+          ...evidence,
+          governanceAccess: {
+            async resolve(collectionId, signal) {
+              if (signal.aborted || !current()) return null;
+              const value = await governance.resolve(collectionId, signal);
+              return signal.aborted || !current() ? null : value;
+            },
+          },
+        },
+      };
+    }
     const production = supplied.production;
-    if (production === undefined) return supplied;
+    if (production === undefined) return selected;
     const configuration = production.configuration;
-    return { ...supplied, production: { ...production,
+    return { ...selected, production: { ...production,
       intakeEnabled: env.PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED === 'true' && production.intakeEnabled === true,
       enabled: () => {
         try { return options.learning === supplied && supplied.production === production &&
