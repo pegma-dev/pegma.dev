@@ -221,9 +221,12 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
         }));
         result = { ticketId, intent: value.intent, draft: value.draft };
       } else {
-        // Recheck after the limiter and before reading the bounded body.
-        // The SDK operation resolves current authority again after the read.
-        const body = await withCurrentAccess(() => readJson(request, { timeoutMs: 10_000 }));
+        // These packets have a full original-browser admission after their
+        // bounded parse, before any domain operation. Other routes retain
+        // their existing pre-body observation.
+        const reportEvidence = operation === 'test-receipt' || operation === 'evidence' || operation === 'evidence-recovery';
+        const body = reportEvidence ? await readJson(request, { timeoutMs: 10_000 })
+          : await withCurrentAccess(() => readJson(request, { timeoutMs: 10_000 }));
         if (operation === "test-receipt") {
           const packet = exactObject(body, [
             "commandId",
@@ -326,6 +329,8 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
                 ](access, input),
             );
           } else {
+            // Keep the additional authority observation for legacy fix packets.
+            await current();
             const packet = exactObject(body, ['commandId', 'expectedRevision', 'resolutionCycle', 'solutionMessageId', 'verificationReference']);
             const clientCommandId = boundedString(packet.commandId, 1, 200);
             const expectedRevision = integer(packet.expectedRevision);

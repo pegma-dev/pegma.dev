@@ -2,6 +2,7 @@ import { createAgentAccess } from "@pegma/agent-access";
 import type { EvidenceSubmission } from "@pegma/knowledge-base-core";
 import { knowledgePermissions } from "@pegma/knowledge-base-contracts";
 import { knowledgeAgentScopes } from "@pegma/knowledge-base-mcp";
+import { createKnowledgeEvidenceReports } from "@pegma/knowledge-base-application";
 import { createMemoryStore } from "@pegma/storage-core";
 import { createSessionStore } from "@pegma/sessions";
 import {
@@ -28,6 +29,7 @@ async function fixture(
   options: {
     readonly sameOwner?: boolean;
     readonly delegated?: boolean;
+    readonly observations?: boolean;
     readonly articleId?: string;
     readonly result?: EvidenceSubmission["result"];
     readonly status?: "pending" | "confirmed" | "rejected";
@@ -62,12 +64,30 @@ async function fixture(
     },
   };
   let application = f.application;
+  const reports = options.observations
+    ? createKnowledgeEvidenceReports({
+        store,
+        clock: f.clock,
+        collectionName: "synthetic-support-learning-reports.v1",
+        confirmationPermission: KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION,
+        resolvePrincipal: f.resolve,
+        authoringContext: f.knowledge,
+        async readContext(access, articleId) {
+          return (
+            await f.knowledge.getAuthoringContext(access, {
+              articleId,
+              includeEvidence: true,
+            })
+          ).context;
+        },
+      })
+    : f.reports;
   const configuration: LearningTestReceiptOptions = {
     store,
     clock: f.clock,
     support: () => application,
     knowledge: () => f.knowledge,
-    reports: () => f.reports,
+    reports: () => reports,
     productContext,
     resolvePrincipal: (id) => f.resolve(id),
     retentionMilliseconds: 120_000,
@@ -327,6 +347,7 @@ async function fixture(
     application,
     productContext,
     configuration,
+    reports,
     state,
     grant,
     reporter,
@@ -348,6 +369,109 @@ async function fixture(
 }
 
 describe("staff-approved KB report associations", () => {
+  it.each([false, true])(
+    "uses actual paired report observations for original owner=%s without legacy hydration",
+    async (sameOwner) => {
+      const f = await fixture({
+        observations: true,
+        sameOwner,
+        delegated: sameOwner,
+      });
+      if (f.grant !== undefined) {
+        await f.grant.revoke();
+        await expect(f.grant.refused()).rejects.toMatchObject({
+          code: "invalid_token",
+        });
+      }
+      const input = await f.input();
+      const reports = {
+        ...f.reports,
+        async read(): Promise<never> {
+          throw new Error("Legacy hydration must remain unused");
+        },
+        verifier: {
+          async verify(): Promise<never> {
+            throw new Error("Legacy owner verification must remain unused");
+          },
+        },
+      };
+      const knowledge = {
+        ...f.f.knowledge,
+        async getAuthoringContext(): Promise<never> {
+          throw new Error(
+            "The actual report capability owns context observation",
+          );
+        },
+        async confirmAuthoringContext(): Promise<never> {
+          throw new Error(
+            "The actual report capability owns context confirmation",
+          );
+        },
+      };
+      const bridge = createSupportLearningTestReceipts({
+        ...f.configuration,
+        reports: () => reports,
+        knowledge: () => knowledge,
+      });
+      const prepared = await bridge.prepare(f.staff(), input);
+      expect(
+        await bridge.verify(
+          prepared.receipt,
+          await f.trust(input),
+          new AbortController().signal,
+        ),
+      ).toMatchObject({
+        receiptId: prepared.receipt,
+        runnerId: f.evidence.runnerId,
+      });
+      expect(await bridge.prepare(f.staff(), input)).toEqual(prepared);
+    },
+  );
+
+  it.each(["report", "reviewer", "governance"] as const)(
+    "closes %s changes with the actual report observation",
+    async (change) => {
+      const f = await fixture({ observations: true });
+      const input = await f.input(f.f.actors.admin);
+      f.state.policyHook = async () => {
+        f.state.policyHook = undefined;
+        if (change === "report") {
+          const current = await f.f.reports.read(f.f.actors.staff, f.reportKey);
+          await f.f.reports.decide(
+            f.f.actors.staff,
+            {
+              ...f.reportKey,
+              commandId: "paired-report-changed",
+              expectedReportGeneration: current.reportGeneration,
+              reviewBindingHash: current.reviewBindingHash,
+            },
+            "pending",
+          );
+        } else if (change === "reviewer") await f.f.revokeStaff();
+        else {
+          const current = await f.f.knowledge.getGovernanceConfiguration(
+            f.f.actors.admin,
+            { collectionId: f.collectionId },
+          );
+          await f.f.knowledge.putGovernanceConfiguration(f.f.actors.admin, {
+            ...f.f.command("paired-governance-changed", current.generation),
+            collectionId: f.collectionId,
+            configuration: {
+              ...current.configuration,
+              expectedStagingBuildId: "another-current-build",
+            },
+          });
+        }
+      };
+      await expect(
+        f.bridge.prepare(f.staff(f.f.actors.admin), input),
+      ).rejects.toBeInstanceOf(LearningTestReceiptError);
+      expect(await f.bridge.cleanup({ limit: 32 })).toMatchObject({
+        scanned: 0,
+      });
+    },
+  );
+
   it("resolves original browser authority at admission, before commit and after commit", async () => {
     const f = await fixture();
     const input = await f.input();

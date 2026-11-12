@@ -240,12 +240,14 @@ function createLearningRuntime(
       ensure(): void;
       current(): Promise<AccessContext>;
     }) => Promise<Result>,
+    successfulTest = false,
   ): Promise<Result> {
     const bound = structuredClone(original);
-    // Ordinary intake/evidence/withdrawal retain their standalone resolver
-    // path. Only reads and the exact review protocol share browser fences.
+    // Only the private Request-only factory supplies this instance's browser
+    // lane. Direct runtime calls retain independent authority observations.
     const browserOperation = lane === browserLane &&
-      (permission === supportPermissions.learningRead || permission === supportPermissions.learningReview);
+      (permission === supportPermissions.learningRead || permission === supportPermissions.learningReview ||
+        (successfulTest && permission === supportPermissions.learningEvidenceSubmit));
     const started = performance.now();
     const controller = new AbortController();
     const ensure = (): void => {
@@ -346,7 +348,7 @@ function createLearningRuntime(
       });
       boundary.ensure();
       return invoke(current, { ...fields, ...identity }, boundary.signal, boundary);
-    });
+    }, operation === 'successful_test');
   }
 
   function recoverIntake<Command extends { readonly ticketId: string; readonly clientCommandId: string; readonly expectedRevision: number }>(

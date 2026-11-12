@@ -13,6 +13,10 @@ import type {
   KnowledgeEvidenceReports,
 } from "@pegma/knowledge-base-application";
 import {
+  KnowledgeEvidenceReportsError,
+  KnowledgeEvidenceReportsUnavailableError,
+} from "@pegma/knowledge-base-application";
+import {
   supportPermissions,
   type ResolutionProductContext,
   type ResolutionProductContextPort,
@@ -58,7 +62,10 @@ type KnowledgeReads = Pick<
   KnowledgeBaseApplication,
   "getAuthoringContext" | "confirmAuthoringContext"
 >;
-type ReportReads = Pick<KnowledgeEvidenceReports, "read" | "verifier">;
+type ReportReads = Pick<
+  KnowledgeEvidenceReports,
+  "read" | "verifier" | "observations"
+>;
 interface BoundPorts {
   readonly support: SupportReads;
   readonly knowledge: KnowledgeReads;
@@ -132,6 +139,19 @@ export class LearningTestReceiptError extends Error {
 
 function refuse(code: LearningTestReceiptError["code"]): never {
   throw new LearningTestReceiptError(code);
+}
+async function reportBoundary<Value>(
+  read: () => Promise<Value>,
+): Promise<Value> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof KnowledgeEvidenceReportsUnavailableError)
+      refuse("unavailable");
+    if (error instanceof KnowledgeEvidenceReportsError)
+      refuse(error.code === "forbidden" ? "forbidden" : "changed");
+    throw error;
+  }
 }
 function text(value: unknown, maximum = 200): asserts value is string {
   if (
@@ -319,7 +339,7 @@ export async function cleanupSupportLearningTestReceipts(
   input: LearningTestReceiptCleanupInput,
 ) {
   if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 32)
-    refuse('invalid');
+    refuse("invalid");
   const records = options.store.collection(bindings);
   const now = () => instant(options.clock.now());
   const page = await records.scan(input);
@@ -327,7 +347,7 @@ export async function cleanupSupportLearningTestReceipts(
   for (const entry of page.records) {
     const row = entry.value;
     if (row.partition !== entry.key.partition || row.id !== entry.key.id)
-      refuse('changed');
+      refuse("changed");
     const references = row.references.filter(
       (ref) => instant(ref.retainUntil) > now(),
     );
@@ -501,7 +521,19 @@ export function createSupportLearningTestReceipts(
       reportId: prepared.report.reportId,
     };
     const actual = ports();
-    const view = await actual.reports.read(access, key);
+    const observations = actual.reports.observations;
+    if (
+      observations !== undefined &&
+      (typeof observations.observe !== "function" ||
+        typeof observations.confirm !== "function")
+    )
+      refuse("unavailable");
+    const reportObservation =
+      observations === undefined
+        ? undefined
+        : await reportBoundary(() => observations.observe(access, key));
+    const view =
+      reportObservation?.view ?? (await actual.reports.read(access, key));
     if (typeof view.receipt !== "string") refuse("unavailable");
     if (
       view.status !== "confirmed" ||
@@ -511,11 +543,15 @@ export function createSupportLearningTestReceipts(
       view.reviewBindingHash !== prepared.report.reviewBindingHash
     )
       refuse("changed");
-    const observed = await actual.knowledge.getAuthoringContext(access, {
-      articleId: key.articleId,
-      includeEvidence: true,
-    });
-    const context = observed.context;
+    const observed =
+      reportObservation === undefined
+        ? await actual.knowledge.getAuthoringContext(access, {
+            articleId: key.articleId,
+            includeEvidence: true,
+          })
+        : undefined;
+    const context =
+      reportObservation?.context ?? observed?.context ?? refuse("unavailable");
     const draft = context.draft.revision;
     const requirements = context.requirements;
     if (
@@ -532,13 +568,21 @@ export function createSupportLearningTestReceipts(
     const configuration = policy.configuration;
     const submission = view.evidence;
     const confirmation = view.confirmation;
-    const reviewer = await options.resolvePrincipal(
-      confirmation.reviewerId,
-      signal,
-    );
-    if (reviewer === null || reviewer.principalId !== confirmation.reviewerId)
-      refuse("forbidden");
-    reviewerPermissions(reviewer);
+    // The paired SDK capability observes and confirms the current reviewer.
+    // Legacy structural report ports retain their independent host checks.
+    const reviewer =
+      observations === undefined
+        ? await options.resolvePrincipal(confirmation.reviewerId, signal)
+        : undefined;
+    if (observations === undefined) {
+      if (
+        reviewer === null ||
+        reviewer === undefined ||
+        reviewer.principalId !== confirmation.reviewerId
+      )
+        refuse("forbidden");
+      reviewerPermissions(reviewer);
+    }
     const checkRule = requirements.checks.find(
       (rule) =>
         rule.id === submission.checkId && rule.testKind === submission.testKind,
@@ -593,42 +637,72 @@ export function createSupportLearningTestReceipts(
       )
         refuse("changed");
     }
-    if (
+    const ownerVerification =
       access.principalId === view.submittedBy &&
       hasPermission(access, knowledgePermissions.evidenceSubmit)
-    ) {
-      const verified = await actual.reports.verifier.verify({
-        access,
-        article: draft,
-        submission,
-        receipt: view.receipt,
-        configuration,
-      });
+        ? {
+            access,
+            article: draft,
+            submission,
+            receipt: view.receipt,
+            configuration,
+          }
+        : undefined;
+    if (observations !== undefined && reportObservation !== undefined) {
+      const [confirmed, latestPolicy] = await Promise.all([
+        reportBoundary(() =>
+          observations.confirm(
+            access,
+            reportObservation.observation,
+            ownerVerification,
+          ),
+        ),
+        options.readGovernance(draft.collectionId, signal),
+      ]);
       if (
-        verified === null ||
-        (await knowledgeDigest(verified)) !==
-          (await knowledgeDigest(attestation))
+        ports().reports.observations !== observations ||
+        confirmed.receipt !== view.receipt ||
+        (ownerVerification !== undefined &&
+          (confirmed.attestation === null ||
+            (await knowledgeDigest(confirmed.attestation)) !==
+              (await knowledgeDigest(attestation)))) ||
+        (await knowledgeDigest(latestPolicy)) !==
+          (await knowledgeDigest(policy))
+      )
+        refuse("changed");
+    } else {
+      if (ownerVerification !== undefined) {
+        const verified =
+          await actual.reports.verifier.verify(ownerVerification);
+        if (
+          verified === null ||
+          (await knowledgeDigest(verified)) !==
+            (await knowledgeDigest(attestation))
+        )
+          refuse("changed");
+      }
+      // Legacy ports retain the complete public report and KB closing reads.
+      if (observed === undefined) refuse("unavailable");
+      await actual.knowledge.confirmAuthoringContext(
+        access,
+        observed.observation,
+      );
+      const [final, latestPolicy, latestReviewer] = await Promise.all([
+        actual.reports.read(access, key),
+        options.readGovernance(draft.collectionId, signal),
+        options.resolvePrincipal(confirmation.reviewerId, signal),
+      ]);
+      if (
+        latestReviewer === null ||
+        reviewer === undefined ||
+        reviewer === null ||
+        authority(latestReviewer) !== authority(reviewer) ||
+        (await knowledgeDigest(final)) !== (await knowledgeDigest(view)) ||
+        (await knowledgeDigest(latestPolicy)) !==
+          (await knowledgeDigest(policy))
       )
         refuse("changed");
     }
-    // Different-staff association uses the authoritative public report/KB DTOs
-    // above, never another owner's AccessContext or private report storage.
-    await actual.knowledge.confirmAuthoringContext(
-      access,
-      observed.observation,
-    );
-    const [final, latestPolicy, latestReviewer] = await Promise.all([
-      actual.reports.read(access, key),
-      options.readGovernance(draft.collectionId, signal),
-      options.resolvePrincipal(confirmation.reviewerId, signal),
-    ]);
-    if (
-      latestReviewer === null ||
-      authority(latestReviewer) !== authority(reviewer) ||
-      (await knowledgeDigest(final)) !== (await knowledgeDigest(view)) ||
-      (await knowledgeDigest(latestPolicy)) !== (await knowledgeDigest(policy))
-    )
-      refuse("changed");
     check();
     ports();
     return {

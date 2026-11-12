@@ -1,6 +1,7 @@
 import { resolveAccess, type AccessContext } from '@pegma/authorization-core';
 import { createAgentPrincipalResolver } from './agent-authority';
 import { createKnowledgeEvidenceService } from './knowledge-evidence';
+import { controlledHumanBody } from './support-human-control-fixtures';
 import type { ResolutionProductContextPort } from '@pegma/support-desk-application';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryStore, type Store } from '@pegma/storage-core';
@@ -1219,6 +1220,34 @@ async function testEvidenceRootFixture(useDefaultBootstrap = false) {
 }
 
 describe("registered staff test association", () => {
+  it.each(['session', 'role', 'header', 'csrf', 'configuration'] as const)(
+    'closes %s changes during the registered preparation body before qualification', async (change) => {
+      const t = await testEvidenceRootFixture(true);
+      const before = await t.f.rows();
+      const body = await controlledHumanBody(t.request(t.path, t.packet));
+      const pending = t.call(t.worker, body.request);
+      try {
+        await body.waitFor(pending);
+        if (change === 'session') await t.identity.sessions.destroy('2'.repeat(43));
+        else if (change === 'role') {
+          const id = 'root-learning-' + SUPPORT_ROLE;
+          const role = await t.support.roleStore.getRoleAssignment(id);
+          if (role === null) throw new Error('Actual role absent');
+          await t.support.roleStore.revokeRoleAssignmentWithAudit({ assignmentId: id,
+            expectedConcurrencyToken: role.concurrencyToken,
+            revokedBy: { kind: 'system', systemId: 'fictional-body-race' },
+            revokedAtEpochMs: Date.now(), auditEventId: 'root-held-prepare-role-revoke' });
+        } else if (change === 'header') body.request.headers.set('Origin', 'https://changed.example.test');
+        else if (change === 'csrf') body.request.headers.set('X-Pegma-CSRF', 'changed-csrf');
+        else Reflect.set(t.env, SUPPORT_LEARNING_SOURCE_SETTING, undefined);
+      } finally { body.complete(); }
+      const response = await pending;
+      expect(response.status).toBe(change === 'session' ? 401 : change === 'configuration' ? 409 : 403);
+      expect(await response.json()).not.toHaveProperty('result');
+      expect(await t.f.rows()).toEqual(before);
+    },
+  );
+
   it("prepares for different staff from a confirmed report before KB evidence acceptance and replays its lost ACK", async () => {
     const t = await testEvidenceRootFixture();
     expect(t.reporter.principalId).not.toBe(t.staff.principalId);
