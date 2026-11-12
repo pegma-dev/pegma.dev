@@ -53,6 +53,7 @@
     "@pegma/support-desk-templates": "0.2.7",
     "@pegma/webhooks": "0.1.1",
     "agents": "^0.20.1",
+    "gpt-tokenizer": "4.1.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -71,6 +71,21 @@ import Base from '../layouts/Base.astro';
         required
       ></textarea>
 
+      <fieldset id="assistant-choice" data-disclosure-version="pegma-support-answering-1" hidden>
+        <legend>Optional AI assistance</legend>
+        <label>
+          <input id="assistant-preference" type="checkbox" />
+          Let an AI assistant answer this ticket when available.
+        </label>
+        <p class="form-note">
+          Your ticket and approved guidance may be sent to the configured AI provider
+          to prepare an answer. AI can make mistakes. Avoid including sensitive
+          information, and use Request a person on your ticket whenever you want human help.
+          If AI assistance is unavailable, your ticket goes to human support.
+        </p>
+      </fieldset>
+      <p id="assistant-status" class="form-note" role="status" aria-live="polite" hidden></p>
+
       <div class="account-inline">
         <button type="submit">Submit ticket</button>
       </div>

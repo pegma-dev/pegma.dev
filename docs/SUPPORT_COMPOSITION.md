@@ -4,8 +4,9 @@ Public host composition notes for authenticated product feedback on
 [pegma.dev](https://pegma.dev). This is the ecosystem's Cloudflare reference
 environment for Support Desk customer create / list / read / reply and a small
 staff operator surface over the same application services, including human
-requests, takeover and private handoff context. The human HTTP handlers keep
-assistant handling disabled.
+requests, takeover and private handoff context. Ordinary human HTTP handlers keep
+assistant handling disabled; the optional production composition uses a separate
+explicitly admitted browser route and defaults to OFF.
 
 The separate synthetic stage source defines its own Worker, Queue and D1
 binding with a scripted local model. It starts disabled and has no production
@@ -386,14 +387,38 @@ provider or activation result.
 ## Maintenance and health
 
 The separate cleanup cron (`0-58 * * * *`) runs one rotating task per
-invocation, including Support Desk queue repair, inactive projection sweep,
-each Support/Admin rate-limit policy and the separately gated learning-review
-discovery lane, for 18 exclusive lanes. Each task runs once per 18 eligible
-ticks, a nominal 18-19 minutes because minute 59 is omitted, with independent
-queue cursors and no writes for unchanged bookmarks.
-Identity Mail send and reconciliation have separate invocations
-(`* * * * *` and `1-59 * * * *`); KB ready hints and their isolated rate cleanup
-use the existing `0-57 * * * *` lane. No cron is added for human controls.
+invocation. With answering OFF, its 18 lanes cover Support queue repair,
+inactive projection sweep, each Support/Admin/engineering rate policy,
+Identity and Knowledge maintenance, and separately gated learning-review
+work. Each runs once per 18 eligible ticks (nominally 18-19 minutes because
+minute 59 is omitted). Unchanged bookmarks do not cause writes.
+
+The distinct all-minute trigger (`*/1 * * * *`) belongs exclusively to
+answering while processing is enabled. One physical invocation performs at
+most one preparation or paid stage, under the same 25-second bound including
+qualification; it never runs another maintenance job on that D1 allowance.
+This gives two simultaneous admitted turns four minute-spaced stages within
+the SDK's 300-second window, including across UTC midnight. The real Worker
+[composition tests](../worker/src/support-assistant-root-composition.test.ts)
+exercise this chronology with genuine Memory services and fictional provider
+responses. The [Native tests](../worker/src/support-assistant-production.d1.test.ts)
+separately meter every physical invocation at 50 D1 calls and 100 parameters.
+These local proofs do not establish deployed CPU or provider acceptance.
+
+While answering is enabled, its former global rate-window cleanup and
+retrieval-readiness jobs each become one of 20 exhaustive cleanup lanes.
+Their background throughput changes from roughly 90 seconds/3 minutes to
+20-21 minutes; all other cleanup work remains in the rotation. Request-time
+expiry and source/role proofs remain authoritative. With answering OFF, the
+all-minute trigger retains the original 39 rate and 19 readiness pages per
+hour and performs no Store work at minutes 58/59.
+
+Identity Mail send and reconciliation keep their separate invocations
+(`* * * * *` and `1-59 * * * *`), and release reconciliation retains its
+six-hour window. The configuration still has five cron entries. Local parser and Native
+validation cover the changed source separately;
+Cloudflare backend acceptance of the distinct all-minute expression and
+deployment remain operational checks.
 Mail send for support
 notifications is deferred (templates are defined; create/reply/staff reply omit
 notification for this host surface).
@@ -419,7 +444,6 @@ store probe runs only when `SUPPORT_HEALTH_PROBE` is exactly `"true"`.
 
 Built in the open by RetireGolden, LLC.
 
-
 ## Optional engineering human composition
 
 The [engineering assembly](SUPPORT_ENGINEERING.md) uses policy version 6.
@@ -431,6 +455,54 @@ The Worker accepts a trusted optional engineering composition. Its current
 enabled callback and dependency bundle gate the router and staff-detail hints.
 Human review has an additional strict current flag. The default Worker passes
 no engineering configuration, leaving intake, review and processing OFF.
+
+The optional [GitHub repository adapter](../worker/src/support-engineering-repository.ts)
+supplies Application `repositoryMetadata`, the AI `github` ports and Application
+`dispatchResults`. Its immutable allowlist identifies each repository, GitHub
+App and installation. A trusted host issuer must supply current, expiring
+App-JWT and installation-token authority. No issuer or live repository is
+configured by default. Each operation starts with read-only
+[installation discovery](https://docs.github.com/en/rest/apps/apps#get-a-repository-installation-for-the-authenticated-app)
+and [repository metadata](https://docs.github.com/en/rest/repos/repos#get-a-repository).
+Public visibility alone does not prove installation membership. Exact repository
+identity, visibility, installation and current host authority must agree.
+
+The existing runtime accepts `adapter.github` through its `ports` option; pass
+`adapter.repositoryMetadata` and `adapter.dispatchResults` to the existing
+Application engineering options. Creation also requires a separate current
+`issueCreationEnabled` callback, false when omitted. After the SDK durably starts
+dispatch, creation [mints an installation token](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
+with the exact numeric repository ID and only metadata-read and issues-write
+permissions. The bounded response must identify that single repository, selected
+scope, exact permissions and a live expiry. Fresh trusted authority is checked
+after minting. That ephemeral token supplies the exact SDK-approved title, body
+and labels in one [issue POST](https://docs.github.com/en/rest/issues/issues#create-an-issue).
+Credential minting and issue creation share the same operation deadline. The
+issue payload contains the approved fields and marker. An uncertain write stays
+with read-only reconciliation. Linking an existing issue records the private
+Support association.
+
+[Duplicate search](https://docs.github.com/en/rest/search/search#search-issues-and-pull-requests)
+uses trusted ordinary search terms scoped to the configured repository and
+issues, returning at most five candidates from one page. This bounded window
+is not an exhaustive duplicate guarantee. Reconciliation requires a unique
+exact SDK marker, direct issue readback and the expected GitHub App creator;
+link reconciliation instead checks the exact existing issue ID and number.
+Missing, incomplete, ambiguous or unavailable evidence stays unknown. The
+Application verifier independently rereads that evidence and binds its result
+to the SDK's retained dispatch identity. The marker does not attest the private
+request hash. Reconciliation remains read-only after creation is disabled or
+the local proposal body is withdrawn.
+
+One total deadline bounds authentication and all requests to ten seconds or the
+earlier caller deadline or credential expiry. An operation makes at most six
+GitHub requests, with at most 64 KiB per response, a 24 KiB issue payload, no
+pagination, retries or cached observations. The [metadata composition tests](../worker/src/support-engineering-repository.test.ts)
+and [issue transport tests](../worker/src/support-engineering-github.test.ts)
+use actual SDK policy, approval, dispatch and reconciliation over MemoryStore
+with fictional external responses. This optional capability adds no processor,
+scheduler or HTTP dispatch route, leaves the default Worker OFF, and does not
+qualify a live installation or production export policy.
 
 A configured staged-learning factory receives the same optional composition
 as its third `create` argument. It composes `composeSupportEngineeringHuman`

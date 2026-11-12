@@ -12,7 +12,11 @@ import {
 } from '@pegma/storage-core';
 import { describe, expect, it, vi } from 'vitest';
 import { runKnowledgeMaintenance } from './knowledge-maintenance';
-import { RATE_LIMIT_CRON, rateKnowledgeLaneAt } from './maintenance-schedule';
+import {
+  RATE_LIMIT_CRON,
+  rateKnowledgeBackgroundEligibleAt,
+  rateKnowledgeLaneAt,
+} from './maintenance-schedule';
 
 const START = '2026-11-08T00:00:00.000Z';
 const EXPIRED = '2026-11-08T00:02:00.000Z';
@@ -515,8 +519,7 @@ describe('knowledge maintenance', () => {
       } while (cursor !== undefined);
       return rows;
     }
-    const range = /^(\d+)-(\d+) \* \* \* \*$/.exec(RATE_LIMIT_CRON);
-    expect(range).not.toBeNull();
+    expect(RATE_LIMIT_CRON).toBe('*/1 * * * *');
     const hourly: { expired: number; oldestExpiredAgeMs: number }[] = [];
     const skippedMinutes: number[] = [];
     let completedTrafficCycles = 0;
@@ -538,8 +541,9 @@ describe('knowledge maintenance', () => {
       }
       const before = observed.scans.length;
       const utcMinute = new Date(at).getUTCMinutes();
-      const cronEligible =
-        utcMinute >= Number(range![1]) && utcMinute <= Number(range![2]);
+      // The all-minute trigger now also serves answering. This background
+      // workload follows the actual OFF dispatcher, including its 58/59 gaps.
+      const cronEligible = rateKnowledgeBackgroundEligibleAt(Date.parse(at));
       const eligible =
         cronEligible && rateKnowledgeLaneAt(Date.parse(at)) === 'rate_limits';
       if (eligible) {

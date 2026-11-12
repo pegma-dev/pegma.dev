@@ -24,6 +24,7 @@ import {
   type SupportDeskApplication,
   type ResolutionLearningOptions,
   type EngineeringOptions,
+  type AssistantTurnOptions,
 } from '@pegma/support-desk-application';
 import { defineTemplate } from '@pegma/support-desk-templates';
 import type { IdentityLinkProjector, IdentityPort } from './identity-contracts';
@@ -190,6 +191,8 @@ export interface SupportCompositionOptions {
   readonly engineeringMutationLimiter?: DurableRateLimiter;
   readonly resolutionLearning?: ResolutionLearningOptions;
   readonly engineering?: EngineeringOptions;
+  /** Explicit host configuration; omission keeps customer assistant intake OFF. */
+  readonly assistantTurns?: AssistantTurnOptions;
 }
 
 export interface SupportRuntime {
@@ -197,7 +200,7 @@ export interface SupportRuntime {
   /** Audited role store bound to this host's application partition
    * (docs/ROLE_ADOPTION_PLAN.md Phase 1). */
   readonly roleStore: RoleStore;
-  readonly application: SupportDeskApplication;
+  readonly application: ReturnType<typeof createSupportDeskApplication>;
   readonly clock: Clock;
   readonly createLimiter: DurableRateLimiter;
   readonly replyLimiter: DurableRateLimiter;
@@ -351,7 +354,8 @@ export function createSupportRuntime(
     store,
     clock,
     logger: options.logger,
-    assistantHandlingEnabled: false,
+    assistantHandlingEnabled: options.assistantTurns !== undefined,
+    ...(options.assistantTurns === undefined ? {} : { assistantTurns: options.assistantTurns }),
     allowedCategories: PEGMA_SUPPORT_CATEGORIES,
     queueTerminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
     ...(options.resolutionLearning === undefined ? {} : { resolutionLearning: options.resolutionLearning }),

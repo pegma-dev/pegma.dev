@@ -1,8 +1,20 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { createExecutionContext, createMessageBatch, getQueueResult } from 'cloudflare:test';
+import {
+  createExecutionContext,
+  createMessageBatch,
+  getQueueResult,
+} from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { resolveAccess } from '@pegma/authorization-core';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createRoleStore } from '@pegma/authorization-storage';
@@ -33,7 +45,11 @@ import {
   SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS,
   SUPPORT_ASSISTANT_WAKE_MARKER,
 } from './support-assistant-stage-queue';
-import { supportAssistantCheckpoints, SUPPORT_ASSISTANT_WORKER_ID } from './support-assistant';
+import {
+  supportAssistantCheckpoints,
+  SUPPORT_ASSISTANT_WORKER_ID,
+  SUPPORT_ASSISTANT_SCAN_LIMIT,
+} from './support-assistant';
 import { seedSupportAssistantStage } from './support-assistant-stage-seed';
 import {
   createStageIdentity,
@@ -63,7 +79,8 @@ const schema = [
   ),
 ];
 beforeAll(async () => {
-  for (const statement of schema) await env.IDENTITY_DB.prepare(statement).run();
+  for (const statement of schema)
+    await env.IDENTITY_DB.prepare(statement).run();
   await env.IDENTITY_DB.prepare(
     'CREATE TABLE IF NOT EXISTS STAGE_BUDGET_PROBE (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)',
   ).run();
@@ -83,8 +100,10 @@ function diagnostics() {
   let throwDiagnostic = false;
   vi.spyOn(console, 'info').mockImplementation((...args: unknown[]) => {
     const [label, fields] = args;
-    if (label === 'pegma.synthetic-answer-stage') observations.push(structuredClone(fields));
-    if (throwDiagnostic) throw new Error('Fictional coarse diagnostic failure.');
+    if (label === 'pegma.synthetic-answer-stage')
+      observations.push(structuredClone(fields));
+    if (throwDiagnostic)
+      throw new Error('Fictional coarse diagnostic failure.');
   });
   function last() {
     const value = observations.at(-1);
@@ -126,16 +145,20 @@ function delivery(
   } = {},
 ) {
   const id = options.id ?? 'fictional-native-stage-message';
-  const batch = createMessageBatch(options.queue ?? SUPPORT_ASSISTANT_STAGE_QUEUE, [
-    {
-      id,
-      timestamp: new Date(options.sentAt ?? systemClock.now()),
-      attempts: options.attempts ?? 1,
-      body: options.body ?? SUPPORT_ASSISTANT_WAKE_MARKER,
-    },
-  ]);
+  const batch = createMessageBatch(
+    options.queue ?? SUPPORT_ASSISTANT_STAGE_QUEUE,
+    [
+      {
+        id,
+        timestamp: new Date(options.sentAt ?? systemClock.now()),
+        attempts: options.attempts ?? 1,
+        body: options.body ?? SUPPORT_ASSISTANT_WAKE_MARKER,
+      },
+    ],
+  );
   const message = batch.messages[0];
-  if (message === undefined) throw new Error('Missing actual Workers pool message.');
+  if (message === undefined)
+    throw new Error('Missing actual Workers pool message.');
   // These spies call through. Pool0.18.8 retains retry disposition, not options.
   const acknowledge = vi.spyOn(message, 'ack');
   const retry = vi.spyOn(message, 'retry');
@@ -152,7 +175,8 @@ function delivery(
     const delay = retry.mock.calls[0]?.[0]?.delaySeconds;
     if (retried) {
       expect(Number.isSafeInteger(delay)).toBe(true);
-      if (delay === undefined) throw new Error('Missing actual bounded retry argument.');
+      if (delay === undefined)
+        throw new Error('Missing actual bounded retry argument.');
       expect(delay).toBeGreaterThanOrEqual(1);
       expect(delay).toBeLessThanOrEqual(60);
     }
@@ -220,7 +244,10 @@ interface StoredUsageLedger {
 // This definition never inserts, replaces or manufactures accounting rows.
 const usageRecords = defineCollection<StoredRecord>({
   name: 'pegma.support-assistant-usage.v1',
-  key: (value) => ({ partition: String(value.partition), id: String(value.id) }),
+  key: (value) => ({
+    partition: String(value.partition),
+    id: String(value.id),
+  }),
   codec: {
     encode: (value) => ({ ...value }),
     decode: (value) => ({ ...value }),
@@ -242,7 +269,8 @@ async function assertPaidLedger() {
   );
   expect(paid).toHaveLength(1);
   const attempt = paid[0];
-  if (attempt === undefined) throw new Error('Missing genuine paid SDK attempt.');
+  if (attempt === undefined)
+    throw new Error('Missing genuine paid SDK attempt.');
   expect(completed.processing).toMatchObject({
     inputTokens: 100,
     outputTokens: 30,
@@ -251,7 +279,9 @@ async function assertPaidLedger() {
   });
   const digest = await crypto.subtle.digest(
     'SHA-256',
-    new TextEncoder().encode(JSON.stringify(['reservation', attempt.binding.usageReservationId])),
+    new TextEncoder().encode(
+      JSON.stringify(['reservation', attempt.binding.usageReservationId]),
+    ),
   );
   const reservationHash = Array.from(new Uint8Array(digest), (value) =>
     value.toString(16).padStart(2, '0'),
@@ -266,12 +296,21 @@ async function assertPaidLedger() {
     reservedMicros: 10_000,
     deadline: attempt.binding.deadline,
     state: 'known',
-    usage: { inputTokens: 100, outputTokens: 30, costMicros: 10, currency: 'USD' },
+    usage: {
+      inputTokens: 100,
+      outputTokens: 30,
+      costMicros: 10,
+      currency: 'USD',
+    },
   });
   const reservation = ledger?.reservations[0];
   if (reservation === undefined || reservation.terminalAt === null)
     throw new Error('Missing actual terminal usage settlement.');
-  for (const hash of [reservation.attemptHash, reservation.identityHash, reservation.bindingHash])
+  for (const hash of [
+    reservation.attemptHash,
+    reservation.identityHash,
+    reservation.bindingHash,
+  ])
     expect(hash).toMatch(/^[0-9a-f]{64}$/u);
   expect(Date.parse(reservation.terminalAt)).toBeGreaterThanOrEqual(
     Date.parse(reservation.createdAt),
@@ -287,7 +326,10 @@ async function currentAccess(principalId: string) {
     roleStore: createRoleStore(currentStore, AUTHORIZATION_APPLICATION_ID),
   })(principalId);
   if (principal === null) throw new Error('Missing real fixture principal.');
-  return resolveAccess({ principalId, roles: principal.roles }, stageCustomerPolicy);
+  return resolveAccess(
+    { principalId, roles: principal.roles },
+    stageCustomerPolicy,
+  );
 }
 
 async function withdrawCustomer(
@@ -297,7 +339,9 @@ async function withdrawCustomer(
   const backing = store();
   if (kind === 'role') {
     const roles = createRoleStore(backing, AUTHORIZATION_APPLICATION_ID);
-    const observed = await roles.getRoleAssignment('fixture-role-' + stageIds.owner);
+    const observed = await roles.getRoleAssignment(
+      'fixture-role-' + stageIds.owner,
+    );
     if (observed === null) throw new Error('Missing actual seeded assignment.');
     expect(
       await roles.revokeRoleAssignmentWithAudit({
@@ -341,16 +385,21 @@ async function withdrawCustomer(
       emailVerified: true,
     });
     const remove = removal.perform;
-    if (remove === undefined) throw new Error('No SDK user lookup was observed.');
+    if (remove === undefined)
+      throw new Error('No SDK user lookup was observed.');
     expect(await remove()).toBe(true);
     expect(await identity.getUser(stageIds.owner)).toBeNull();
-    await expect(identity.claimsFor(stageIds.owner)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(identity.claimsFor(stageIds.owner)).rejects.toMatchObject({
+      code: 'not_found',
+    });
   } else {
     const knowledge = createStageKnowledge(backing, systemClock, () =>
       stageScenarioCurrent(scenario, systemClock),
     );
     const access = await currentAccess(stageIds.administrator);
-    const draft = await knowledge.getDraft(access, { articleId: stageIds.article });
+    const draft = await knowledge.getDraft(access, {
+      articleId: stageIds.article,
+    });
     expect(
       await knowledge.retireArticle(access, {
         articleId: stageIds.article,
@@ -364,7 +413,9 @@ async function withdrawCustomer(
 
 async function persistedAnswers() {
   const rows = await store().collection(supportRecords).list(stageIds.ticket);
-  return rows.filter((row) => row.kind === 'message' && row.message.authorKind === 'assistant');
+  return rows.filter(
+    (row) => row.kind === 'message' && row.message.authorKind === 'assistant',
+  );
 }
 
 async function answers() {
@@ -375,7 +426,8 @@ async function answers() {
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
     roleStore: createRoleStore(currentStore, AUTHORIZATION_APPLICATION_ID),
   })(stageIds.owner);
-  if (principal === null) throw new Error('Seeded verified owner became unavailable.');
+  if (principal === null)
+    throw new Error('Seeded verified owner became unavailable.');
   const access = resolveAccess(
     { principalId: stageIds.owner, roles: principal.roles },
     stageCustomerPolicy,
@@ -394,12 +446,14 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
   }) => {
     const logs = diagnostics();
     // Retain actual profiles even if a later semantic assertion fails.
-    Object.assign(task.meta, { supportAssistantStageEntryProfiles: logs.observations });
+    Object.assign(task.meta, {
+      supportAssistantStageEntryProfiles: logs.observations,
+    });
     const scenario = createSupportAssistantStageScenario(systemClock);
     await seedSupportAssistantStage(env.IDENTITY_DB, scenario);
-    await expect(seedSupportAssistantStage(env.IDENTITY_DB, scenario)).rejects.toThrow(
-      'empty isolated',
-    );
+    await expect(
+      seedSupportAssistantStage(env.IDENTITY_DB, scenario),
+    ).rejects.toThrow('empty isolated');
     const sentAt = systemClock.now();
     const first = delivery({ sentAt });
     const firstEnv = environment(scenario);
@@ -423,7 +477,10 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
       reservationCalls: 0,
     });
     withinBudget(logs.last());
-    if (prepared.nextAttemptAt === undefined || firstDecision.delay === undefined)
+    if (
+      prepared.nextAttemptAt === undefined ||
+      firstDecision.delay === undefined
+    )
       throw new Error('Missing actual prepared due time.');
     const retryAt = Math.max(
       Date.parse(prepared.nextAttemptAt),
@@ -435,8 +492,13 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     logs.throwOnWrite();
     const second = delivery({ id: first.id, sentAt, attempts: 2 });
     const secondEnv = environment(scenario);
-    await expect(stageEntry.queue(second.batch, secondEnv.options)).resolves.toBeUndefined();
-    expect(await second.decision()).toMatchObject({ acked: true, retried: false });
+    await expect(
+      stageEntry.queue(second.batch, secondEnv.options),
+    ).resolves.toBeUndefined();
+    expect(await second.decision()).toMatchObject({
+      acked: true,
+      retried: false,
+    });
     expect(await answers()).toHaveLength(1);
     expect((await job()).status).toBe('completed');
     const settledLedger = await assertPaidLedger();
@@ -450,17 +512,24 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     withinBudget(logs.last());
     expect(firstEnv.bindingReads()).toBe(1);
     expect(secondEnv.bindingReads()).toBe(1);
-    // A completed job does not make a one-row physical scan empty. The SDK
-    // can encounter terminal work, messages or receipts and advance its cursor.
-    // Observe that exact public SDK page before each distinct queue invocation.
+    // Preview the same configured public SDK page as the real runtime. A
+    // one-row preview has a different opaque cursor from the bounded 32-row page.
+    // Terminal work, messages and receipts still count as physical rows.
     const scanObservations: unknown[] = [];
-    Object.assign(task.meta, { supportAssistantStageDuplicateScans: scanObservations });
+    Object.assign(task.meta, {
+      supportAssistantStageDuplicateScans: scanObservations,
+    });
     let acknowledged = false;
-    for (let attempts = 3; attempts <= SUPPORT_ASSISTANT_WAKE_DELIVERIES; ++attempts) {
+    for (
+      let attempts = 3;
+      attempts <= SUPPORT_ASSISTANT_WAKE_DELIVERIES;
+      ++attempts
+    ) {
       const before = await store()
         .collection(supportAssistantCheckpoints)
         .get({ partition: 'support-answering', id: 'scan' });
-      if (before === null) throw new Error('Missing actual post-answer checkpoint.');
+      if (before === null)
+        throw new Error('Missing actual post-answer checkpoint.');
       const previewApplication = createSupportDeskApplication({
         store: store(),
         clock: systemClock,
@@ -474,14 +543,19 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
           defaults: [supportPermissions.assistantRead],
         },
       );
-      const page = await previewApplication.scanAssistantTurnCandidates(scanAccess, {
-        limit: 1,
-        ...(before.cursor === null ? {} : { cursor: before.cursor }),
-      });
+      const page = await previewApplication.scanAssistantTurnCandidates(
+        scanAccess,
+        {
+          limit: SUPPORT_ASSISTANT_SCAN_LIMIT,
+          ...(before.cursor === null ? {} : { cursor: before.cursor }),
+        },
+      );
       expect(page.candidates).toEqual([]);
       expect(page.pages).toBe(1);
       expect(page.physicalRows).toBeGreaterThanOrEqual(0);
-      expect(page.physicalRows).toBeLessThanOrEqual(1);
+      expect(page.physicalRows).toBeLessThanOrEqual(
+        SUPPORT_ASSISTANT_SCAN_LIMIT,
+      );
       const duplicate = delivery({ id: first.id, sentAt, attempts });
       const duplicateEnv = environment(scenario);
       await stageEntry.queue(duplicate.batch, duplicateEnv.options);
@@ -489,10 +563,14 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
       const after = await store()
         .collection(supportAssistantCheckpoints)
         .get({ partition: 'support-answering', id: 'scan' });
-      expect(after).toMatchObject({ generation: before.generation + 1, cursor: page.nextCursor });
-      // Existing Queue policy retries an acknowledged one-row filtered page,
-      // then stops at its existing delivery cap even if physical rows remain.
-      const retry = page.physicalRows === 1 && attempts < SUPPORT_ASSISTANT_WAKE_DELIVERIES;
+      expect(after).toMatchObject({
+        generation: before.generation + 1,
+        cursor: page.nextCursor,
+      });
+      // Every nonempty filtered page retries under the existing Queue policy,
+      // and the same delivery cap still bounds all continuation attempts.
+      const retry =
+        page.physicalRows > 0 && attempts < SUPPORT_ASSISTANT_WAKE_DELIVERIES;
       scanObservations.push({
         attempts,
         physicalRows: page.physicalRows,
@@ -535,7 +613,9 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
   }) => {
     const logs = diagnostics();
     // Retain actual profiles even if a later semantic assertion fails.
-    Object.assign(task.meta, { supportAssistantStageEntryProfiles: logs.observations });
+    Object.assign(task.meta, {
+      supportAssistantStageEntryProfiles: logs.observations,
+    });
     const scenario = createSupportAssistantStageScenario(systemClock);
     await seedSupportAssistantStage(env.IDENTITY_DB, scenario);
     const sentAt = systemClock.now();
@@ -543,9 +623,9 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     first.retry.mockImplementationOnce(() => {
       throw new Error('Fictional broker interruption after SDK preparation.');
     });
-    await expect(stageEntry.queue(first.batch, environment(scenario).options)).rejects.toThrow(
-      'broker interruption',
-    );
+    await expect(
+      stageEntry.queue(first.batch, environment(scenario).options),
+    ).rejects.toThrow('broker interruption');
     expect(first.acknowledge).not.toHaveBeenCalled();
     const prepared = await job();
     expect(prepared).toMatchObject({
@@ -566,9 +646,16 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     vi.setSystemTime(new Date(Date.parse(prepared.nextAttemptAt)));
     const retry = delivery({ id: first.id, sentAt, attempts: 2 });
     await stageEntry.queue(retry.batch, environment(scenario).options);
-    expect(await retry.decision()).toMatchObject({ acked: true, retried: false });
+    expect(await retry.decision()).toMatchObject({
+      acked: true,
+      retried: false,
+    });
     expect(await answers()).toHaveLength(1);
-    expect(logs.last()).toMatchObject({ modelCalls: 1, reservationCalls: 1, disposition: 'ack' });
+    expect(logs.last()).toMatchObject({
+      modelCalls: 1,
+      reservationCalls: 1,
+      disposition: 'ack',
+    });
     await assertPaidLedger();
     withinBudget(logs.last());
     Object.assign(task.meta, {
@@ -580,7 +667,9 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     'honors real %s withdrawal after durable preparation in a reconstructed delivery',
     async (kind, { task }) => {
       const logs = diagnostics();
-      Object.assign(task.meta, { supportAssistantStageEntryProfiles: logs.observations });
+      Object.assign(task.meta, {
+        supportAssistantStageEntryProfiles: logs.observations,
+      });
       const scenario = createSupportAssistantStageScenario(systemClock);
       await seedSupportAssistantStage(env.IDENTITY_DB, scenario);
       const sentAt = systemClock.now();
@@ -599,7 +688,12 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
       if (prepared.nextAttemptAt === undefined || decision.delay === undefined)
         throw new Error('Missing genuine prepared retry.');
       vi.setSystemTime(
-        new Date(Math.max(Date.parse(prepared.nextAttemptAt), Date.now() + decision.delay * 1000)),
+        new Date(
+          Math.max(
+            Date.parse(prepared.nextAttemptAt),
+            Date.now() + decision.delay * 1000,
+          ),
+        ),
       );
       const retry = delivery({ id: first.id, sentAt, attempts: 2 });
       const reconstructed = environment(scenario);
@@ -623,7 +717,9 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     task,
   }) => {
     const logs = diagnostics();
-    Object.assign(task.meta, { supportAssistantStageEntryProfiles: logs.observations });
+    Object.assign(task.meta, {
+      supportAssistantStageEntryProfiles: logs.observations,
+    });
     const scenario = createSupportAssistantStageScenario(systemClock);
     await seedSupportAssistantStage(env.IDENTITY_DB, scenario);
     let completedReads = 0;
@@ -632,7 +728,8 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
         if (property === 'batch')
           return async <T>(statements: D1PreparedStatement[]) => {
             const result = await backing.batch<T>(statements);
-            if (++completedReads === 1) vi.setSystemTime(new Date(scenario.validUntil));
+            if (++completedReads === 1)
+              vi.setSystemTime(new Date(scenario.validUntil));
             return result;
           };
         const value = Reflect.get(backing, property, backing);
@@ -669,8 +766,14 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     { name: 'unsafe integer attempt', attempts: Number.MAX_SAFE_INTEGER + 1 },
     { name: 'future timestamp', age: -1 },
     { name: 'invalid timestamp', age: Number.NaN },
-    { name: 'exact fifteen-minute expiry', age: SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS },
-    { name: 'past fifteen-minute expiry', age: SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS + 1 },
+    {
+      name: 'exact fifteen-minute expiry',
+      age: SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS,
+    },
+    {
+      name: 'past fifteen-minute expiry',
+      age: SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS + 1,
+    },
   ])('rejects $name before the D1 getter', async (input) => {
     const logs = diagnostics();
     const now = Date.now();
@@ -705,72 +808,95 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
     expect(result.explicitAcks).toEqual([current.id]);
     expect(result.retryMessages).toEqual([]);
     expect(bindingReads).toBe(0);
-    expect(logs.last()).toMatchObject({ physicalQueries: 0, modelCalls: 0, reservationCalls: 0 });
+    expect(logs.last()).toMatchObject({
+      physicalQueries: 0,
+      modelCalls: 0,
+      reservationCalls: 0,
+    });
   });
 
   it('admits a still-current wakeup but refuses a prepared retry crossing its message expiry', async ({
     task,
   }) => {
     const logs = diagnostics();
-    Object.assign(task.meta, { supportAssistantStageEntryProfiles: logs.observations });
+    Object.assign(task.meta, {
+      supportAssistantStageEntryProfiles: logs.observations,
+    });
     const scenario = createSupportAssistantStageScenario(systemClock);
     await seedSupportAssistantStage(env.IDENTITY_DB, scenario);
     const now = Date.now();
     vi.setSystemTime(new Date(now));
-    const sentAt = new Date(now - SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS + 1000).toISOString();
+    const sentAt = new Date(
+      now - SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS + 1000,
+    ).toISOString();
     const current = delivery({ sentAt });
     const options = environment(scenario);
     await stageEntry.queue(current.batch, options.options);
-    expect(await current.decision()).toMatchObject({ acked: true, retried: false });
+    expect(await current.decision()).toMatchObject({
+      acked: true,
+      retried: false,
+    });
     const prepared = await job();
     expect(prepared).toMatchObject({
       status: 'retry',
       preparedAttempts: [{ accounting: 'not_called' }],
     });
-    if (prepared.nextAttemptAt === undefined) throw new Error('Missing actual prepared due time.');
+    if (prepared.nextAttemptAt === undefined)
+      throw new Error('Missing actual prepared due time.');
     expect(Date.parse(prepared.nextAttemptAt)).toBeGreaterThanOrEqual(
       Date.parse(sentAt) + SUPPORT_ASSISTANT_WAKE_AGE_MILLISECONDS,
     );
-    expect(logs.last()).toMatchObject({ outcome: 'prepared', modelCalls: 0, reservationCalls: 0 });
+    expect(logs.last()).toMatchObject({
+      outcome: 'prepared',
+      modelCalls: 0,
+      reservationCalls: 0,
+    });
     withinBudget(logs.last());
     expect(options.bindingReads()).toBe(1);
     expect(await usageLedger()).toBeNull();
     expect(await persistedAnswers()).toEqual([]);
   });
 
-  it.each([0, 2])('bounds a physical batch of %i messages before the D1 getter', async (count) => {
-    const logs = diagnostics();
-    const scenario = createSupportAssistantStageScenario(systemClock);
-    let bindingReads = 0;
-    const options: SupportAssistantIsolatedStageEnvironment = {
-      PEGMA_SUPPORT_ASSISTANT_STAGE_TARGET: 'isolated-stage',
-      PEGMA_SUPPORT_ASSISTANT_STAGE_ENABLED: 'true',
-      PEGMA_SUPPORT_ASSISTANT_STAGE_SCENARIO_JSON: JSON.stringify(scenario),
-      get ASSISTANT_STAGE_DB() {
-        ++bindingReads;
-        return env.IDENTITY_DB;
-      },
-    };
-    const batch = createMessageBatch(
-      SUPPORT_ASSISTANT_STAGE_QUEUE,
-      Array.from({ length: count }, (_, index) => ({
-        id: 'fictional-batch-' + index,
-        timestamp: new Date(),
-        attempts: 1,
-        body: SUPPORT_ASSISTANT_WAKE_MARKER,
-      })),
-    );
-    if (count === 0) await stageEntry.queue(batch, options);
-    else
-      await expect(stageEntry.queue(batch, options)).rejects.toThrow(
-        'Unexpected isolated stage queue',
+  it.each([0, 2])(
+    'bounds a physical batch of %i messages before the D1 getter',
+    async (count) => {
+      const logs = diagnostics();
+      const scenario = createSupportAssistantStageScenario(systemClock);
+      let bindingReads = 0;
+      const options: SupportAssistantIsolatedStageEnvironment = {
+        PEGMA_SUPPORT_ASSISTANT_STAGE_TARGET: 'isolated-stage',
+        PEGMA_SUPPORT_ASSISTANT_STAGE_ENABLED: 'true',
+        PEGMA_SUPPORT_ASSISTANT_STAGE_SCENARIO_JSON: JSON.stringify(scenario),
+        get ASSISTANT_STAGE_DB() {
+          ++bindingReads;
+          return env.IDENTITY_DB;
+        },
+      };
+      const batch = createMessageBatch(
+        SUPPORT_ASSISTANT_STAGE_QUEUE,
+        Array.from({ length: count }, (_, index) => ({
+          id: 'fictional-batch-' + index,
+          timestamp: new Date(),
+          attempts: 1,
+          body: SUPPORT_ASSISTANT_WAKE_MARKER,
+        })),
       );
-    const actual = await getQueueResult(batch, createExecutionContext());
-    expect(actual.explicitAcks).toEqual([]);
-    expect(actual.retryMessages).toEqual([]);
-    expect(bindingReads).toBe(0);
-    expect(logs.last()).toMatchObject({ physicalQueries: 0, modelCalls: 0, reservationCalls: 0 });
-  });
+      if (count === 0) await stageEntry.queue(batch, options);
+      else
+        await expect(stageEntry.queue(batch, options)).rejects.toThrow(
+          'Unexpected isolated stage queue',
+        );
+      const actual = await getQueueResult(batch, createExecutionContext());
+      expect(actual.explicitAcks).toEqual([]);
+      expect(actual.retryMessages).toEqual([]);
+      expect(bindingReads).toBe(0);
+      expect(logs.last()).toMatchObject({
+        physicalQueries: 0,
+        modelCalls: 0,
+        reservationCalls: 0,
+      });
+    },
+  );
 
   it.each([
     'disabled',
@@ -794,7 +920,8 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
         : {
             PEGMA_SUPPORT_ASSISTANT_STAGE_TARGET:
               kind === 'wrong-target' ? 'production' : 'isolated-stage',
-            PEGMA_SUPPORT_ASSISTANT_STAGE_ENABLED: kind === 'disabled' ? 'false' : 'true',
+            PEGMA_SUPPORT_ASSISTANT_STAGE_ENABLED:
+              kind === 'disabled' ? 'false' : 'true',
           }),
       ...(kind === 'missing-scenario'
         ? {}
@@ -816,10 +943,16 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
       },
     };
     const current = delivery({
-      body: kind === 'wrong-marker' ? 'wrong-marker' : SUPPORT_ASSISTANT_WAKE_MARKER,
+      body:
+        kind === 'wrong-marker'
+          ? 'wrong-marker'
+          : SUPPORT_ASSISTANT_WAKE_MARKER,
     });
     await stageEntry.queue(current.batch, options);
-    expect(await current.decision()).toMatchObject({ acked: true, retried: false });
+    expect(await current.decision()).toMatchObject({
+      acked: true,
+      retried: false,
+    });
     expect(bindingReads).toBe(0);
     expect(logs.last()).toMatchObject({
       physicalQueries: 0,
@@ -849,14 +982,22 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
   });
 
   it('delegates first/all/raw/run and counts native batches once, then blocks query 51 before its write', async () => {
-    await env.IDENTITY_DB.prepare('INSERT INTO STAGE_BUDGET_PROBE (id, value) VALUES (1, 0)').run();
+    await env.IDENTITY_DB.prepare(
+      'INSERT INTO STAGE_BUDGET_PROBE (id, value) VALUES (1, 0)',
+    ).run();
     const measured = createSupportAssistantStageDatabase(env.IDENTITY_DB);
     const database = measured.database;
-    expect(await database.prepare('SELECT 42 AS value').first<number>('value')).toBe(42);
-    expect((await database.prepare('SELECT 42 AS value').all()).results).toEqual([{ value: 42 }]);
+    expect(
+      await database.prepare('SELECT 42 AS value').first<number>('value'),
+    ).toBe(42);
+    expect(
+      (await database.prepare('SELECT 42 AS value').all()).results,
+    ).toEqual([{ value: 42 }]);
     expect(await database.prepare('SELECT 42 AS value').raw()).toEqual([[42]]);
     const increment = () =>
-      database.prepare('UPDATE STAGE_BUDGET_PROBE SET value = value + 1 WHERE id = 1');
+      database.prepare(
+        'UPDATE STAGE_BUDGET_PROBE SET value = value + 1 WHERE id = 1',
+      );
     await increment().run();
     await database.batch([increment(), increment()]);
     expect(measured.snapshot()).toMatchObject({
@@ -883,7 +1024,8 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
   it('accepts 100 actual bound parameters and rejects 101 before binding or execution', async () => {
     const measured = createSupportAssistantStageDatabase(env.IDENTITY_DB);
     const query = (count: number) =>
-      'SELECT ' + Array.from({ length: count }, (_, index) => '? AS p' + index).join(', ');
+      'SELECT ' +
+      Array.from({ length: count }, (_, index) => '? AS p' + index).join(', ');
     const hundred = await measured.database
       .prepare(query(100))
       .bind(...Array.from({ length: 100 }, (_, index) => index))
