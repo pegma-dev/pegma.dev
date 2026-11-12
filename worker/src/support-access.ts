@@ -2,13 +2,13 @@ import {
   hasPermission,
   resolveAccess,
   type AccessContext,
-} from "@pegma/authorization-core";
-import type { PolicyDocumentV1 } from "@pegma/authorization-policy";
-import type { RoleAssignmentReader } from "@pegma/authorization-storage";
-import type { PrincipalId } from "@pegma/spine";
-import { supportPermissions } from "@pegma/support-desk-application";
-import { DEFAULT_APPROVAL_PERMISSION } from "@pegma/agent-access";
-import { knowledgePermissions } from "@pegma/knowledge-base-contracts";
+} from '@pegma/authorization-core';
+import type { PolicyDocumentV1 } from '@pegma/authorization-policy';
+import type { RoleAssignmentReader } from '@pegma/authorization-storage';
+import type { PrincipalId } from '@pegma/spine';
+import { supportPermissions } from '@pegma/support-desk-application';
+import { DEFAULT_APPROVAL_PERMISSION } from '@pegma/agent-access';
+import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 
 /** Customer permission set for authenticated pegma.dev accounts. */
 export const SUPPORT_CUSTOMER_PERMISSIONS = Object.freeze([
@@ -43,15 +43,15 @@ export const SUPPORT_STAFF_PERMISSIONS = Object.freeze([
 ] as const);
 
 /** The support-operator role name (docs/ROLE_ADOPTION_PLAN.md). */
-export const SUPPORT_ROLE = "Support" as const;
+export const SUPPORT_ROLE = 'Support' as const;
 /** Explicitly assigned KB staff authority, independent of Support grants. */
-export const KNOWLEDGE_ROLE = "Knowledge" as const;
+export const KNOWLEDGE_ROLE = 'Knowledge' as const;
 
 /**
  * The role-administration role name — mapped since the Phase 5 surface
  * shipped; the permissions below are exactly what the admin API checks.
  */
-export const ADMIN_ROLE = "Admin" as const;
+export const ADMIN_ROLE = 'Admin' as const;
 export const AGENT_LINK_PERMISSION = DEFAULT_APPROVAL_PERMISSION;
 /** Initial delegated permissions; linking and human governance are excluded. */
 export const AGENT_KNOWLEDGE_PERMISSIONS = Object.freeze([
@@ -61,7 +61,7 @@ export const AGENT_KNOWLEDGE_PERMISSIONS = Object.freeze([
 ] as const);
 /** Human review of a test report is never an OAuth consent scope. */
 export const KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION =
-  "pegma.knowledge.evidence.confirm";
+  'pegma.knowledge.evidence.confirm';
 export const KNOWLEDGE_STAFF_PERMISSIONS = Object.freeze([
   knowledgePermissions.collectionRead,
   knowledgePermissions.articleRead,
@@ -85,21 +85,21 @@ export const KNOWLEDGE_ADMIN_PERMISSIONS = Object.freeze([
 
 /** Admin permission set, granted via the {@link ADMIN_ROLE} role. */
 export const ADMIN_PERMISSIONS = Object.freeze([
-  "admin.principal.read",
-  "admin.role.assign",
-  "admin.role.revoke",
-  "admin.audit.read",
+  'admin.principal.read',
+  'admin.role.assign',
+  'admin.role.revoke',
+  'admin.audit.read',
 ] as const);
 
 /**
  * The application partition every pegma.dev authorization record belongs
  * to. One value, forever — changing it strands every role assignment.
  */
-export const AUTHORIZATION_APPLICATION_ID = "pegma.dev" as const;
+export const AUTHORIZATION_APPLICATION_ID = 'pegma.dev' as const;
 
 /** The only scope this host uses (no organizations). */
 export const APPLICATION_SCOPE = Object.freeze({
-  kind: "application",
+  kind: 'application',
 } as const);
 
 /**
@@ -123,7 +123,7 @@ export const APPLICATION_SCOPE = Object.freeze({
  */
 export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
   schemaVersion: 1,
-  version: "pegma.dev-policy-8",
+  version: 'pegma.dev-policy-8',
   defaults: [...SUPPORT_CUSTOMER_PERMISSIONS, knowledgePermissions.articleRead],
   roles: Object.freeze({
     [SUPPORT_ROLE]: [...SUPPORT_STAFF_PERMISSIONS],
@@ -144,7 +144,7 @@ export const PEGMA_ACCESS_POLICY: PolicyDocumentV1 = Object.freeze({
  */
 export type SupportRoleReader = Pick<
   RoleAssignmentReader,
-  "listActiveRoleAssignments"
+  'listActiveRoleAssignments'
 >;
 
 /**

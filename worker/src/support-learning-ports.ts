@@ -1,9 +1,9 @@
-import type { AccessContext } from "@pegma/authorization-core";
-import type { KnowledgeBaseApplication } from "@pegma/knowledge-base-application";
+import type { AccessContext } from '@pegma/authorization-core';
+import type { KnowledgeBaseApplication } from '@pegma/knowledge-base-application';
 import type {
   LearningKnowledgeApplication,
   SupportDeskLearningOptions,
-} from "@pegma/support-desk-ai";
+} from '@pegma/support-desk-ai';
 
 /** A host resolver must read current facts and honor cancellation. */
 export interface SupportLearningStaffAccess {
@@ -17,24 +17,21 @@ export interface SupportLearningStaffAccess {
 export interface SupportLearningStagedReviewOptions {
   readonly enabled: () => boolean;
   /** Best-effort acceleration after durable SDK admission; never review authority. */
-  readonly enqueue: (key: {
-    readonly ticketId: string;
-    readonly commandId: string;
-  }) => Promise<void>;
+  readonly enqueue: (key: { readonly ticketId: string; readonly commandId: string }) => Promise<void>;
 }
 
 /** These are trusted server ports, never a browser or model response envelope. */
 export type SupportLearningProcessingPorts = Pick<
   SupportDeskLearningOptions,
-  | "serviceAccess"
-  | "knowledgeAccess"
-  | "retirementAccess"
-  | "configuration"
-  | "checks"
-  | "model"
-  | "usage"
-  | "targets"
-  | "tokenCounter"
+  | 'serviceAccess'
+  | 'knowledgeAccess'
+  | 'retirementAccess'
+  | 'configuration'
+  | 'checks'
+  | 'model'
+  | 'usage'
+  | 'targets'
+  | 'tokenCounter'
 >;
 
 export type DirectLearningKnowledge = Pick<
@@ -49,9 +46,7 @@ export type DirectLearningKnowledge = Pick<
 export function createSupportLearningKnowledgePort(
   application: DirectLearningKnowledge,
 ): LearningKnowledgeApplication {
-  async function call<Result>(
-    operation: () => Promise<Result>,
-  ): Promise<Result> {
+  async function call<Result>(operation: () => Promise<Result>): Promise<Result> {
     return operation();
   }
   return Object.freeze<LearningKnowledgeApplication>({
@@ -59,8 +54,7 @@ export function createSupportLearningKnowledgePort(
       call(() => application.searchPublishedArticles(access, input)),
     getPublishedArticle: (access, input) =>
       call(() => application.getPublishedArticle(access, input)),
-    getDraft: (access, input) =>
-      call(() => application.getDraft(access, input)),
+    getDraft: (access, input) => call(() => application.getDraft(access, input)),
     getProvenance: (access, input) =>
       call(() => application.getProvenance(access, input)),
     getValidationRequirements: (access, input) =>
@@ -75,21 +69,21 @@ export function createSupportLearningKnowledgePort(
 }
 
 export type SupportLearningStaffOperation =
-  | "enroll"
-  | "verified_fix"
-  | "successful_test"
-  | "review"
-  | "invalidate"
-  | "withdraw";
+  | 'enroll'
+  | 'verified_fix'
+  | 'successful_test'
+  | 'review'
+  | 'invalidate'
+  | 'withdraw';
 
 function identifier(value: string): string {
   if (
-    typeof value !== "string" ||
+    typeof value !== 'string' ||
     value.length === 0 ||
     value.length > 200 ||
     /[\u0000-\u001f\u007f]/u.test(value)
   )
-    throw new TypeError("Invalid learning command identity");
+    throw new TypeError('Invalid learning command identity');
   return value;
 }
 
@@ -113,28 +107,15 @@ export async function supportLearningCommandIdentity(input: {
   const commandId = identifier(input.clientCommandId);
   const operation = input.operation;
   if (
-    ![
-      "enroll",
-      "verified_fix",
-      "successful_test",
-      "review",
-      "invalidate",
-      "withdraw",
-    ].includes(operation)
-  )
-    throw new TypeError("Invalid learning operation");
-  const bytes = new TextEncoder().encode(
-    JSON.stringify([
-      "pegma.support-learning.command.v1",
-      actor,
-      ticket,
+    !['enroll', 'verified_fix', 'successful_test', 'review', 'invalidate', 'withdraw'].includes(
       operation,
-      commandId,
-    ]),
+    )
+  )
+    throw new TypeError('Invalid learning operation');
+  const bytes = new TextEncoder().encode(
+    JSON.stringify(['pegma.support-learning.command.v1', actor, ticket, operation, commandId]),
   );
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  const hash = Array.from(digest, (part) =>
-    part.toString(16).padStart(2, "0"),
-  ).join("");
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const hash = Array.from(digest, (part) => part.toString(16).padStart(2, '0')).join('');
   return Object.freeze({ commandId, correlationId: `learning:${hash}` });
 }
