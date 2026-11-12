@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createMemoryStore } from '@pegma/storage-core';
+import { createMemoryStore, type Store } from '@pegma/storage-core';
+import { canonical } from './support-openrouter-model';
+import { createSupportEngineeringCreationReceipts } from './support-engineering-acceptance';
 import {
   createSupportDeskApplication,
   type EngineeringExportRequest,
@@ -48,13 +50,15 @@ function expectReadOnlyIssueRequests(calls: readonly (readonly [string, RequestI
     });
   }
 }
-function fixture() {
+function fixture(store: Store = createMemoryStore(), visibility: 'public' | 'private' = 'public') {
   const state = {
     now: epoch,
     enabled: true,
     write: true,
     authority: true,
     authVersion: 'fictional-v1',
+    requestHash: 'b'.repeat(64),
+    repositoryMetadataHash: 'd'.repeat(64),
     installation: {
       id: 201,
       app_id: 301,
@@ -72,8 +76,8 @@ function fixture() {
       name: 'workspace-core',
       full_name: 'fictional-org/workspace-core',
       owner: { id: 401, login: 'fictional-org', type: 'Organization' },
-      visibility: 'public',
-      private: false,
+      visibility,
+      private: visibility === 'private',
       archived: false,
       disabled: false,
       has_issues: true,
@@ -90,6 +94,7 @@ function fixture() {
     rows: [] as Record<string, unknown>[],
     searchTotal: undefined as number | undefined,
     incomplete: false,
+    indexed: true,
     onRequest: undefined as
       | ((url: string, init: RequestInit) => Promise<Response | undefined>)
       | undefined,
@@ -176,7 +181,7 @@ function fixture() {
     }
     if (url.startsWith('https://api.github.com/search/issues?')) {
       const requested = new URL(url).searchParams.get('q')!;
-      const rows = requested.includes('pegma-engineering:')
+      const rows = !state.indexed ? [] : requested.includes('pegma-engineering:')
         ? state.rows.filter(
             (row) =>
               typeof row.body === 'string' &&
@@ -216,9 +221,11 @@ function fixture() {
     );
     return row === undefined ? json({ message: 'Not Found' }, 404) : json(row);
   });
+  const creationReceipts = createSupportEngineeringCreationReceipts({ store, clock });
   const options = {
     clock,
-    repositories: [repository],
+    creationReceipts,
+    repositories: [{ ...repository, visibility }],
     enabled: () => state.enabled,
     issueCreationEnabled: () => state.write,
     authentication: { resolve: auth },
@@ -233,7 +240,7 @@ function fixture() {
   const dispatch = (): EngineeringGitHubContext => ({
     ...context(),
     dispatchId: 'fictional-dispatch',
-    requestHash: 'b'.repeat(64),
+    requestHash: state.requestHash,
     sourceFence: {
       ticketId: 'fictional-ticket',
       sourceGeneration: 1,
@@ -249,7 +256,7 @@ function fixture() {
       requestHash,
       sourceFence,
       operation: 'create_issue',
-      repositoryMetadataHash: 'd'.repeat(64),
+      repositoryMetadataHash: state.repositoryMetadataHash,
     };
   };
   async function request(): Promise<
@@ -258,7 +265,7 @@ function fixture() {
     const metadata = await ports.github.getMetadata('101', context());
     if (metadata === null)
       throw new Error('Expected fictional current metadata');
-    return {
+    const prepared: Extract<EngineeringExportRequest, { operation: 'create_issue' }> = {
       operation: 'create_issue',
       repository: metadata.repository,
       bundle: {
@@ -271,8 +278,16 @@ function fixture() {
         exportMarker: marker,
       },
     };
+    const hash = async (value: unknown) => [...new Uint8Array(await crypto.subtle.digest(
+      'SHA-256', new TextEncoder().encode(canonical(value)),
+    ))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    state.requestHash = await hash(prepared);
+    state.repositoryMetadataHash = await hash(metadata.repository);
+    return prepared;
   }
   return {
+    creationReceipts,
+    store,
     state,
     clock,
     auth,
@@ -309,11 +324,15 @@ afterEach(() => {
 });
 
 describe('bounded public SDK GitHub issue transport', () => {
-  it.each(['duplicates', 'existing', 'transferred-after-search'] as const)(
+  it.each(['duplicates', 'existing', 'known-create'] as const)(
     'withholds %s issue content when a formerly approved repository name routes to another numeric repository',
     async (operation) => {
       const f = fixture();
-      f.state.rows.push(remoteIssue({ body: 'Fictional out-of-scope issue content.\n' + marker }));
+      if (operation === 'known-create') {
+        await f.ports.github.createIssue(await f.request(), f.dispatch());
+      } else {
+        f.state.rows.push(remoteIssue({ body: 'Fictional out-of-scope issue content.\n' + marker }));
+      }
       f.state.onRequest = async (url, init) => {
         if (init.method === 'GET' &&
           (operation === 'duplicates'
@@ -338,7 +357,7 @@ describe('bounded public SDK GitHub issue transport', () => {
       expect(f.state.wrongRepositoryWrites).toEqual([]);
       const reads = f.transport.mock.calls.filter(([url, init]) => init.method === 'GET' &&
         (url.startsWith('https://api.github.com/search/issues?') || url.startsWith(path + '/issues/')));
-      expect(reads.length).toBe(operation === 'transferred-after-search' ? 2 : 1);
+      expect(reads.length).toBe(1);
       for (const [, init] of reads)
         expect(new Headers(init.headers).get('Authorization')).toBe('Bearer ' + scopedToken);
     },
@@ -367,7 +386,7 @@ describe('bounded public SDK GitHub issue transport', () => {
       });
       const issueRead = f.transport.mock.calls.at(-1)!;
       expect(new Headers(issueRead[1].headers).get('Authorization')).toBe('Bearer ' + scopedToken);
-      expect(f.transport).toHaveBeenCalledTimes(4);
+      expect(f.transport).toHaveBeenCalledTimes(5);
       expect(f.state.rows).toHaveLength(1);
     },
   );
@@ -414,9 +433,17 @@ describe('bounded public SDK GitHub issue transport', () => {
       if (mode === 'visibility') {
         selected.visibility = 'private';
         selected.private = true;
+        f.state.repository.visibility = 'private';
+        f.state.repository.private = true;
       }
-      if (mode === 'repository-updated') selected.updated_at = '2026-11-10T11:00:01Z';
-      if (mode === 'branch-changed') selected.default_branch = 'changed';
+      if (mode === 'repository-updated') {
+        selected.updated_at = '2026-11-10T11:00:01Z';
+        f.state.repository.updated_at = selected.updated_at;
+      }
+      if (mode === 'branch-changed') {
+        selected.default_branch = 'changed';
+        f.state.repository.default_branch = selected.default_branch;
+      }
       return json({
         token: scopedToken,
         expires_at: '2026-11-10T13:00:00Z',
@@ -443,7 +470,8 @@ describe('bounded public SDK GitHub issue transport', () => {
     ).toBe(false);
     f.state.rows.push(remoteIssue());
     expect(
-      (await read.github.reconcile(f.identity(), f.context())).outcome,
+      (await read.github.reconcile({ ...f.identity(), operation: 'link_existing_issue',
+        issueId: '501', issueNumber: 7 }, f.context())).outcome,
     ).toBe('accepted');
   });
   it('returns an explicit bounded candidate window with physical count and immutable repository scope', async () => {
@@ -464,8 +492,8 @@ describe('bounded public SDK GitHub issue transport', () => {
     );
     expect(result.physicalResults).toBe(5);
     expect(result.issues).toHaveLength(5);
-    expect(f.transport).toHaveBeenCalledTimes(4);
-    const url = new URL(f.transport.mock.calls[3]![0]);
+    expect(f.transport).toHaveBeenCalledTimes(5);
+    const url = new URL(f.transport.mock.calls[4]![0]);
     expect(url.pathname).toBe('/search/issues');
     expect(url.searchParams.get('q')).toBe(
       'repo:fictional-org/workspace-core is:issue in:title,body workspace export',
@@ -526,7 +554,7 @@ describe('bounded public SDK GitHub issue transport', () => {
       f.state.rows[0]!.repository_url =
         'https://api.github.com/repos/foreign/repo';
     if (mode === 'pull-request') f.state.rows[0]!.pull_request = {};
-    if (mode === 'oversize') f.state.rows[0]!.body = 'x'.repeat(12_001);
+    if (mode === 'oversize') f.state.rows[0]!.body = 'x'.repeat(65_537);
     if (mode === 'body-type') f.state.rows[0]!.body = 0;
     if (mode === 'duplicate') f.state.rows.push(remoteIssue());
     if (mode === 'too-many')
@@ -544,7 +572,7 @@ describe('bounded public SDK GitHub issue transport', () => {
         f.context(),
       ),
     ).rejects.toThrow();
-    expect(f.transport).toHaveBeenCalledTimes(4);
+    expect(f.transport).toHaveBeenCalledTimes(5);
   });
   it('uses a repository-scoped token to prevent a write after repository name reuse', async () => {
     const f = fixture();
@@ -615,7 +643,7 @@ describe('bounded public SDK GitHub issue transport', () => {
     expect(new Headers(mints[0]![1].headers).get('Authorization')).toBe(
       'Bearer FICTIONAL_APP_JWT',
     );
-    expect(f.transport).toHaveBeenCalledTimes(4);
+    expect(f.transport).toHaveBeenCalledTimes(5);
   });
   it.each([
     'missing-token',
@@ -660,9 +688,14 @@ describe('bounded public SDK GitHub issue transport', () => {
         if (mode === 'unsafe-id') selected.id = Number.MAX_SAFE_INTEGER + 1;
         if (mode === 'extra-repository')
           grant.repositories = [selected, { ...selected, id: 202 }];
-        if (mode === 'wrong-name') selected.name = 'other';
-        if (mode === 'wrong-owner')
+        if (mode === 'wrong-name') {
+          selected.name = 'other';
+          f.state.repository.name = 'other';
+        }
+        if (mode === 'wrong-owner') {
           selected.owner = { ...f.state.repository.owner, id: 402 };
+          f.state.repository.owner.id = 402;
+        }
         if (mode === 'extra-permission')
           grant.permissions = {
             metadata: 'read',
@@ -888,7 +921,7 @@ describe('bounded public SDK GitHub issue transport', () => {
     ).rejects.toThrow();
     expect(f.transport).not.toHaveBeenCalled();
   });
-  it('recovers an accepted lost POST acknowledgement by read-only exact marker, without another write', async () => {
+  it('keeps a never-received provider ACK unknown despite a searchable marker', async () => {
     const f = fixture();
     const request = await f.request();
     f.state.onRequest = async (url, init) => {
@@ -906,10 +939,7 @@ describe('bounded public SDK GitHub issue transport', () => {
       f.identity(),
       f.context(),
     );
-    expect(reconciled).toMatchObject({
-      outcome: 'accepted',
-      acknowledgement: { issueId: '501', issueNumber: 7 },
-    });
+    expect(reconciled).toMatchObject({ outcome: 'unknown' });
     expect(
       f.transport.mock.calls.filter(
         ([url, init]) => url === path + '/issues' && init.method === 'POST',
@@ -984,7 +1014,7 @@ describe('bounded public SDK GitHub issue transport', () => {
     expect((await f.ports.github.reconcile(input, f.context())).outcome).toBe(
       'accepted',
     );
-    expect(f.transport).toHaveBeenCalledTimes(4);
+    expect(f.transport).toHaveBeenCalledTimes(5);
     expect(
       await f.ports.github.reconcile({ ...input, issueId: '502' }, f.context()),
     ).toEqual({ outcome: 'unknown' });
@@ -1007,7 +1037,7 @@ describe('bounded public SDK GitHub issue transport', () => {
         body: '',
       },
     ]);
-    expect(f.transport).toHaveBeenCalledTimes(4);
+    expect(f.transport).toHaveBeenCalledTimes(5);
     expectReadOnlyIssueRequests(f.transport.mock.calls);
   });
   it('reconciles an exact existing issue with a null description without creating or editing it', async () => {
@@ -1032,7 +1062,7 @@ describe('bounded public SDK GitHub issue transport', () => {
         issueNumber: 7,
       },
     });
-    expect(f.transport).toHaveBeenCalledTimes(4);
+    expect(f.transport).toHaveBeenCalledTimes(5);
     expectReadOnlyIssueRequests(f.transport.mock.calls);
   });
   it.each([
@@ -1122,16 +1152,17 @@ describe('bounded public SDK GitHub issue transport', () => {
     ).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
   });
-  it('independently rereads current remote acceptance for exact Application proof bindings', async () => {
+  it('independently reads known creation coordinates and immutable historical receipt binding', async () => {
     const f = fixture();
-    f.state.rows.push(remoteIssue());
+    await f.ports.github.createIssue(await f.request(), f.dispatch());
+    f.transport.mockClear();
     const identity = f.identity();
     const binding: EngineeringDispatchProofBinding = {
       ticketId: 'fictional-ticket',
       sourceGeneration: 1,
       sourceBindingHash: 'c'.repeat(64),
       repositoryId: '101',
-      repositoryMetadataHash: 'd'.repeat(64),
+      repositoryMetadataHash: f.state.repositoryMetadataHash,
       dispatchId: identity.dispatchId,
       requestHash: identity.requestHash,
       exportMarker: marker,
@@ -1151,8 +1182,8 @@ describe('bounded public SDK GitHub issue transport', () => {
     );
     expect(verified?.binding).toEqual(binding);
     expect(verified?.verifierReceiptId).toMatch(/^github-observation:/u);
-    // Two metadata reads plus one exact-ID credential/read pair for search and issue.
-    expect(f.transport).toHaveBeenCalledTimes(6);
+    // Two metadata reads, one scoped mint, final repository GET and exact issue GET.
+    expect(f.transport).toHaveBeenCalledTimes(5);
     expectReadOnlyIssueRequests(f.transport.mock.calls);
     expect(verified?.validUntil).toBe(new Date(epoch + 10_000).toISOString());
     f.state.rows.push(
@@ -1168,7 +1199,7 @@ describe('bounded public SDK GitHub issue transport', () => {
         binding,
         new AbortController().signal,
       ),
-    ).toBeNull();
+    ).not.toBeNull();
     f.state.rows.pop();
     f.state.authority = false;
     expect(
@@ -1183,11 +1214,12 @@ describe('bounded public SDK GitHub issue transport', () => {
 // Real public Application + AI coordinator, MemoryStore and durable dispatch.
 // Only HTTP and declared product/model/check/authority systems are fictional.
 describe('real SDK engineering dispatch with bounded GitHub transport', () => {
-  it.each(['accepted', 'lost-ack', 'lost-ack-withdrawn', 'link'] as const)(
-    'persists %s using the original SDK marker and one physical create opportunity',
+  it.each(['accepted', 'index-lag', 'lost-provider-ack', 'lost-provider-ack-withdrawn',
+    'lost-sdk-ack', 'lost-sdk-ack-withdrawn', 'link'] as const)(
+    'persists %s with durable known creation acceptance and one physical create opportunity',
     async (mode) => {
-      const f = fixture();
       const sdk = await createSupportEngineeringFixture(createMemoryStore());
+      const f = fixture(sdk.store);
       const observed = await f.ports.github.getMetadata('101', f.context());
       if (observed === null) throw new Error('Expected metadata');
       sdk.metadata.set('101', observed.repository);
@@ -1241,8 +1273,16 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
         application,
         clock: sdk.clock,
         staffAccess: { resolve: sdk.resolve },
-        processingEnabled: () => true,
-        ports: { ...sdk.ports, github: f.ports.github },
+        processingEnabled: () => sdk.state.enabled,
+        ports: { ...sdk.ports, github: {
+          ...f.ports.github,
+          async createIssue(request, context) {
+            const acknowledgement = await f.ports.github.createIssue(request, context);
+            if (mode.startsWith('lost-sdk-ack'))
+              throw new Error('Fictional SDK acknowledgement lost after durable creation receipt.');
+            return acknowledgement;
+          },
+        } },
       });
       await sdk.eligible();
       const process = () =>
@@ -1263,7 +1303,7 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
         proposalHash: prepared.proposal.proposalHash,
         decision: 'approve',
       });
-      if (mode.startsWith('lost-ack'))
+      if (mode.startsWith('lost-provider-ack'))
         f.state.onRequest = async (url, init) => {
           if (url !== path + '/issues' || init.method !== 'POST')
             return undefined;
@@ -1280,12 +1320,13 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
           f.state.rows.push(remoteIssue({ ...body }));
           throw new Error('Fictional accepted POST lost ACK');
         };
+      f.state.indexed = mode !== 'index-lag';
       const result = await process();
       const work = await runtime.readWork(sdk.actors.security, sdk.key());
-      if (mode.startsWith('lost-ack')) {
+      if (mode.startsWith('lost-')) {
         expect(work.status).toBe('unknown');
         expect(result).toMatchObject({ outcome: 'pending', stage: 'dispatch' });
-        if (mode === 'lost-ack-withdrawn') {
+        if (mode.endsWith('withdrawn')) {
           await runtime.withdraw(sdk.actors.staff, {
             ticketId: sdk.key().ticketId,
             clientCommandId: 'WITHDRAW-AFTER-UNKNOWN',
@@ -1302,6 +1343,8 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
           f.state.repository.updated_at = '2026-11-10T11:00:02Z';
           f.state.write = false;
         }
+        f.state.write = false;
+        sdk.state.enabled = false;
         await runtime.reconcileSource(sdk.key().ticketId);
       } else {
         expect(result.outcome).toBe('dispatched');
@@ -1311,11 +1354,16 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
         await sdk.resolve('engineering-reconciler'),
         sdk.key().ticketId,
       );
-      expect(source.destinations[0]?.reconciliation).toBe('confirmed');
-      expect(source.destinations[0]?.acknowledgement).toMatchObject({
-        issueId: '501',
-        issueNumber: 7,
-      });
+      expect(source.destinations[0]?.reconciliation).toBe(
+        mode.startsWith('lost-provider-ack') ? 'blocked' : 'confirmed',
+      );
+      if (mode.startsWith('lost-provider-ack')) {
+        expect(source.destinations[0]?.acknowledgement).toBeUndefined();
+      } else {
+        expect(source.destinations[0]?.acknowledgement).toMatchObject({
+          issueId: '501', issueNumber: 7,
+        });
+      }
       expect(
         f.transport.mock.calls.filter(
           ([url, init]) => url === path + '/issues' && init.method === 'POST',
@@ -1334,4 +1382,308 @@ describe('real SDK engineering dispatch with bounded GitHub transport', () => {
       ).toBe(true);
     },
   );
+});
+
+
+describe('engineering receipt regressions', () => {
+  it('requires a usable durable receipt port before a new issue POST', async () => {
+    const f = fixture();
+    const ports = createSupportEngineeringRepositoryPorts({
+      ...f.options,
+      creationReceipts: undefined,
+    });
+    await expect(
+      ports.github.createIssue(await f.request(), f.dispatch()),
+    ).rejects.toThrow();
+    expect(f.state.rows).toHaveLength(0);
+  });
+
+  it('accepts normalized response labels before recording historical creation', async () => {
+    const f = fixture();
+    const request = await f.request();
+    f.state.onRequest = async (url, init) => {
+      if (url !== path + '/issues' || init.method !== 'POST') return undefined;
+      return json(
+        remoteIssue({
+          title: request.bundle.title,
+          body: request.bundle.body,
+          labels: [{ name: 'BUG' }],
+        }),
+        201,
+      );
+    };
+    await expect(
+      f.ports.github.createIssue(request, f.dispatch()),
+    ).resolves.toMatchObject({ issueId: '501' });
+  });
+
+  it('reads long existing titles using exact approved issue coordinates', async () => {
+    const f = fixture();
+    f.state.rows.push(remoteIssue({ title: 'x'.repeat(256) }));
+    expect(
+      (
+        await f.ports.github.reconcile(
+          {
+            ...f.identity(),
+            operation: 'link_existing_issue',
+            issueId: '501',
+            issueNumber: 7,
+          },
+          f.context(),
+        )
+      ).outcome,
+    ).toBe('accepted');
+  });
+
+  it('bounds duplicate display text without changing immutable issue identity', async () => {
+    const f = fixture();
+    f.state.rows.push(remoteIssue({ title: 'x'.repeat(256) }));
+    const found = await f.ports.github.searchDuplicates(
+      {
+        repositoryId: '101',
+        query: 'workspace export',
+        limit: 5,
+      },
+      f.context(),
+    );
+    expect(found.physicalResults).toBe(1);
+    expect(found.issues[0]).toMatchObject({ issueId: '501', issueNumber: 7 });
+    expect(found.issues[0]?.title).toHaveLength(200);
+  });
+
+  it('refuses publication when private visibility changes during the final authentication await', async () => {
+    const f = fixture(createMemoryStore(), 'private');
+    const request = await f.request();
+    f.state.onAuth = () => {
+      if (f.state.mintedRepositoryIds.length > 0) {
+        f.state.repository.visibility = 'public';
+        f.state.repository.private = false;
+      }
+    };
+    await expect(
+      f.ports.github.createIssue(request, f.dispatch()),
+    ).rejects.toThrow();
+    expect(f.state.rows).toHaveLength(0);
+    const final = f.transport.mock.calls.filter(([url]) => url === path).at(-1);
+    expect(new Headers(final?.[1].headers).get('Authorization')).toBe(
+      'Bearer ' + scopedToken,
+    );
+  });
+});
+
+describe('historical creation receipt and scoped-state regressions', () => {
+  it.each(['known', 'unknown'] as const)(
+    'never repeats a raw POST after an existing %s creation intent',
+    async (outcome) => {
+      const f = fixture();
+      const request = await f.request();
+      if (outcome === 'unknown') {
+        f.state.onRequest = async (url, init) => {
+          if (url !== path + '/issues' || init.method !== 'POST')
+            return undefined;
+          f.state.rows.push(
+            remoteIssue({
+              title: request.bundle.title,
+              body: request.bundle.body,
+            }),
+          );
+          throw new Error('Fictional provider acknowledgement never arrived.');
+        };
+      }
+      await f.ports.github.createIssue(request, f.dispatch()).catch(() => null);
+      const reloaded = createSupportEngineeringRepositoryPorts(f.options);
+      await expect(
+        reloaded.github.createIssue(request, f.dispatch()),
+      ).rejects.toThrow();
+      expect(
+        f.transport.mock.calls.filter(
+          ([url, init]) => url === path + '/issues' && init.method === 'POST',
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it('uses the original durable destination after mutable content edits and copied same-App markers', async () => {
+    const f = fixture();
+    await f.ports.github.createIssue(await f.request(), f.dispatch());
+    const original = f.state.rows[0]!;
+    original.title = 'x'.repeat(256);
+    original.body = 'A later legitimate human edit removed the marker.';
+    original.labels = [{ name: 'edited-later' }];
+    f.state.rows.push(
+      remoteIssue({
+        id: 502,
+        number: 8,
+        url: path + '/issues/8',
+        html_url: 'https://github.com/fictional-org/workspace-core/issues/8',
+      }),
+    );
+    f.state.indexed = false;
+    f.state.write = false;
+    f.state.authVersion = 'renewed-current-authority';
+    const reloaded = createSupportEngineeringRepositoryPorts(f.options);
+    expect(
+      await reloaded.github.reconcile(f.identity(), f.context()),
+    ).toMatchObject({
+      outcome: 'accepted',
+      acknowledgement: { issueId: '501', issueNumber: 7 },
+    });
+    f.state.rows.shift();
+    expect(
+      (await reloaded.github.reconcile(f.identity(), f.context())).outcome,
+    ).toBe('unknown');
+    expect(
+      f.transport.mock.calls.filter(
+        ([url, init]) => url === path + '/issues' && init.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each(['request', 'metadata', 'dispatch', 'source', 'marker'] as const)(
+    'rejects changed %s receipt bindings',
+    async (field) => {
+      const f = fixture();
+      await f.ports.github.createIssue(await f.request(), f.dispatch());
+      const changed = { ...structuredClone(f.identity()) };
+      if (field === 'request') changed.requestHash = 'e'.repeat(64);
+      if (field === 'metadata') changed.repositoryMetadataHash = 'e'.repeat(64);
+      if (field === 'dispatch') changed.dispatchId = 'other-dispatch';
+      if (field === 'source') {
+        if (changed.sourceFence === undefined)
+          throw new Error('Expected known source.');
+        changed.sourceFence = { ...changed.sourceFence, sourceGeneration: 2 };
+      }
+      if (field === 'marker')
+        changed.exportMarker = 'pegma-engineering:' + 'e'.repeat(48);
+      expect(
+        (await f.ports.github.reconcile(changed, f.context())).outcome,
+      ).toBe('unknown');
+    },
+  );
+
+  it.each(['read', 'write'] as const)(
+    'accepts an ID-only scoped grant and obtains authoritative current metadata for a %s',
+    async (operation) => {
+      const f = fixture();
+      const request = operation === 'write' ? await f.request() : undefined;
+      if (operation === 'read') f.state.rows.push(remoteIssue());
+      const events: string[] = [];
+      f.state.onAuth = () => {
+        events.push('auth');
+      };
+      f.state.onRequest = async (url, init) => {
+        events.push(init.method + ' ' + url);
+        if (url !== mintPath || init.method !== 'POST') return undefined;
+        f.state.mintedRepositoryIds = [101];
+        f.state.mintedIssuePermission = operation;
+        return json(
+          {
+            token: scopedToken,
+            expires_at: '2026-11-10T13:00:00Z',
+            repository_selection: 'selected',
+            repositories: [{ id: 101 }],
+            permissions: { metadata: 'read', issues: operation },
+          },
+          201,
+        );
+      };
+      f.transport.mockClear();
+      if (operation === 'write') {
+        if (request === undefined)
+          throw new Error('Expected approved request.');
+        expect(
+          await f.ports.github.createIssue(request, f.dispatch()),
+        ).toMatchObject({ issueId: '501' });
+      } else {
+        expect(
+          (
+            await f.ports.github.searchDuplicates(
+              { repositoryId: '101', query: 'workspace export', limit: 5 },
+              f.context(),
+            )
+          ).physicalResults,
+        ).toBe(1);
+      }
+      const scopedGet = f.transport.mock.calls.findIndex(
+        ([url, init]) =>
+          url === path &&
+          new Headers(init.headers).get('Authorization') ===
+            'Bearer ' + scopedToken,
+      );
+      expect(scopedGet).toBe(3);
+      expect(f.transport.mock.calls).toHaveLength(5);
+      const issueEvent = events.findIndex((value) =>
+        operation === 'write'
+          ? value === 'POST ' + path + '/issues'
+          : value.startsWith('GET https://api.github.com/search/issues?'),
+      );
+      expect(events[issueEvent - 1]).toBe('GET ' + path);
+    },
+  );
+
+  it.each(['read', 'write'] as const)(
+    'requires strict full final GET state before an issue %s',
+    async (operation) => {
+      const f = fixture();
+      const request = operation === 'write' ? await f.request() : undefined;
+      f.state.onRequest = async (url, init) => {
+        if (
+          url === path &&
+          new Headers(init.headers).get('Authorization') ===
+            'Bearer ' + scopedToken
+        ) {
+          const partial: Record<string, unknown> = { ...f.state.repository };
+          delete partial.disabled;
+          return json(partial);
+        }
+        return undefined;
+      };
+      f.transport.mockClear();
+      if (operation === 'write') {
+        if (request === undefined)
+          throw new Error('Expected approved request.');
+        await expect(
+          f.ports.github.createIssue(request, f.dispatch()),
+        ).rejects.toThrow();
+      } else {
+        await expect(
+          f.ports.github.searchDuplicates(
+            { repositoryId: '101', query: 'workspace export', limit: 5 },
+            f.context(),
+          ),
+        ).rejects.toThrow();
+      }
+      expect(
+        f.transport.mock.calls.some(
+          ([url]) => url.includes('/search/issues?') || url.endsWith('/issues'),
+        ),
+      ).toBe(false);
+      expect(f.state.rows).toHaveLength(0);
+    },
+  );
+
+  it('rejects a different numeric grant before the final repository or issue fetch', async () => {
+    const f = fixture();
+    f.state.onRequest = async (url) =>
+      url === mintPath
+        ? json(
+            {
+              token: scopedToken,
+              expires_at: '2026-11-10T13:00:00Z',
+              repository_selection: 'selected',
+              repositories: [{ id: 202 }],
+              permissions: { metadata: 'read', issues: 'read' },
+            },
+            201,
+          )
+        : undefined;
+    await expect(
+      f.ports.github.searchDuplicates(
+        { repositoryId: '101', query: 'workspace export', limit: 5 },
+        f.context(),
+      ),
+    ).rejects.toThrow();
+    expect(f.transport.mock.calls).toHaveLength(3);
+    expect(f.state.rows).toHaveLength(0);
+  });
 });

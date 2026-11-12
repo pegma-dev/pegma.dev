@@ -660,6 +660,8 @@ async function fixture() {
     logger: f.options.logger,
     engineering: production.application,
   });
+  if (!production.attachRuntime?.({ store: f.host.store, clock, application: () => host.application }))
+    throw new Error('Expected actual Store receipt binding.');
   const policy = await host.application.putRepositoryPolicy(
     f.engineering.actors.admin,
     {
@@ -720,6 +722,26 @@ async function fixture() {
 }
 
 describe('normal production engineering composition', () => {
+  it('binds creation receipts to the actual Store independently of model readiness', async () => {
+    const t = await fixture();
+    t.state.modelReady = false;
+    t.state.enabled = false;
+    const collection = vi.spyOn(t.host.store, 'collection');
+    const production = createProductionSupportEngineering(t.options);
+    expect(collection).not.toHaveBeenCalled();
+    expect(production.attachRuntime?.({
+      store: t.host.store, clock, application: () => t.host.application,
+    })).toBe(true);
+    expect(collection.mock.calls.some(([definition]) =>
+      definition.name.includes('support-engineering-creation'))).toBe(true);
+    expect(production.attachRuntime?.({
+      store: t.host.store, clock, application: () => t.host.application,
+    })).toBe(false);
+    expect(t.authentication.resolve).not.toHaveBeenCalled();
+    expect(t.modelFetch).not.toHaveBeenCalled();
+    expect(t.readApiKey).not.toHaveBeenCalled();
+    expect(t.githubFetch).not.toHaveBeenCalled();
+  });
   it('keeps omitted or flag-only composition OFF and constructs no authorities', () => {
     for (const options of [{}, { enabled: () => true }]) {
       const result = createProductionSupportEngineering(options);
@@ -1023,7 +1045,7 @@ describe('Root-owned shared engineering check controller', () => {
     });
     expect(production.application.enabled).toBe(true);
     expect(production.processing.enabled?.()).toBe(true);
-    expect(production.attachRuntime).toBeUndefined();
+    expect(production.attachRuntime).toBeTypeOf('function');
     expect(privateReads).toBe(0);
     expect(legacyReads).toBe(0);
     expect(
@@ -1063,7 +1085,7 @@ describe('Root-owned shared engineering check controller', () => {
         configuration,
       });
       expect(production.processing.enabled?.()).toBe(false);
-      expect(production.attachRuntime).toBeUndefined();
+      expect(production.attachRuntime).toBeTypeOf('function');
       const configured = production.processing.configuration;
       if (
         !configured?.checksFor ||

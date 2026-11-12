@@ -1,4 +1,8 @@
 import { systemClock, type Clock } from '@pegma/spine';
+import {
+  createSupportEngineeringCreationReceipts,
+  type EngineeringCreationReceiptPort,
+} from './support-engineering-acceptance';
 import type {
   EngineeringOptions,
   EngineeringRepositoryDescriptor,
@@ -103,7 +107,7 @@ export interface SupportEngineeringProductionOptions {
     readonly model: Processing['model'];
     readonly usagePolicy: Processing['usagePolicy'];
     /** The existing connector owns current installation/immutable-ID checks. */
-    readonly repository: Omit<SupportEngineeringRepositoryOptions, 'clock'>;
+    readonly repository: Omit<SupportEngineeringRepositoryOptions, 'clock' | 'creationReceipts'>;
     readonly proposals: SupportEngineeringLocalProposalOptions;
   };
 }
@@ -503,6 +507,15 @@ export function createProductionSupportEngineering(
     const controlled = shared || checkerOptions !== undefined;
     let checker: ReturnType<typeof createSupportIndependentChecks> | undefined;
     let attached = false;
+    let creationReceipts: EngineeringCreationReceiptPort | undefined;
+    const receiptPort = Object.freeze<EngineeringCreationReceiptPort>({
+      prepare: (binding, signal) =>
+        creationReceipts?.prepare(binding, signal) ?? Promise.resolve(false),
+      record: (acceptance, signal) =>
+        creationReceipts?.record(acceptance, signal) ?? Promise.resolve(false),
+      read: (binding, signal) =>
+        creationReceipts?.read(binding, signal) ?? Promise.resolve(null),
+    });
     function currentChecker(): SupportEngineeringSharedChecks | undefined {
       if (!shared) return checker;
       try {
@@ -577,6 +590,7 @@ export function createProductionSupportEngineering(
     const repository = createSupportEngineeringRepositoryPorts({
       ...supplied.repository,
       clock,
+      creationReceipts: receiptPort,
     });
     const proposals = createSupportEngineeringLocalProposals(
       supplied.proposals,
@@ -727,34 +741,38 @@ export function createProductionSupportEngineering(
             },
           }
         : {}),
-      ...(checkerOptions === undefined
-        ? {}
-        : ({
-            attachRuntime(runtime) {
-              if (attached) return false;
-              attached = true;
-              try {
-                checker = createSupportIndependentChecks({
-                  ...checkerOptions,
-                  store: runtime.store,
-                  clock: runtime.clock,
-                  application: runtime.application,
-                  repositories: repository.repositoryMetadata,
-                  deferred: true,
-                  enabled: () =>
-                    supplied.independentChecks === checkerOptions &&
-                    checkerOptions.enabled?.() === true,
-                });
-                return true;
-              } catch {
-                checker = undefined;
-                return false;
-              }
-            },
-          } satisfies Pick<
-            SupportEngineeringProductionComposition,
-            'attachRuntime' | 'discardChecks'
-          >)),
+      attachRuntime(
+        runtime: Parameters<NonNullable<
+          SupportEngineeringProductionComposition['attachRuntime']
+        >>[0],
+      ) {
+        if (attached) return false;
+        attached = true;
+        try {
+          creationReceipts = createSupportEngineeringCreationReceipts({
+            store: runtime.store,
+            clock: runtime.clock,
+          });
+          if (checkerOptions !== undefined) {
+            checker = createSupportIndependentChecks({
+              ...checkerOptions,
+              store: runtime.store,
+              clock: runtime.clock,
+              application: runtime.application,
+              repositories: repository.repositoryMetadata,
+              deferred: true,
+              enabled: () =>
+                supplied.independentChecks === checkerOptions &&
+                checkerOptions.enabled?.() === true,
+            });
+          }
+          return true;
+        } catch {
+          creationReceipts = undefined;
+          checker = undefined;
+          return false;
+        }
+      },
     });
   } catch {
     return off();

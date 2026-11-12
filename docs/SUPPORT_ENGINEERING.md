@@ -4,7 +4,7 @@ Developer and operator documentation for the optional engineering assembly.
 The Worker and staff ticket controller accept the human engineering composition
 through explicit trusted configuration. The default Worker supplies no such
 configuration, so engineering intake and review remain OFF. This assembly uses
-the five published Support Desk packages at exact version `0.2.7`.
+the five published Support Desk packages at exact version `0.2.8`.
 
 The [runtime](../worker/src/support-engineering.ts),
 [HTTP adapter](../worker/src/support-engineering-handlers.ts),
@@ -225,6 +225,75 @@ The controller keeps one panel lifecycle and offers sign-in in another tab.
 Its retained-owner controls preserve the original account and ticket coordinates.
 Global repository-policy recovery uses current account authority independently
 of ticket selection.
+
+## GitHub creation receipts and current repository authority
+
+The [repository adapter](../worker/src/support-engineering-repository.ts) keeps
+issue creation separately OFF by default. Its explicit trusted configuration
+supplies immutable repository/App/installation coordinates and current issuer
+authority. Numeric token scope proves only the selected repository ID, exact
+permission scope and expiry; token response entries may contain only that ID.
+Full names, ownership, visibility and repository state come from an authoritative
+scoped-token repository GET after every asynchronous authentication boundary,
+for every issue read and write. That snapshot must still match the approved
+identity/state/version. Only synchronous current/enablement guards separate it
+from the issue request.
+
+GitHub offers no atomic visibility precondition for issue creation. A repository
+administrator can publish a private repository or its existing content at any
+time. The final GET rejects visibility changes during token minting or awaited
+authentication; it does not make visibility atomic with the POST. Trusted
+activation must retain that external administrator disclosure boundary.
+
+New issue creation also requires a durable
+[creation receipt port](../worker/src/support-engineering-acceptance.ts).
+The production composition's existing `attachRuntime` binds it to the actual
+Support Store and clock, independently of model/checker readiness. Before that
+binding, a new issue write is unavailable. Missing or incomplete production
+configuration retains the original OFF behavior and performs no receipt Store
+I/O. This adds no default customer, service, role or publication authority.
+
+An acknowledged one-shot durable intent precedes a new POST. Existing, uncertain
+or accepted intents never authorize another physical POST. The captured provider
+response must match the approved title, body and normalized label set before the
+exact issue acknowledgement is durably recorded. The stored receipt contains
+opaque request/source/App/installation/repository bindings, immutable issue
+coordinates and the historical accepted payload hash; it stores no issue text,
+labels or credentials.
+
+Create reconciliation and its independent verifier require that matching known
+receipt and a current direct observation of its exact issue coordinates/App
+origin and repository authority. Mutable markers, copied same-App content,
+search absence or indexing delay cannot create acceptance. If the provider HTTP
+ACK never arrived, the operation remains unknown for human review with no second
+POST. If the exact response was recorded and only the later SDK ACK was lost,
+recovery can confirm it with model and creation OFF, including after source
+withdrawal. Later legitimate remote title/body/label edits do not erase that
+historical receipt. Existing-issue links instead use their approved immutable
+coordinates and current reads without creating a receipt or modifying the issue.
+
+Remote issue text is bounded by the 64 KiB response limit; duplicate display
+context is projected to the SDK's title200/body12000 bounds. Projection grants
+no issue identity or acceptance authority. Search and create inputs are captured
+before awaits. The stream reader skips empty chunks, rejects more than 64
+consecutive empty chunks and enforces a finite 65,600-chunk read budget alongside
+the existing byte, abort and nonrenewing operation deadline bounds.
+
+Per operation, metadata uses two GETs. Duplicate search uses five HTTP requests:
+two metadata GETs, one exact-ID scoped-token POST, the final scoped repository GET
+and one search GET. Creation uses the same five-request shape with one issue POST
+in place of search. Known-receipt create/link reconciliation and its independent
+verifier each use five: two metadata GETs, one scoped-token POST, the final scoped
+repository GET and one direct issue GET. Read tokens have Metadata read and Issues
+read only. Tokens stay private to the operation; no App JWT is minted and no HTTP
+request is automatically retried.
+
+The [actual SDK/MemoryStore cases](../worker/src/support-engineering-github.test.ts)
+separate missing provider ACKs from ACK loss after durable recording, retained
+source withdrawal, mutable/copyable markers, indexing delay and ID-only grants.
+Earlier marker-only Native measurements do not qualify this new receipt path;
+fresh registered-route Native qualification must use the actual Store-backed
+creation capability and both uncertainty cases.
 
 ## Qualification and configuration
 

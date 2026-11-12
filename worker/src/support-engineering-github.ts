@@ -1,4 +1,10 @@
 import type { Clock } from '@pegma/spine';
+import { canonical } from './support-openrouter-model';
+import type {
+  EngineeringCreationBinding,
+  EngineeringCreationReceipt,
+  EngineeringCreationReceiptPort,
+} from './support-engineering-acceptance';
 import type {
   EngineeringDispatchProofBinding,
   EngineeringDispatchResultVerifier,
@@ -16,6 +22,9 @@ export interface SupportEngineeringRepositorySession {
   readonly repository: EngineeringRepositoryObservation;
   readonly path: string;
   readonly appId: string;
+  readonly installationId: string;
+  readonly installationBinding: string;
+  readonly signal: AbortSignal;
   readonly appSlug: string | null;
   current(): void;
   search(query: string, limit: number): Promise<unknown>;
@@ -96,8 +105,8 @@ function issue(
     !integer(value.id) ||
     !integer(value.number) ||
     Object.hasOwn(value, 'pull_request') ||
-    !text(value.title) ||
-    !prose(body, 12_000) ||
+    !text(value.title, 65_536) ||
+    !prose(body, 65_536) ||
     value.repository_url !== session.path ||
     value.url !== session.path + '/issues/' + value.number ||
     value.html_url !==
@@ -185,9 +194,56 @@ function validIdentity(input: ReconciliationInput) {
       : numericId(input.issueId) && integer(input.issueNumber))
   );
 }
+async function fingerprint(value: unknown): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', encoder.encode(canonical(value))),
+  );
+  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+function normalizedLabels(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length > 32) throw error();
+  const labels = value.map((label: unknown) => {
+    const name = typeof label === 'string'
+      ? label
+      : object(label)
+        ? label.name
+        : undefined;
+    if (!text(name, 100)) throw error();
+    return name.normalize('NFC').toLowerCase();
+  });
+  return [...new Set(labels)].sort();
+}
+function creationBinding(
+  input: ReconciliationInput,
+  session: SupportEngineeringRepositorySession,
+): EngineeringCreationBinding {
+  if (
+    input.sourceFence === undefined ||
+    input.repositoryMetadataHash === undefined
+  )
+    throw error();
+  return {
+    repositoryId: input.repositoryId,
+    dispatchId: input.dispatchId,
+    requestHash: input.requestHash,
+    repositoryMetadataHash: input.repositoryMetadataHash,
+    exportMarker: input.exportMarker,
+    sourceFence: structuredClone(input.sourceFence),
+    appId: session.appId,
+    installationId: session.installationId,
+    installationBinding: session.installationBinding,
+  };
+}
+function issueUrl(
+  value: EngineeringIssueAcknowledgement,
+  session: SupportEngineeringRepositorySession,
+) {
+  return 'https://github.com/' + session.repository.owner + '/' +
+    session.repository.name + '/issues/' + value.issueNumber;
+}
 async function proof(value: unknown) {
-  // Correlation receipt only, never a signature or a remote attestation of the
-  // private request hash. Application supplies and verifies the durable binding.
+  // Correlation digest; create acceptance additionally requires a durable known
+  // provider-ACK receipt, never an editable search marker or App origin alone.
   const digest = new Uint8Array(
     await crypto.subtle.digest(
       'SHA-256',
@@ -202,9 +258,11 @@ async function proof(value: unknown) {
 async function observeAcceptance(
   input: ReconciliationInput,
   session: SupportEngineeringRepositorySession,
+  creationReceipts: EngineeringCreationReceiptPort | undefined,
 ) {
   if (!validIdentity(input)) throw error();
   let current: EngineeringDuplicateIssue;
+  let creation: EngineeringCreationReceipt | null = null;
   if (input.operation === 'link_existing_issue') {
     current = issue(await session.issue(input.issueNumber!), session);
     if (
@@ -213,21 +271,25 @@ async function observeAcceptance(
     )
       throw error();
   } else {
-    // Search is eventually indexed; no/partial/multiple matches prove nothing.
-    const found = searchEnvelope(
-      await session.search(
-        prefix(session) + 'in:body "' + input.exportMarker + '"',
-        5,
-      ),
-      5,
-    );
-    if (found.total !== 1 || found.items.length !== 1) throw error();
-    const candidate = issue(found.items[0], session);
-    const remote = await session.issue(candidate.issueNumber);
-    current = issue(remote, session);
+    const binding = creationBinding(input, session);
+    const stored = await creationReceipts?.read(binding, session.signal);
+    if (stored === undefined || stored === null) throw error();
+    creation = structuredClone(stored);
     if (
-      current.issueId !== candidate.issueId ||
-      !uniqueMarker(current.body, input.exportMarker) ||
+      canonical(creation.binding) !== canonical(binding) ||
+      !hashPattern.test(creation.payloadHash) ||
+      !text(creation.proof)
+    )
+      throw error();
+    session.current();
+    const remote = await session.issue(creation.acknowledgement.issueNumber);
+    current = issue(remote, session);
+    const expected = creation.acknowledgement;
+    if (
+      expected.repositoryId !== current.repositoryId ||
+      expected.issueId !== current.issueId ||
+      expected.issueNumber !== current.issueNumber ||
+      expected.url !== issueUrl(current, session) ||
       !appCreated(remote, session)
     )
       throw error();
@@ -236,6 +298,8 @@ async function observeAcceptance(
     input,
     acknowledgement(current),
     session.repository,
+    creation?.proof ?? null,
+    creation?.payloadHash ?? null,
   ]);
   session.current();
   return { acknowledgement: acknowledgement(current), proof: receipt };
@@ -245,6 +309,7 @@ async function observeAcceptance(
 export function createSupportEngineeringIssueOperations(
   within: SupportEngineeringRepositoryOperation,
   clock: Clock,
+  creationReceipts?: EngineeringCreationReceiptPort,
 ): {
   readonly github: Omit<EngineeringGitHubPort, 'getMetadata'>;
   readonly dispatchResults: EngineeringDispatchResultVerifier;
@@ -276,7 +341,15 @@ export function createSupportEngineeringIssueOperations(
             ),
             snapshot.limit,
           );
-          const issues = response.items.map((value) => issue(value, session));
+          const issues = response.items.map((value) => {
+            const observed = issue(value, session);
+            return Object.freeze({
+              ...observed,
+              // Display context only; immutable coordinates govern an approved link.
+              title: observed.title.slice(0, 200),
+              body: observed.body.slice(0, 12_000),
+            });
+          });
           if (
             new Set(issues.map((value) => value.issueId)).size !==
               issues.length ||
@@ -294,6 +367,13 @@ export function createSupportEngineeringIssueOperations(
       return observed.value;
     },
     async createIssue(input, context) {
+      if (
+        creationReceipts === undefined ||
+        typeof creationReceipts.prepare !== 'function' ||
+        typeof creationReceipts.record !== 'function' ||
+        typeof creationReceipts.read !== 'function'
+      )
+        throw error();
       const request = structuredClone(input);
       const bound = structuredClone({
         sourceFence: context.sourceFence,
@@ -324,13 +404,30 @@ export function createSupportEngineeringIssueOperations(
         labels: request.bundle.labels,
       });
       if (encoder.encode(body).byteLength > 24_000) throw error();
+      const labels = normalizedLabels(request.bundle.labels);
+      const [requestHash, repositoryMetadataHash, payloadHash] = await Promise.all([
+        fingerprint(request),
+        fingerprint(request.repository),
+        fingerprint({ title: request.bundle.title, body: request.bundle.body, labels }),
+      ]);
+      if (requestHash !== bound.requestHash || context.signal.aborted) throw error();
       const observed = await within(
         request.repository.repositoryId,
         context,
         async (session) => {
           if (!sameRepository(request.repository, session.repository))
             throw error();
-          // The transport mints an exact-ID credential and makes one issue POST.
+          const binding = creationBinding({
+            repositoryId: request.repository.repositoryId,
+            ...bound,
+            repositoryMetadataHash,
+            exportMarker: request.bundle.exportMarker,
+            operation: 'create_issue',
+          }, session);
+          if (!(await creationReceipts.prepare(binding, session.signal)))
+            throw error();
+          session.current();
+          // Only a first acknowledged durable intent can reach the one issue POST.
           const response = await session.create(body);
           const created = issue(response, session);
           if (
@@ -341,24 +438,18 @@ export function createSupportEngineeringIssueOperations(
             !Array.isArray(response.labels)
           )
             throw error();
-          const labels = response.labels.map((label: unknown) =>
-            typeof label === 'string'
-              ? label
-              : object(label)
-                ? label.name
-                : undefined,
-          );
-          if (
-            labels.length !== request.bundle.labels.length ||
-            new Set(labels).size !== labels.length ||
-            labels.some(
-              (label) =>
-                typeof label !== 'string' ||
-                !request.bundle.labels.includes(label),
-            )
-          )
+          if (canonical(normalizedLabels(response.labels)) !== canonical(labels))
             throw error();
-          return acknowledgement(created);
+          const accepted = acknowledgement(created);
+          if (!(await creationReceipts.record({
+            binding,
+            acknowledgement: { ...accepted, url: issueUrl(accepted, session) },
+            payloadHash,
+            recordedAt: clock.now(),
+          }, session.signal)))
+            throw error();
+          session.current();
+          return accepted;
         },
       );
       if (observed === null) throw error(); // POST may already have committed.
@@ -371,7 +462,7 @@ export function createSupportEngineeringIssueOperations(
         const observed = await within(
           snapshot.repositoryId,
           context,
-          (session) => observeAcceptance(snapshot, session),
+          (session) => observeAcceptance(snapshot, session, creationReceipts),
         );
         return observed === null
           ? { outcome: 'unknown' }
@@ -429,8 +520,10 @@ export function createSupportEngineeringIssueOperations(
                   : {}),
               },
               session,
+              creationReceipts,
             );
             if (
+              (ack.url !== undefined && ack.url !== issueUrl(ack, session)) ||
               acceptance.acknowledgement.issueId !== ack.issueId ||
               acceptance.acknowledgement.issueNumber !== ack.issueNumber
             )
