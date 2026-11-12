@@ -495,7 +495,7 @@ request hash. Reconciliation remains read-only after creation is disabled or
 the local proposal body is withdrawn.
 
 One total deadline bounds authentication and all requests to ten seconds or the
-earlier caller deadline or credential expiry. An operation makes at most four
+earlier caller deadline or credential expiry. An operation makes at most six
 GitHub requests, with at most 64 KiB per response, a 24 KiB issue payload, no
 pagination, retries or cached observations. The [metadata composition tests](../worker/src/support-engineering-repository.test.ts)
 and [issue transport tests](../worker/src/support-engineering-github.test.ts)
