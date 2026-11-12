@@ -540,6 +540,8 @@ describe('distinct engineering configuration and model wire', () => {
     'currency',
     'unrepresentable-cost',
     'tokens',
+    'negative-output-tokens',
+    'fractional-output-tokens',
     'video',
     'audio',
     'unknown-detail',
@@ -555,6 +557,11 @@ describe('distinct engineering configuration and model wire', () => {
       if (mode === 'currency') f.state.document.usage.currency = 'EUR';
       if (mode === 'unrepresentable-cost') f.state.document.usage.cost = 1e20;
       if (mode === 'tokens') f.state.document.usage.total_tokens = 999;
+      if (mode === 'negative-output-tokens' || mode === 'fractional-output-tokens') {
+        const outputTokens = mode === 'negative-output-tokens' ? -1 : 0.5;
+        f.state.document.usage.completion_tokens = outputTokens;
+        f.state.document.usage.total_tokens = 200 + outputTokens;
+      }
       if (mode === 'video')
         f.state.document.usage.prompt_tokens_details.video_tokens = 1;
       if (mode === 'audio')
@@ -746,6 +753,22 @@ describe('actual public SDK engineering coordinator with fictional HTTP', () => 
 });
 
 describe('validated engineering accounting and destination regressions', () => {
+  it.each(['', null])('preserves a known charge for zero completion tokens and content %s', async (content) => {
+    const f = await fixture();
+    await f.ready();
+    Reflect.set(f.state.document.choices[0]!.message, 'content', content);
+    f.state.document.usage.completion_tokens = 0;
+    f.state.document.usage.total_tokens = 200;
+    const result = await f.ports.model.generate(f.input, f.context, f.config);
+    expect(result.outputJson).toBe('');
+    expect(result.usage).toEqual({
+      inputTokens: 200,
+      outputTokens: 0,
+      costMicros: 474,
+      currency: 'USD',
+    });
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
   it('accepts a null native finish reason for a valid engineering candidate', async () => {
     const f = await fixture();
     await f.ready();

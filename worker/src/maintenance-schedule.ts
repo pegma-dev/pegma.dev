@@ -5,7 +5,8 @@ import type { SupportMaintenanceTask } from './support-maintenance';
 export const MAIL_CRON = '* * * * *';
 // Skip minute zero so every trigger has a distinct schedule.
 export const MAIL_RECONCILE_CRON = '1-59 * * * *';
-// Cleanup skips minute 59 and rotates through 18 exclusive small lanes.
+// Cleanup skips minute 59 and rotates through 18 lanes when answering is OFF,
+// or 20 lanes when answering is enabled.
 export const CLEANUP_CRON = '0-58 * * * *';
 // Two ticks clean rate windows, then one advances a ready KB hint.
 // A distinct all-minute trigger: answering owns this physical invocation when ON.

@@ -35,6 +35,8 @@ describe('native billing through the public SDK and actual durable host ledger',
     'finish-length',
     'empty-content',
     'null-content',
+    'zero-output-empty',
+    'zero-output-null',
     'whitespace-content',
     'oversized-content',
     'oversized-utf8',
@@ -44,6 +46,7 @@ describe('native billing through the public SDK and actual durable host ledger',
     'retains %s native accounting once without an answer',
     async (mode) => {
       const costMicros = mode === 'over-budget' ? 150_000 : 474;
+      const outputTokens = mode.startsWith('zero-output-') ? 0 : 30;
       const known = !mode.startsWith('unparsed-');
       const store = createMemoryStore();
       const f = await supportAssistantFixture({ store });
@@ -134,8 +137,8 @@ describe('native billing through the public SDK and actual durable host ledger',
           citations: [],
         });
         if (mode === 'invalid-output') content = '{';
-        if (mode === 'empty-content') content = '';
-        if (mode === 'null-content') content = null;
+        if (mode === 'empty-content' || mode === 'zero-output-empty') content = '';
+        if (mode === 'null-content' || mode === 'zero-output-null') content = null;
         if (mode === 'whitespace-content') content = '  \n';
         if (mode === 'oversized-content')
           content = 'x'.repeat(config.budgets.maxOutputBytes + 1);
@@ -163,8 +166,8 @@ describe('native billing through the public SDK and actual durable host ledger',
           ],
           usage: {
             prompt_tokens: 100,
-            completion_tokens: 30,
-            total_tokens: 130,
+            completion_tokens: outputTokens,
+            total_tokens: 100 + outputTokens,
             cost: mode === 'over-budget' ? 0.15 : 0.00047344,
             currency: 'USD',
           },
@@ -203,7 +206,7 @@ describe('native billing through the public SDK and actual durable host ledger',
               ? {
                   usage: {
                     inputTokens: 100,
-                    outputTokens: 30,
+                    outputTokens,
                     costMicros,
                     currency: 'USD',
                   },
@@ -237,7 +240,7 @@ describe('native billing through the public SDK and actual durable host ledger',
           state: 'known',
           usage: {
             inputTokens: 100,
-            outputTokens: 30,
+            outputTokens,
             costMicros,
             currency: 'USD',
           },

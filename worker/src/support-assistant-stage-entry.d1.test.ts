@@ -567,7 +567,7 @@ describe('isolated stage entry and actual SDK seeder on Native D1', () => {
         generation: before.generation + 1,
         cursor: page.nextCursor,
       });
-      // Keep the existing Queue policy: only its one-row filtered case retries,
+      // Every nonempty filtered page retries under the existing Queue policy,
       // and the same delivery cap still bounds all continuation attempts.
       const retry =
         page.physicalRows > 0 && attempts < SUPPORT_ASSISTANT_WAKE_DELIVERIES;

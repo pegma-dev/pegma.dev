@@ -1,5 +1,6 @@
 import {
   bestEffortSupportAssistantHint,
+  supportAssistantAcceptedTarget,
   type SupportAssistantHintCallback,
 } from './support-assistant';
 import {
@@ -661,11 +662,15 @@ async function stableBrowserMutation(
       ticketId: route.ticketId,
       body: messageBody,
     });
-    if (view.ticket.handling === 'assistant')
-      await bestEffortSupportAssistantHint(options.onCustomerMessageAccepted, {
-        ticketId: route.ticketId,
-        triggerMessageId: command.messageId,
-      });
+    const acceptedTarget = supportAssistantAcceptedTarget(
+      view,
+      command.messageId,
+    );
+    if (acceptedTarget !== undefined)
+      await bestEffortSupportAssistantHint(
+        options.onCustomerMessageAccepted,
+        acceptedTarget,
+      );
     const final = await current(permission);
     options.logger.log('info', 'support.ticket_replied', {
       ticketNumber: view.ticket.number,
@@ -1352,13 +1357,11 @@ export function createSupportApi(
           body: messageBody,
         });
 
-        if (view.ticket.handling === 'assistant')
+        const acceptedTarget = supportAssistantAcceptedTarget(view, messageId);
+        if (acceptedTarget !== undefined)
           await bestEffortSupportAssistantHint(
             options.onCustomerMessageAccepted,
-            {
-              ticketId,
-              triggerMessageId: messageId,
-            },
+            acceptedTarget,
           );
         options.logger.log('info', 'support.ticket_replied', {
           ticketNumber: view.ticket.number,

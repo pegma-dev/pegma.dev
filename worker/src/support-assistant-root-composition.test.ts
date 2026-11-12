@@ -11,6 +11,7 @@ import { supportAssistantRoutePolicySha256 } from './support-assistant-config';
 import { publishAnsweringGuide } from './support-answering-fixtures';
 import { customerAccessContext } from './support-access';
 import { supportAssistantReadyTargets } from './support-assistant';
+import { disposeSupportBrowsers, supportBrowser } from '../../src/test-support-browser';
 
 vi.mock('@pegma/storage-cloudflare-d1', async (original) => ({
   ...(await original<typeof import('@pegma/storage-cloudflare-d1')>()),
@@ -18,6 +19,7 @@ vi.mock('@pegma/storage-cloudflare-d1', async (original) => ({
 }));
 
 afterEach(() => {
+  disposeSupportBrowsers();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -127,6 +129,38 @@ async function fixture() {
 }
 
 describe('normal Worker optional answering composition', () => {
+  it('keeps the actual root OFF response quiet in the feedback browser and permits human submission', async () => {
+    const f = await fixture();
+    f.environment.PEGMA_SUPPORT_ASSISTANT_ENABLED = 'false';
+    const capability = await f.call(f.request());
+    expect(capability.status).toBe(200);
+    expect(await capability.json()).toEqual({ enabled: false });
+    const page = supportBrowser('create', async (call) => {
+      const headers = new Headers(f.request().headers);
+      headers.delete('X-Pegma-Support-Command');
+      call.headers.forEach((value, name) => headers.set(name, value));
+      const response = await f.call(new Request('https://pegma.dev' + call.path, {
+        method: call.method,
+        headers,
+        ...(call.body === undefined ? {} : { body: call.body }),
+      }));
+      return { status: response.status, body: await response.json(), headers: response.headers };
+    });
+    await vi.waitFor(() => {
+      expect(page.node('feedback-signed-in').hidden).toBe(false);
+      expect(page.node('create-ticket').querySelector('button')!.disabled).toBe(false);
+    });
+    expect(page.node('assistant-choice').hidden).toBe(true);
+    expect(page.node('assistant-status').hidden).toBe(true);
+    expect(page.node('assistant-status').textContent).toBe('');
+    page.node('ticket-subject').value = 'Fictional human question';
+    page.node('ticket-body').value = 'A person can help with this product question.';
+    page.node('ticket-category').value = 'question';
+    page.nativeSubmit('create-ticket');
+    await vi.waitFor(() => expect(page.node('feedback-status').textContent).toContain('Ticket created.'));
+    expect(page.calls.filter((call) => call.method === 'POST').map((call) => call.path)).toEqual(['/api/support/tickets']);
+    expect(f.network).not.toHaveBeenCalled();
+  });
   it.each(['2026-11-12T12:10:00.001Z', '2026-11-12T23:58:00.001Z'])(
     'finishes two admitted turns through actual minute cadence within 300s from %s',
     async (instant) => {
@@ -543,12 +577,17 @@ describe('normal Worker optional answering composition', () => {
     );
     if (message?.kind !== 'message')
       throw new Error('Expected the actual accepted customer reply.');
+    const ticket = rows.find((row) => row.kind === 'ticket');
+    if (ticket?.kind !== 'ticket')
+      throw new Error('Expected the actual SDK ticket.');
     expect(await f.hints()).toContainEqual({
       partition: 'support-answering',
       id: expect.stringMatching(/^ready:[01]$/u),
       ticketId: packet.command.ticketId,
       triggerMessageId: message.message.id,
       createdAt: expect.any(String),
+      visiblePosition: 1,
+      ticketNumber: ticket.ticket.number,
     });
     expect(f.network).not.toHaveBeenCalled();
   });

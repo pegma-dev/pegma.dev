@@ -439,7 +439,7 @@ function responseResult(
   const outputTokens = integer(
     usage.completion_tokens,
     Number.MAX_SAFE_INTEGER,
-    1,
+    0,
   );
   if (
     integer(usage.total_tokens, Number.MAX_SAFE_INTEGER) !==

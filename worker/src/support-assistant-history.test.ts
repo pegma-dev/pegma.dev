@@ -1,5 +1,6 @@
 import { type Store } from '@pegma/storage-core';
 import { supportAssistantReadyTargets } from './support-assistant';
+import { supportRecords } from '@pegma/support-desk-application';
 import { createMemoryStore } from '@pegma/storage-core';
 import { describe, expect, it } from 'vitest';
 import { supportAssistantFixture } from './support-assistant-fixtures';
@@ -144,7 +145,7 @@ describe('priority hints retain current SDK authority and opaque cleanup fencing
             if (
               !raced &&
               definition.name === supportAssistantReadyTargets.name &&
-              key.id === 'ready:' + parity
+              key.id === 'ready:0'
             ) {
               raced = true;
               await enqueueSupportAssistantTargetHint(f.store, f.clock, {
@@ -162,8 +163,8 @@ describe('priority hints retain current SDK authority and opaque cleanup fencing
     expect(
       await f.store
         .collection(supportAssistantReadyTargets)
-        .get({ partition: 'support-answering', id: 'ready:' + parity }),
-    ).toMatchObject({ ticketId, triggerMessageId: messageId });
+        .get({ partition: 'support-answering', id: 'ready:0' }),
+    ).toMatchObject({ nextTarget: { ticketId, triggerMessageId: messageId } });
     expect((await f.tick()).outcome).toBe('prepared');
     expect(await f.untilTurn()).toMatchObject({ turn: 'completed' });
     expect(f.modelCalls).toHaveLength(2);
@@ -302,5 +303,59 @@ describe('acknowledged preparation resumes without another physical scan', () =>
     f.advance(60_000);
     await f.tick();
     expect(f.modelCalls).toHaveLength(1);
+  });
+});
+
+describe('priority discovery is a bounded point lookup before current SDK authority', () => {
+  it('does not enumerate extensive retained history in the target ticket', async () => {
+    const f = await supportAssistantFixture({ store: createMemoryStore() });
+    for (let index = 0; index < 35; ++index)
+      await f.support.addNote(await f.access('fictional-support-operator'), {
+        commandId: crypto.randomUUID(),
+        correlationId: crypto.randomUUID(),
+        ticketId: 'fictional-answer-ticket',
+        messageId: crypto.randomUUID(),
+        body: 'Fictional retained private staff note ' + index,
+      });
+    expect((await f.rows()).length).toBeGreaterThan(100);
+    const job = (await f.rows()).find((row) => row.kind === 'assistant_turn');
+    if (job?.kind !== 'assistant_turn')
+      throw new Error('Expected actual admitted turn.');
+    await enqueueSupportAssistantTargetHint(f.store, f.clock, {
+      ticketId: job.ticketId,
+      triggerMessageId: job.triggerMessageId,
+    });
+    const lookups: { partition: string; id: string }[] = [];
+    const store: Store = {
+      collection(definition) {
+        const actual = f.store.collection(definition);
+        return {
+          ...actual,
+          async get(key) {
+            if (definition.name === supportRecords.name)
+              lookups.push({ ...key });
+            return actual.get(key);
+          },
+          async list(partition) {
+            if (definition.name === supportRecords.name)
+              throw new Error(
+                'Priority discovery must not enumerate the target partition.',
+              );
+            return actual.list(partition);
+          },
+        };
+      },
+    };
+    f.advance(60_000);
+    expect(await f.tick({ store })).toMatchObject({ outcome: 'prepared' });
+    expect(lookups).toEqual([{ partition: job.ticketId, id: job.id }]);
+    expect(f.scanned).toEqual([]);
+    f.advance(60_000);
+    expect(await f.tick({ store })).toMatchObject({ turn: 'completed' });
+    expect(f.modelCalls).toHaveLength(1);
+    expect(f.usageReservations).toHaveLength(1);
+    expect(Date.parse(f.clock.now())).toBeLessThan(
+      Date.parse(job.turnDeadline),
+    );
   });
 });

@@ -17,7 +17,7 @@ async function fixture() {
   const f = await supportAnsweringFixture();
   const api = createSupportApi({ ...f.runtime, logger: f.logger });
   let actor: 'owner' | 'peer' = 'owner';
-  let capabilityFault: 'http' | 'network' | 'malformed' | 'unauthenticated' | 'forbidden' | null = null;
+  let capabilityFault: 'http' | 'network' | 'malformed' | 'missing-csrf' | 'foreign-csrf' | 'unauthenticated' | 'forbidden' | null = null;
   const page = supportBrowser('create', async (call: BrowserCall) => {
     if (call.path === '/api/identity/account') {
       // Browser transport fixture only; the mutation handlers still validate
@@ -36,6 +36,9 @@ async function fixture() {
         throw new Error('Fictional private capability failure');
       if (capabilityFault === 'unauthenticated' || capabilityFault === 'forbidden')
         return { status: capabilityFault === 'unauthenticated' ? 401 : 403, body: { error: 'Fictional current authority denial' } };
+      if (capabilityFault === 'missing-csrf' || capabilityFault === 'foreign-csrf')
+        return { body: { enabled: true, disclosureVersion: 'pegma-support-answering-1',
+          ...(capabilityFault === 'foreign-csrf' ? { csrfToken: 'fictional-foreign-csrf' } : {}) } };
       return capabilityFault === 'http'
         ? { status: 503, body: { error: 'Fictional private capability failure' } }
         : { body: { enabled: 'malformed', csrfToken: f.human.csrf.get(actor), detail: 'Fictional private capability failure' } };
@@ -106,7 +109,7 @@ describe('optional current customer answering browser entry', () => {
     expect(f.state.keys).toBe(0);
   });
 
-  it.each(['http', 'network', 'malformed'] as const)(
+  it.each(['http', 'network', 'malformed', 'missing-csrf', 'foreign-csrf'] as const)(
     'explains a capability %s failure while keeping authenticated human feedback available',
     async (fault) => {
       const { f, page, edit, reload, capabilityFault } = await fixture();

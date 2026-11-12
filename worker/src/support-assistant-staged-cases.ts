@@ -1,4 +1,7 @@
-import { enqueueSupportAssistantTargetHint } from './support-assistant';
+import {
+  enqueueSupportAssistantTargetHint,
+  supportAssistantReadyTargets,
+} from './support-assistant';
 import { describe, expect, it } from 'vitest';
 import {
   supportAssistantFixture,
@@ -119,6 +122,214 @@ export function registerStagedSupportAssistantCases(
         expect(f.scanned).toEqual([]);
         await f.tick();
         expect(f.modelCalls).toHaveLength(1);
+      });
+
+      it('preserves two same-parity accepted targets ahead of retained history within four cold ticks', async () => {
+        const backend = await createBackend();
+        const f = await supportAssistantFixture(backend, {
+          retainedHumanTickets: 32,
+        });
+        const first = (await f.rows()).find(
+          (row) => row.kind === 'assistant_turn',
+        );
+        if (first?.kind !== 'assistant_turn')
+          throw new Error('Expected a genuine admitted first turn.');
+        const parity =
+          first.triggerMessageId.charCodeAt(first.triggerMessageId.length - 1) %
+          2;
+        const messageId =
+          'fictional-history-collision-' + (parity === 1 ? 'a' : 'b');
+        const secondId = await f.createTicket(
+          'fictional-history-second-ticket',
+          true,
+          messageId,
+        );
+        for (const hint of [
+          {
+            ticketId: first.ticketId,
+            triggerMessageId: first.triggerMessageId,
+          },
+          { ticketId: secondId, triggerMessageId: messageId },
+        ]) {
+          const publish = () =>
+            enqueueSupportAssistantTargetHint(f.store, f.clock, hint);
+          if (backend.invoke) await backend.invoke(publish);
+          else await publish();
+        }
+        const calls = [];
+        for (let minute = 0; minute < 4; ++minute) {
+          f.advance(60_000);
+          await f.tick();
+          calls.push(f.modelCalls.length);
+        }
+        expect(calls).toEqual([0, 1, 1, 2]);
+        expect(f.scanned).toEqual([]);
+        expect(f.usageReservations).toHaveLength(2);
+        for (const ticketId of [first.ticketId, secondId]) {
+          expect(
+            (await f.messages(ticketId)).filter(
+              (message) => message.authorKind === 'assistant',
+            ),
+          ).toHaveLength(1);
+          const job = (await f.rows(ticketId)).find(
+            (row) => row.kind === 'assistant_turn',
+          );
+          expect(job).toMatchObject({ status: 'completed' });
+          if (job?.kind !== 'assistant_turn')
+            throw new Error('Expected actual durable turn.');
+          expect(Date.parse(f.clock.now())).toBeLessThan(
+            Date.parse(job.turnDeadline),
+          );
+        }
+      });
+
+      it.each([0, 1])(
+        'preserves legacy flat ready slot%i without enumerating ticket history',
+        async (slot) => {
+          const f = await supportAssistantFixture(await createBackend());
+          const job = (await f.rows()).find(
+            (row) => row.kind === 'assistant_turn',
+          );
+          if (job?.kind !== 'assistant_turn')
+            throw new Error('Expected real SDK turn.');
+          await f.store.collection(supportAssistantReadyTargets).put({
+            partition: 'support-answering',
+            id: 'ready:' + slot,
+            createdAt: f.clock.now(),
+            ticketId: job.ticketId,
+            triggerMessageId: job.triggerMessageId,
+          });
+          f.advance(60_000);
+          expect(await f.tick()).toMatchObject({ outcome: 'prepared' });
+          f.advance(60_000);
+          expect(await f.tick()).toMatchObject({ turn: 'completed' });
+          expect(f.scanned).toEqual([]);
+          expect(f.modelCalls).toHaveLength(1);
+        },
+      );
+
+      it('bounds priority discovery on an actual ticket with more than100 retained physical records', async () => {
+        const backend = await createBackend();
+        const f = await supportAssistantFixture(backend);
+        for (let index = 0; index < 35; ++index)
+          await f.support.addNote(
+            await f.access('fictional-support-operator'),
+            {
+              commandId: crypto.randomUUID(),
+              correlationId: crypto.randomUUID(),
+              ticketId: 'fictional-answer-ticket',
+              messageId: crypto.randomUUID(),
+              body: 'Fictional retained staff note ' + index,
+            },
+          );
+        expect((await f.rows()).length).toBeGreaterThan(100);
+        const job = (await f.rows()).find(
+          (row) => row.kind === 'assistant_turn',
+        );
+        if (job?.kind !== 'assistant_turn')
+          throw new Error('Expected real SDK turn.');
+        const publish = () =>
+          enqueueSupportAssistantTargetHint(f.store, f.clock, {
+            ticketId: job.ticketId,
+            triggerMessageId: job.triggerMessageId,
+          });
+        if (backend.invoke) await backend.invoke(publish);
+        else await publish();
+        f.advance(60_000);
+        expect(await f.tick()).toMatchObject({ outcome: 'prepared' });
+        f.advance(60_000);
+        expect(await f.tick()).toMatchObject({ turn: 'completed' });
+        expect(f.scanned).toEqual([]);
+        expect(f.modelCalls).toHaveLength(1);
+        expect(f.usageReservations).toHaveLength(1);
+        expect(f.modelCalls[0]!.input.messages).toEqual([
+          { speaker: 'customer', text: 'How do I export my workspace?' },
+        ]);
+      });
+
+      it('falls back to one bounded SDK page when an advisory locator is missing or from an unknown layout', async () => {
+        const backend = await createBackend();
+        const f = await supportAssistantFixture(backend);
+        await enqueueSupportAssistantTargetHint(f.store, f.clock, {
+          ticketId: 'fictional-answer-ticket',
+          triggerMessageId: 'fictional-unknown-layout-message',
+        });
+        expect(await f.tick()).toMatchObject({ outcome: 'prepared' });
+        expect(f.scanned).toHaveLength(1);
+        expect(f.scanned[0]).toMatchObject({ pages: 1 });
+        expect(f.scanned[0]!.physicalRows).toBeLessThanOrEqual(32);
+        f.advance(60_000);
+        expect(await f.tick()).toMatchObject({ turn: 'completed' });
+        expect(f.modelCalls).toHaveLength(1);
+      });
+
+      it('keeps over-capacity accepted work durable and resumes its bounded fallback after the latest two targets complete', async () => {
+        const backend = await createBackend();
+        const f = await supportAssistantFixture(backend, {
+          retainedHumanTickets: 32,
+        });
+        const original = (await f.rows()).find(
+          (row) => row.kind === 'assistant_turn',
+        );
+        if (original?.kind !== 'assistant_turn')
+          throw new Error('Expected real oldest turn.');
+        const jobs = [original];
+        for (const suffix of ['b', 'd']) {
+          const id = await f.createTicket(
+            'fictional-overflow-' + suffix,
+            true,
+            'fictional-overflow-message-' + suffix,
+          );
+          const job = (await f.rows(id)).find(
+            (row) => row.kind === 'assistant_turn',
+          );
+          if (job?.kind !== 'assistant_turn')
+            throw new Error('Expected actual overflow turn.');
+          jobs.push(job);
+        }
+        for (const job of jobs) {
+          const publish = () =>
+            enqueueSupportAssistantTargetHint(f.store, f.clock, {
+              ticketId: job.ticketId,
+              triggerMessageId: job.triggerMessageId,
+            });
+          if (backend.invoke) await backend.invoke(publish);
+          else await publish();
+        }
+        for (let minute = 0; minute < 4; ++minute) {
+          f.advance(60_000);
+          await f.tick();
+        }
+        expect(f.modelCalls).toHaveLength(2);
+        expect(
+          (await f.rows(original.ticketId)).find(
+            (row) => row.kind === 'assistant_turn',
+          ),
+        ).toMatchObject({
+          status: 'pending',
+          turnDeadline: original.turnDeadline,
+        });
+        let handedOff = false;
+        for (let invocation = 0; invocation < 24; ++invocation) {
+          f.advance(60_000);
+          await f.tick();
+          const view = await f.support.readCustomerTicket(
+            await f.access('fictional-answer-customer'),
+            original.ticketId,
+          );
+          if (view.ticket.handling === 'human-pending') {
+            handedOff = true;
+            break;
+          }
+        }
+        expect(handedOff).toBe(true);
+        expect(
+          f.scanned.every(
+            (page) => page.pages === 1 && page.physicalRows <= 32,
+          ),
+        ).toBe(true);
+        expect(f.scanned.length).toBeGreaterThan(0);
+        expect(f.modelCalls).toHaveLength(2);
       });
 
       it.each([0, 4])(

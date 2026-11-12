@@ -31,6 +31,7 @@ import {
   type AssistantTurnKey,
   type AssistantTurnApplication,
   type AssistantTurnScanResult,
+  type CustomerTicketView,
 } from '@pegma/support-desk-application';
 import {
   createAgentPrincipalResolver,
@@ -211,26 +212,64 @@ export const supportAssistantCheckpoints = defineCollection<Checkpoint>({
 export interface SupportAssistantTargetHint {
   readonly ticketId: string;
   readonly triggerMessageId: string;
+  /** Advisory order in the complete SDK customer view, never a Ticket revision. */
+  readonly visiblePosition?: number;
+  /** Immutable SDK ticket number separates a purged/recreated ticket ID. */
+  readonly ticketNumber?: number;
 }
-interface ReadyTarget extends SupportAssistantTargetHint {
+interface AcceptedTarget extends SupportAssistantTargetHint {
+  readonly createdAt: string;
+}
+interface ReadyTarget extends AcceptedTarget {
   readonly partition: string;
   readonly id: string;
-  readonly createdAt: string;
+  readonly nextTarget?: AcceptedTarget;
 }
 const READY_KEYS = [
   { partition: CHECKPOINT_KEY.partition, id: 'ready:0' },
   { partition: CHECKPOINT_KEY.partition, id: 'ready:1' },
 ] as const;
+function validTargetPosition(value: SupportAssistantTargetHint): boolean {
+  return (
+    (value.visiblePosition === undefined && value.ticketNumber === undefined) ||
+    (Number.isSafeInteger(value.visiblePosition) &&
+      value.visiblePosition !== undefined &&
+      value.visiblePosition >= 0 &&
+      value.visiblePosition < 2_000 &&
+      Number.isSafeInteger(value.ticketNumber) &&
+      value.ticketNumber !== undefined &&
+      value.ticketNumber > 0)
+  );
+}
+function validAcceptedTarget(value: AcceptedTarget): boolean {
+  return (
+    validTargetPosition(value) &&
+    bounded(value.ticketId) &&
+    bounded(value.triggerMessageId) &&
+    bounded(value.createdAt, 40) &&
+    Number.isFinite(Date.parse(value.createdAt)) &&
+    new Date(value.createdAt).toISOString() === value.createdAt
+  );
+}
 function readyTarget(value: ReadyTarget): ReadyTarget {
   if (
     !READY_KEYS.some(
       (key) => key.partition === value.partition && key.id === value.id,
     ) ||
-    !bounded(value.ticketId) ||
-    !bounded(value.triggerMessageId) ||
-    !bounded(value.createdAt, 40) ||
-    !Number.isFinite(Date.parse(value.createdAt)) ||
-    new Date(value.createdAt).toISOString() !== value.createdAt
+    !validAcceptedTarget(value) ||
+    (value.nextTarget !== undefined &&
+      (Object.keys(value.nextTarget).some(
+        (key) =>
+          ![
+            'ticketId',
+            'triggerMessageId',
+            'createdAt',
+            'visiblePosition',
+            'ticketNumber',
+          ].includes(key),
+      ) ||
+        !validAcceptedTarget(value.nextTarget) ||
+        value.nextTarget.ticketId === value.ticketId))
   )
     throw new TypeError('Invalid Support assistant target hint.');
   return value;
@@ -241,7 +280,14 @@ export const supportAssistantReadyTargets = defineCollection<ReadyTarget>({
   key: (value) => ({ partition: value.partition, id: value.id }),
   codec: {
     encode(value) {
-      return { ...readyTarget(value) };
+      readyTarget(value);
+      const { nextTarget, ...fields } = value;
+      return {
+        ...fields,
+        ...(nextTarget === undefined
+          ? {}
+          : { nextTarget: JSON.stringify(nextTarget) }),
+      };
     },
     decode(value) {
       const keys = [
@@ -252,11 +298,80 @@ export const supportAssistantReadyTargets = defineCollection<ReadyTarget>({
         'triggerMessageId',
       ];
       if (
-        Object.keys(value).length !== keys.length ||
-        !keys.every((k) => typeof value[k] === 'string')
+        Object.keys(value).some(
+          (key) =>
+            ![
+              ...keys,
+              'nextTarget',
+              'visiblePosition',
+              'ticketNumber',
+            ].includes(key),
+        ) ||
+        !keys.every((k) => typeof value[k] === 'string') ||
+        (value.nextTarget !== undefined && typeof value.nextTarget !== 'string')
       )
         throw new TypeError('Invalid Support assistant hint fields.');
+      const nextTarget: unknown =
+        value.nextTarget === undefined
+          ? undefined
+          : JSON.parse(String(value.nextTarget));
+      if (
+        nextTarget !== undefined &&
+        (nextTarget === null ||
+          typeof nextTarget !== 'object' ||
+          Object.keys(nextTarget).some(
+            (key) =>
+              ![
+                'ticketId',
+                'triggerMessageId',
+                'createdAt',
+                'visiblePosition',
+                'ticketNumber',
+              ].includes(key),
+          ) ||
+          !('ticketId' in nextTarget) ||
+          typeof nextTarget.ticketId !== 'string' ||
+          !('triggerMessageId' in nextTarget) ||
+          typeof nextTarget.triggerMessageId !== 'string' ||
+          !('createdAt' in nextTarget) ||
+          typeof nextTarget.createdAt !== 'string' ||
+          (('visiblePosition' in nextTarget || 'ticketNumber' in nextTarget) &&
+            (!('visiblePosition' in nextTarget) ||
+              typeof nextTarget.visiblePosition !== 'number' ||
+              !('ticketNumber' in nextTarget) ||
+              typeof nextTarget.ticketNumber !== 'number')))
+      )
+        throw new TypeError('Invalid next Support assistant target fields.');
       return readyTarget({
+        ...(nextTarget === undefined
+          ? {}
+          : {
+              nextTarget: {
+                ticketId: String(nextTarget.ticketId),
+                triggerMessageId: String(nextTarget.triggerMessageId),
+                createdAt: String(nextTarget.createdAt),
+                ...('visiblePosition' in nextTarget &&
+                'ticketNumber' in nextTarget
+                  ? {
+                      visiblePosition: Number(nextTarget.visiblePosition),
+                      ticketNumber: Number(nextTarget.ticketNumber),
+                    }
+                  : {}),
+              },
+            }),
+        ...(value.visiblePosition === undefined &&
+        value.ticketNumber === undefined
+          ? {}
+          : {
+              visiblePosition:
+                typeof value.visiblePosition === 'number'
+                  ? value.visiblePosition
+                  : Number.NaN,
+              ticketNumber:
+                typeof value.ticketNumber === 'number'
+                  ? value.ticketNumber
+                  : Number.NaN,
+            }),
         partition: String(value.partition),
         id: String(value.id),
         createdAt: String(value.createdAt),
@@ -266,25 +381,96 @@ export const supportAssistantReadyTargets = defineCollection<ReadyTarget>({
     },
   },
 });
-/** Latest accepted message wins its advisory slot; SDK fallback retains all jobs. */
+/** Two latest distinct accepted tickets share one atomic advisory head. Exact
+ * duplicate publication is inert; same-ticket acceptance replaces its old hint.
+ * Overflow remains durable SDK work reached by the unchanged bounded scan. */
 export async function enqueueSupportAssistantTargetHint(
   store: Store,
   clock: Clock,
   hint: SupportAssistantTargetHint,
 ): Promise<void> {
-  if (!bounded(hint.ticketId) || !bounded(hint.triggerMessageId))
+  const accepted = Object.freeze({ ...hint, createdAt: clock.now() });
+  if (!validAcceptedTarget(accepted))
     throw new TypeError('Invalid Support assistant accepted target.');
-  const slot =
-    hint.triggerMessageId.charCodeAt(hint.triggerMessageId.length - 1) % 2;
-  await store.collection(supportAssistantReadyTargets).put(
-    readyTarget({
-      ...READY_KEYS[slot]!,
-      ticketId: hint.ticketId,
-      triggerMessageId: hint.triggerMessageId,
-      createdAt: clock.now(),
-    }),
-  );
+  await store
+    .collection(supportAssistantReadyTargets)
+    .update(READY_KEYS[0], (value) => {
+      const entries =
+        value === null
+          ? []
+          : [
+              readyTarget(value),
+              ...(value.nextTarget === undefined ? [] : [value.nextTarget]),
+            ];
+      const previous = entries.find(
+        (target) => target.ticketId === accepted.ticketId,
+      );
+      if (previous?.ticketNumber !== undefined) {
+        // A delayed old publication and a legacy unversioned callback cannot
+        // replace a newer known message. Equal-position conflicts stay inert.
+        if (
+          accepted.ticketNumber === undefined ||
+          accepted.visiblePosition === undefined ||
+          previous.visiblePosition === undefined ||
+          accepted.ticketNumber < previous.ticketNumber ||
+          (accepted.ticketNumber === previous.ticketNumber &&
+            accepted.visiblePosition <= previous.visiblePosition)
+        )
+          return { action: 'keep' };
+      } else if (
+        previous?.triggerMessageId === accepted.triggerMessageId &&
+        accepted.ticketNumber === undefined
+      )
+        return { action: 'keep' };
+      const pending = entries
+        .filter((target) => target.ticketId !== accepted.ticketId)
+        .slice(-1);
+      const ordered = [...pending, accepted];
+      const first = ordered[0]!;
+      return {
+        action: 'write',
+        value: readyTarget({
+          ...READY_KEYS[0],
+          ticketId: first.ticketId,
+          triggerMessageId: first.triggerMessageId,
+          createdAt: first.createdAt,
+          ...(first.visiblePosition === undefined
+            ? {}
+            : {
+                visiblePosition: first.visiblePosition,
+                ticketNumber: first.ticketNumber,
+              }),
+          ...(ordered[1] === undefined ? {} : { nextTarget: ordered[1] }),
+        }),
+      };
+    });
 }
+/** Replayed SDK commands return the current ordinal-ordered customer view.
+ * Only its exact latest accepted customer message may refresh a target; an
+ * older accepted receipt must not replace a newer reply's scheduling hint. */
+export function supportAssistantAcceptedTarget(
+  view: CustomerTicketView,
+  acceptedMessageId: string,
+): SupportAssistantTargetHint | undefined {
+  const latest = view.messages.at(-1);
+  return view.ticket.handling === 'assistant' &&
+    latest?.id === acceptedMessageId &&
+    latest.ticketId === view.ticket.id &&
+    latest.authorKind === 'customer' &&
+    latest.channel === 'web' &&
+    latest.visibility === 'customer' &&
+    view.messages.length <= 2_000 &&
+    Number.isSafeInteger(view.ticket.number) &&
+    view.ticket.number > 0
+    ? {
+        ticketId: view.ticket.id,
+        triggerMessageId: latest.id,
+        visiblePosition: view.messages.length - 1,
+        ticketNumber: view.ticket.number,
+      }
+    : undefined;
+}
+
 export type SupportAssistantHintCallback = (
   hint: SupportAssistantTargetHint,
 ) => unknown | PromiseLike<unknown>;
@@ -587,11 +773,21 @@ export function createSupportAssistantRuntime(
             targets.getVersioned(READY_KEYS[1]),
           ]),
         );
-        const observedTargets = [firstTarget, secondTarget]
-          .filter(
-            (value): value is VersionedRecord<ReadyTarget> => value !== null,
+        const observedHeads = [firstTarget, secondTarget].filter(
+          (value): value is VersionedRecord<ReadyTarget> => value !== null,
+        );
+        // Legacy flat keys remain readable. The new head carries at most two
+        // distinct tickets; timestamps order hints only, never grant authority.
+        const observedTargets = observedHeads
+          .flatMap((head) =>
+            [
+              head.value,
+              ...(head.value.nextTarget === undefined
+                ? []
+                : [head.value.nextTarget]),
+            ].map((value) => ({ value, head })),
           )
-          .sort((a, b) => b.value.createdAt.localeCompare(a.value.createdAt));
+          .sort((a, b) => a.value.createdAt.localeCompare(b.value.createdAt));
         const prior = checkpoint(priorVersion?.value ?? null);
         let retiredTargets = prior.retiredTargets ?? [];
         let preparedTarget = prior.preparedTarget;
@@ -691,90 +887,121 @@ export function createSupportAssistantRuntime(
         let page: AssistantTurnScanResult | undefined;
         let candidate: AssistantTurnKey | undefined;
         let selectedTarget: SupportAssistantTargetHint | undefined;
-        if (preparedTarget !== undefined) {
-          candidate = {
-            ticketId: preparedTarget.ticketId,
-            turnId: preparedTarget.turnId,
-          };
-          if (preparedTarget.triggerMessageId !== undefined)
-            selectedTarget = {
+        const discoveryTimer = setTimeout(
+          cancel,
+          Math.min(MAX_SCAN_MILLISECONDS, remaining()),
+        );
+        let missingTarget = false;
+        try {
+          if (preparedTarget !== undefined) {
+            candidate = {
               ticketId: preparedTarget.ticketId,
-              triggerMessageId: preparedTarget.triggerMessageId,
+              turnId: preparedTarget.turnId,
             };
-          // Consume the advisory key in the existing acquisition CAS. A crash
-          // or ambiguous SDK result retains the cursor and SDK fallback scan.
-          // The next SDK claim still checks the complete current durable turn.
-          preparedTarget = undefined;
-        } else if (targetHeads.length > 0) {
-          for (const head of targetHeads) {
-            const hint = head.value;
-            const rows = await within(() =>
-              options.store.collection(supportRecords).list(hint.ticketId),
-            );
-            const matches = rows.filter(
-              (row) =>
-                row.kind === 'assistant_turn' &&
-                row.triggerMessageId === hint.triggerMessageId,
-            );
-            if (matches.length > 1)
-              throw new TypeError(
-                'Conflicting actual Support assistant targets.',
+            if (preparedTarget.triggerMessageId !== undefined)
+              selectedTarget = {
+                ticketId: preparedTarget.ticketId,
+                triggerMessageId: preparedTarget.triggerMessageId,
+              };
+            // Consume the advisory key in the existing acquisition CAS. A crash
+            // or ambiguous SDK result retains the cursor and SDK fallback scan.
+            // The next SDK claim still checks the complete current durable turn.
+            preparedTarget = undefined;
+          } else if (targetHeads.length > 0) {
+            for (const head of targetHeads) {
+              const hint = head.value;
+              // Released SDK0.2.7 layout only: SHA256(JSON({messageId})) is the
+              // turn ID; physical key is assistant-turn:<ID>. Source:
+              // https://github.com/pegma-dev/support-desk/blob/9577ae2a5769e05fb16924e06f6e0e945b4ae2fc/packages/application/src/assistant-turn-records.ts#L279
+              // This is an advisory locator, not an authority or eligibility proof.
+              // A missing/changed layout uses the bounded SDK scan below.
+              const digest = await within(
+                async () =>
+                  new Uint8Array(
+                    await crypto.subtle.digest(
+                      'SHA-256',
+                      new TextEncoder().encode(
+                        JSON.stringify({ messageId: hint.triggerMessageId }),
+                      ),
+                    ),
+                  ),
               );
-            const job = matches[0];
-            if (
-              job?.kind === 'assistant_turn' &&
-              ['pending', 'retry', 'claimed'].includes(job.status)
-            ) {
-              if (job.ticketId !== hint.ticketId || !bounded(job.turnId))
-                throw new TypeError('Invalid actual Support assistant target.');
-              candidate = { ticketId: job.ticketId, turnId: job.turnId };
-              selectedTarget = hint;
-              break;
+              const turnId = Array.from(digest, (byte) =>
+                byte.toString(16).padStart(2, '0'),
+              ).join('');
+              const key = {
+                partition: hint.ticketId,
+                id: 'assistant-turn:' + turnId,
+              };
+              const observed = await within(() =>
+                options.store.collection(supportRecords).get(key),
+              );
+              const job =
+                observed?.kind === 'assistant_turn' &&
+                observed.partition === key.partition &&
+                observed.id === key.id &&
+                observed.ticketId === hint.ticketId &&
+                observed.turnId === turnId &&
+                observed.triggerMessageId === hint.triggerMessageId &&
+                new TextEncoder().encode(JSON.stringify(observed)).byteLength <=
+                  MAX_SCAN_RESPONSE_BYTES
+                  ? observed
+                  : undefined;
+              if (job === undefined) missingTarget = true;
+              if (
+                job?.kind === 'assistant_turn' &&
+                ['pending', 'retry', 'claimed'].includes(job.status)
+              ) {
+                if (job.ticketId !== hint.ticketId || !bounded(job.turnId))
+                  throw new TypeError(
+                    'Invalid actual Support assistant target.',
+                  );
+                candidate = { ticketId: job.ticketId, turnId: job.turnId };
+                selectedTarget = hint;
+                break;
+              }
+            }
+            if (candidate === undefined && !missingTarget) {
+              // Terminal hints are cleaned in a separate no-paid tick.
+              // Opaque versions protect any later accepted message in that slot.
+              for (const head of observedHeads)
+                if (
+                  !(await within(() =>
+                    targets.deleteIfUnchanged(
+                      { partition: head.value.partition, id: head.value.id },
+                      head.version,
+                    ),
+                  ))
+                )
+                  return { outcome: 'unavailable', checkpointSaved: false };
+              return {
+                outcome: 'scanned',
+                physicalRows: 0,
+                candidates: 0,
+                turn: 'none',
+                checkpointSaved: false,
+              };
             }
           }
           if (candidate === undefined) {
-            // Terminal/missing hints are cleaned in a separate no-paid tick.
-            // Opaque versions protect any later accepted message in that slot.
-            for (const head of targetHeads)
-              if (
-                !(await within(() =>
-                  targets.deleteIfUnchanged(
-                    { partition: head.value.partition, id: head.value.id },
-                    head.version,
-                  ),
-                ))
-              )
-                return { outcome: 'unavailable', checkpointSaved: false };
-            return {
-              outcome: 'scanned',
-              physicalRows: 0,
-              candidates: 0,
-              turn: 'none',
-              checkpointSaved: false,
-            };
-          }
-        } else {
-          const scanTimer = setTimeout(
-            cancel,
-            Math.min(MAX_SCAN_MILLISECONDS, remaining()),
-          );
-          try {
             page = await within(() =>
               assistant.scanCandidates({
                 limit: SUPPORT_ASSISTANT_SCAN_LIMIT,
                 ...(prior.cursor === null ? {} : { cursor: prior.cursor }),
               }),
             );
-          } finally {
-            clearTimeout(scanTimer);
+            if (
+              !validPage(page) ||
+              (page.nextCursor !== null && page.nextCursor === prior.cursor)
+            )
+              throw new TypeError('Invalid Support assistant scan page.');
+            candidate = page.candidates[0];
           }
-          if (
-            !validPage(page) ||
-            (page.nextCursor !== null && page.nextCursor === prior.cursor)
-          )
-            throw new TypeError('Invalid Support assistant scan page.');
-          candidate = page.candidates[0];
+        } finally {
+          clearTimeout(discoveryTimer);
         }
+        // physicalRows describes the SDK scan page. Advisory discovery is at
+        // most two current-head point reads plus one legacy-key point read.
         const physicalRows = page?.physicalRows ?? 0;
         const candidates = page?.candidates.length ?? 1;
         const ready = await within(() =>

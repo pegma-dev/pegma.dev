@@ -254,7 +254,8 @@ async function loadTickets() {
       }
       guard(generation);
       if (!capabilityUnavailable) {
-        if (typeof capability?.enabled !== 'boolean' || capability.csrfToken !== viewer?.csrfToken)
+        if (typeof capability?.enabled !== 'boolean' ||
+          (capability.enabled && capability.csrfToken !== viewer?.csrfToken))
           capabilityUnavailable = true;
         else if (capability.enabled) {
           const displayedVersion = assistantChoice.dataset.disclosureVersion;

@@ -1,4 +1,7 @@
-import { bestEffortSupportAssistantHint } from './support-assistant';
+import {
+  bestEffortSupportAssistantHint,
+  supportAssistantAcceptedTarget,
+} from './support-assistant';
 import { supportPermissions } from '@pegma/support-desk-application';
 import type { Logger } from '@pegma/spine';
 import {
@@ -232,14 +235,19 @@ export function createSupportAnsweringIngress(
         );
         // Leave closing browser budget intact. Hints never turn a known ACK
         // into an unknown result and never carry a browser actor or body.
+        const acceptedTarget = supportAssistantAcceptedTarget(
+          result.view,
+          command.messageId,
+        );
         if (
           result.initialMode === 'assistant' &&
+          acceptedTarget !== undefined &&
           performance.now() - started < 23_500
         )
-          await bestEffortSupportAssistantHint(answering.hintAccepted, {
-            ticketId: command.ticketId,
-            triggerMessageId: command.messageId,
-          });
+          await bestEffortSupportAssistantHint(
+            answering.hintAccepted,
+            acceptedTarget,
+          );
         const final = await current();
         return json(
           {
