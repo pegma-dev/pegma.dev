@@ -316,7 +316,7 @@ async function engineering() {
   measured.calls.length = 0;
   return { ...measured, f, p, options, adapter, checks, input, context };
 }
-async function learning() {
+async function learning(deferred = false) {
   const measured = metered();
   const f = await createSupportLearningFixture(measured.store);
   await f.enrollAndVerify();
@@ -334,7 +334,7 @@ async function learning() {
     ...p.options,
     store: measured.store,
     application: () => f.application,
-    deferred: false,
+    deferred,
     authority: {
       async resolve() {
         return {
@@ -352,17 +352,45 @@ async function learning() {
     usagePolicy: p.usagePolicy,
     readReceiptKey: () => p.state.key,
   };
-  const checks = createSupportIndependentChecks(options).learningFor({
+  const scope = {
     ticketId: 'learning-ticket',
     sourceGeneration: source.sourceGeneration,
-  });
+  };
+  const adapter = createSupportIndependentChecks(options);
+  const checks = adapter.learningFor(scope);
   const context = () => ({
     purpose: 'support_learning' as const,
     deadline: new Date(Date.parse(f.clock.now()) + 4_000).toISOString(),
     signal: new AbortController().signal,
   });
   measured.calls.length = 0;
-  return { ...measured, f, p, options, checks, input: captured, context };
+  return {
+    ...measured,
+    f,
+    p,
+    options,
+    adapter,
+    checks,
+    scope,
+    input: captured,
+    context,
+  };
+}
+
+/** Each call uses the actual durable controller and SDK-captured request. */
+async function precomputeLearning(
+  f: Awaited<ReturnType<typeof learning>>,
+  adapter = f.adapter,
+  checks = f.checks,
+) {
+  expect(await checks.check(f.input, f.context())).toEqual({ outcome: 'held' });
+  expect(f.p.state.calls).toBe(0);
+  const pending = await adapter.scanPending();
+  expect(pending).toHaveLength(1);
+  const hint = pending[0]!;
+  expect(hint).toMatchObject({ kind: 'learning', scope: f.scope });
+  await adapter.precomputePending(hint.operationId, f.context(), f.scope);
+  return checks.check(f.input, f.context());
 }
 
 describe('actual SDK independent check admission and receipts', () => {
@@ -423,8 +451,8 @@ describe('actual SDK independent check admission and receipts', () => {
     expect(reuseCalls).toBe(0); // Cryptographic verification adds no paid-stage Store IO.
   });
   it('uses actual solution messages and target absence for learning instead of trusting candidate facts', async () => {
-    const f = await learning();
-    const checked = await f.checks.check(f.input, f.context());
+    const f = await learning(true);
+    const checked = await precomputeLearning(f);
     expect(checked.outcome).toBe('checked');
     if (checked.outcome !== 'checked') return;
     expect(
@@ -459,9 +487,9 @@ describe('actual SDK independent check admission and receipts', () => {
   it.each(['privacy', 'factual', 'applicability', 'duplication'] as const)(
     'holds independent learning %s failure and still accounts for the actual paid result',
     async (dimension) => {
-      const f = await learning();
+      const f = await learning(true);
       f.p.state.verdict[dimension] = 'failed';
-      expect((await f.checks.check(f.input, f.context())).outcome).not.toBe(
+      expect((await precomputeLearning(f)).outcome).not.toBe(
         'checked',
       );
       expect(f.p.state.calls).toBe(1);
@@ -842,9 +870,9 @@ describe('actual SDK independent check admission and receipts', () => {
     },
   );
   it('persists known usage and retains unknown charges independently of semantic failure', async () => {
-    const f = await learning();
+    const f = await learning(true);
     f.p.state.verdict.factual = 'failed';
-    await f.checks.check(f.input, f.context());
+    await precomputeLearning(f);
     const ledger = await f.store
       .collection({
         name: 'pegma.support-independent-checks.usage.v1',
@@ -1152,10 +1180,11 @@ describe('actual SDK independent check admission and receipts', () => {
     expect(f.p.state.calls).toBe(1);
   });
   it('observes actual Knowledge-role loss after the last draft read before signing learning evidence', async () => {
-    const f = await learning();
+    const f = await learning(true);
     const roles = createRoleStore(f.store, 'pegma-learning-fixture');
     let reads = 0;
     const knowledge = {
+      ...f.f.knowledge,
       async getDraft(...args: Parameters<typeof f.f.knowledge.getDraft>) {
         try {
           return await f.f.knowledge.getDraft(...args);
@@ -1176,17 +1205,18 @@ describe('actual SDK independent check admission and receipts', () => {
         }
       },
     };
-    const checks = createSupportIndependentChecks({
+    const adapter = createSupportIndependentChecks({
       ...f.options,
       knowledge,
-    }).learningFor({
+    });
+    const checks = adapter.learningFor({
       ticketId: 'learning-ticket',
       sourceGeneration: f.input.exactRequest.sourceReferences.length
         ? (await f.f.runtime.readSource(f.f.actors.staff, 'learning-ticket'))
             .sourceGeneration
         : 0,
     });
-    expect(await checks.check(f.input, f.context())).toEqual({
+    expect(await precomputeLearning(f, adapter, checks)).toEqual({
       outcome: 'held',
     });
     expect(reads).toBe(2);
@@ -1383,9 +1413,9 @@ describe('compact checker proof boundaries', () => {
   );
   it('rejects same-ID signing-key replacement and cross-purpose receipts using genuine crypto', async () => {
     const e = await engineering();
-    const l = await learning();
+    const l = await learning(true);
     const er = await e.checks.check(e.input, e.context());
-    const lr = await l.checks.check(l.input, l.context());
+    const lr = await precomputeLearning(l);
     expect(er.outcome).toBe('checked');
     expect(lr.outcome).toBe('checked');
     if (er.outcome !== 'checked' || lr.outcome !== 'checked') return;
