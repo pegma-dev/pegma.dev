@@ -62,7 +62,7 @@ export interface SupportLearningCompositionOptions {
    * Actual Support and KB applications are supplied only after construction. */
   readonly independentChecks?: Omit<
     SupportIndependentChecksOptions,
-    "store" | "clock" | "application" | "knowledge" | "knowledgeAccess"
+    "store" | "clock" | "application" | "knowledge" | "knowledgeAccess" | "knowledgeSources"
   >;
   /** Optional purpose-bound controller sharing the same durable checker pool. */
   readonly engineeringIndependentChecks?: SupportLearningCompositionOptions["independentChecks"];
@@ -289,6 +289,7 @@ export function createSupportLearningComposition(
               return current.application;
             },
             knowledge: knowledge.application,
+            knowledgeSources: sources,
             knowledgeAccess: sourcePorts.knowledgeAccess,
           });
         }
@@ -303,6 +304,7 @@ export function createSupportLearningComposition(
               return current.application;
             },
             knowledge: knowledge.application,
+            knowledgeSources: sources,
             knowledgeAccess: sourcePorts.knowledgeAccess,
             repositories: engineeringRepositories ?? selected.repositories,
           });

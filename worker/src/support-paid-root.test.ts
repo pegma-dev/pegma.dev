@@ -267,6 +267,8 @@ describe('normal default Worker paid profile selection with actual Memory SDK/au
     expect(pair[0]!.store).toBe(t.store);
     expect(pair[1]!.store).toBe(t.store);
     expect(pair[0]!.knowledge).toBe(pair[1]!.knowledge);
+    expect(pair[0]!.knowledgeSources).toBe(graphs.mock.results.at(-1)!.value!.sources);
+    expect(pair[0]!.knowledgeSources).toBe(pair[1]!.knowledgeSources);
     expect(pair[0]!.clock).toBe(pair[1]!.clock);
     expect(pair[0]!.usagePolicy).toBe(pair[1]!.usagePolicy);
     const source = await t.call(base);

@@ -275,6 +275,22 @@ describe("shared production learning graph", () => {
       checkerFactory.mock.calls[0]![0];
     expect(checkerOptions.application()).toBe(support.application);
     expect(checkerOptions.knowledge).toBe(knowledge.application);
+    expect(checkerOptions.knowledgeSources).toBe(graph.sources);
+    const observations = checkerOptions.knowledge?.publishedSearchObservations;
+    expect(observations).toBe(knowledge.application.publishedSearchObservations);
+    if (observations === undefined || observations.readArticle === undefined)
+      throw new Error("Actual KB authoring comparison capability required");
+    for (const method of ["observe", "confirm", "readScope", "readArticle"] as const)
+      expect(typeof observations[method]).toBe("function");
+    await expect(
+      observations.readArticle(f.actors.staff, { articleId }),
+    ).resolves.toMatchObject({ articleId });
+    await expect(
+      observations.readScope(f.actors.staff, { collectionId: "learning-guides" }),
+    ).resolves.toMatchObject({ collectionId: "learning-guides" });
+    await expect(
+      knowledge.application.getPublishedArticle(f.actors.staff, { articleId }),
+    ).rejects.toThrow(KnowledgeBaseNotFoundError);
     expect(checkerOptions.store).toBe(support.store);
     expect(checkerOptions.clock).toBe(support.clock);
     expect(graph.browserRuntime()?.application).toBe(support.application);
