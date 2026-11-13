@@ -16,7 +16,7 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       'A small Cloudflare Worker host for a fictional community library (Northshelf Branch) offers first-party accounts: passkey sign-in, email one-time codes for enrollment and recovery, server-side sessions, and durable rate limits on expensive auth paths. No passwords.',
     packages: [
       '@pegma/identity@0.1.2',
-      '@pegma/sessions@0.2.1',
+      '@pegma/sessions@0.3.0',
       '@pegma/mail@0.1.1',
       '@pegma/rate-limit@0.2.0',
       '@pegma/authorization-identity@0.4.0',
@@ -243,7 +243,7 @@ export const RECIPE_BACKLOG: readonly CatalogRecipe[] = [
       'A fictional makerspace helpdesk (Bench Ticket) runs a small support-desk site with first-party email-code login (not Auth0, Entra, or passkeys-required), server-side sessions, mail to a catcher, and ticket create/list/reply. Environment runbooks one-shot it on Docker, Cloudflare D1, Azure Tables, and AWS DynamoDB once @pegma/storage-dynamodb is published.',
     packages: [
       '@pegma/identity@0.1.2',
-      '@pegma/sessions@0.2.1',
+      '@pegma/sessions@0.3.0',
       '@pegma/mail@0.1.1',
       '@pegma/rate-limit@0.2.0',
       '@pegma/health@0.2.0',

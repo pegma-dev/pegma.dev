@@ -959,7 +959,7 @@ return {
           }),
           createDetailCheck('identity', {
             storage: 'cloudflare-d1',
-            sessions: '@pegma/sessions@0.2.1',
+            sessions: '@pegma/sessions@0.3.0',
             runtime: '@pegma/identity@0.1.2',
             authorizationAdapter: '@pegma/authorization-identity@0.4.0',
             emailDelivery:

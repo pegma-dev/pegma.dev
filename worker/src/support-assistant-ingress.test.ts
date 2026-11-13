@@ -242,8 +242,8 @@ describe('current public SDK receipt-first customer answering ingress', () => {
         ...f.runtime,
         sessions: {
           ...f.runtime.sessions,
-          async get(id: string) {
-            const value = await f.runtime.sessions.get(id);
+          async observe(id: string) {
+            const value = await f.runtime.sessions.observe(id);
             if (closing) f.state.routeCurrent = false;
             return value;
           },
