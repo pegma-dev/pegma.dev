@@ -50,6 +50,12 @@ import Base from '../../layouts/Base.astro';
     </div>
 
     <form id="queue-filters" class="account-form staff-queue-filters">
+      <label for="filter-handling">Work view</label>
+      <select id="filter-handling" name="handling">
+        <option value="human">Human queue</option>
+        <option value="assistant">Assistant supervision</option>
+        <option value="all">All handling</option>
+      </select>
       <label for="filter-status">Status</label>
       <select id="filter-status" name="status">
         <option value="">All statuses</option>
@@ -71,17 +77,19 @@ import Base from '../../layouts/Base.astro';
       </div>
     </form>
 
-    <h3>Human queue</h3>
+    <h3 id="queue-heading">Human queue</h3>
     <p class="form-note">
       Handling is separate from ticket status. Open a ticket to take over;
       assignment remains a separate action.
     </p>
     <ul id="queue-list" class="ticket-list staff-queue-list"></ul>
+    <section id="engineering-review-inbox" aria-label="Engineering review inbox"></section>
   </section>
 
   <noscript>
     <p class="notice">Staff support requires JavaScript and a signed-in staff session.</p>
   </noscript>
 
+  <script is:inline src="/staff-support-review-inbox.js"></script>
   <script is:inline type="module" src="/staff-support.js"></script>
 </Base>

@@ -700,6 +700,38 @@ describe('staff support API', () => {
     expect(typeof body.csrfToken).toBe('string');
   });
 
+  it('forwards explicit handling choices and preserves the omitted human queue', async () => {
+    const { api, sessions, roleStore, application } = fixture();
+    await grantSupport(roleStore, principalStaff);
+    const staff = await sessionCookie(sessions, principalStaff, 's'.repeat(43));
+    const read = vi.spyOn(application, 'listStaffQueue');
+    for (const handling of ['assistant', 'all', 'human']) {
+      expect(
+        (
+          await api(
+            get('/api/support/admin/queue?handling=' + handling, staff.cookie),
+          )
+        ).status,
+      ).toBe(200);
+      expect(read.mock.calls.at(-1)?.[1]).toMatchObject({ handling });
+    }
+    expect(
+      (await api(get('/api/support/admin/queue', staff.cookie))).status,
+    ).toBe(200);
+    expect(read.mock.calls.at(-1)?.[1]).not.toHaveProperty('handling');
+    const before = read.mock.calls.length;
+    for (const query of [
+      'handling=bogus',
+      'handling=',
+      'handling=all&handling=human',
+    ])
+      expect(
+        (await api(get('/api/support/admin/queue?' + query, staff.cookie)))
+          .status,
+      ).toBe(400);
+    expect(read).toHaveBeenCalledTimes(before);
+  });
+
   it('reads staff ticket including messages and requester email', async () => {
     const { api, sessions, roleStore } = fixture();
     await grantSupport(roleStore, principalStaff);

@@ -177,6 +177,7 @@ async function loadCollection(collectionId) {
   collection = null;
   governanceGeneration = null;
   policyPreview = null;
+  ++policyEditorVersion;
   select('#kb-collection-detail').textContent = '';
   select('#kb-governance-detail').textContent = '';
   select('#kb-portal-form').hidden = true;
@@ -185,6 +186,12 @@ async function loadCollection(collectionId) {
   collection = await call('getCollection', { collectionId });
   text('#kb-collection-detail', collection);
   select('#kb-portal-form').hidden = permissions.collectionManage !== true;
+  const bot = collection.collection.policy.bot;
+  select('#kb-bot-enabled').checked = bot.enabled;
+  select('#kb-bot-permission').value =
+    bot.enabled && bot.audience.kind === 'permission'
+      ? bot.audience.permission
+      : 'knowledge.article.read';
   const portal = collection.collection.policy.portal;
   select('#kb-portal-enabled').checked = portal.enabled;
   select('#kb-portal-permission').value =
@@ -213,6 +220,7 @@ select('#kb-collection-form').addEventListener('submit', (event) => {
 });
 
 let policyPreview = null;
+let policyEditorVersion = 0;
 select('#kb-portal-form').addEventListener('submit', (event) => {
   event.preventDefault();
   run(async () => {
@@ -226,10 +234,25 @@ select('#kb-portal-form').addEventListener('submit', (event) => {
           },
         }
       : { enabled: false };
-    policyPreview = await call('previewCollectionPolicy', {
+    const bot = select('#kb-bot-enabled').checked
+      ? {
+          enabled: true,
+          audience: {
+            kind: 'permission',
+            permission: required('#kb-bot-permission'),
+          },
+        }
+      : { enabled: false };
+    const editorVersion = policyEditorVersion;
+    const preview = await call('previewCollectionPolicy', {
       collectionId,
-      uses: { portal, bot: collection.collection.policy.bot },
+      uses: { portal, bot },
     });
+    if (editorVersion !== policyEditorVersion) {
+      status('Audience settings changed. Preview them again before applying.');
+      return;
+    }
+    policyPreview = preview;
     text('#kb-policy-preview', policyPreview);
     select('#kb-policy-preview').hidden = false;
     select('#kb-policy-apply').hidden = permissions.collectionManage !== true;
@@ -237,6 +260,20 @@ select('#kb-portal-form').addEventListener('submit', (event) => {
   });
 });
 
+for (const field of [
+  '#kb-portal-enabled',
+  '#kb-portal-permission',
+  '#kb-bot-enabled',
+  '#kb-bot-permission',
+]) {
+  for (const event of ['input', 'change'])
+    select(field).addEventListener(event, () => {
+      ++policyEditorVersion;
+      policyPreview = null;
+      select('#kb-policy-preview').hidden = true;
+      select('#kb-policy-apply').hidden = true;
+    });
+}
 select('#kb-policy-apply').addEventListener('click', () =>
   run(async () => {
     if (

@@ -391,11 +391,22 @@ function parseStaffPatchAction(value: unknown): StaffPatchAction {
 
 function parseStaffQueueQuery(url: URL): StaffQueueQuery {
   const query: {
+    handling?: 'human' | 'assistant' | 'all';
     status?: TicketStatus;
     priority?: TicketPriority;
     sort?: QueueSort;
     unassignedOnly?: boolean;
   } = {};
+
+  const handling = url.searchParams.get('handling');
+  if (handling !== null) {
+    if (
+      url.searchParams.getAll('handling').length !== 1 ||
+      (handling !== 'human' && handling !== 'assistant' && handling !== 'all')
+    )
+      throw new ApiError(400, 'invalid_request');
+    query.handling = handling;
+  }
 
   const statusParam = url.searchParams.get('status');
   if (statusParam !== null && statusParam !== '') {

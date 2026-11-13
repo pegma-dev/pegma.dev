@@ -23,6 +23,8 @@ import Base from '../../layouts/Base.astro';
       <form id="kb-portal-form" class="account-form" hidden>
         <label><input id="kb-portal-enabled" type="checkbox" /> Enable signed-in guide browsing</label>
         <label for="kb-portal-permission">Required audience permission</label><input id="kb-portal-permission" maxlength="200" />
+        <label><input id="kb-bot-enabled" type="checkbox" /> Enable approved bot answers</label>
+        <label for="kb-bot-permission">Required bot audience permission</label><input id="kb-bot-permission" maxlength="200" />
         <button type="submit">Preview audience policy</button>
       </form>
       <pre id="kb-policy-preview" hidden></pre><button id="kb-policy-apply" type="button" hidden>Apply reviewed audience policy</button>
