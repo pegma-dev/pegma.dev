@@ -164,6 +164,7 @@ async function withAbort<T>(
 export function supportBrowser(
   surface: 'create' | 'customer' | 'staff' | 'queue',
   respond: (call: BrowserCall) => BrowserResponse | Promise<BrowserResponse>,
+  extensionGlobals: Readonly<Record<string, unknown>> = {},
 ) {
   const paths = {
     create: ['feedback.js', 'feedback.astro', '/feedback/'],
@@ -238,6 +239,7 @@ export function supportBrowser(
       AbortController,
       FormData: BrowserFormData,
       crypto: { randomUUID },
+      ...extensionGlobals,
       fetch: async (request: string, init: RequestInit = {}) => {
         if (init.body !== undefined && typeof init.body !== 'string')
           throw new Error('Unexpected browser request body.');

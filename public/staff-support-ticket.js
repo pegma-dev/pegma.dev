@@ -252,7 +252,7 @@ function retryDeadline(value) {
   // A missing or malformed server hint never triggers a tight retry loop.
   return Date.now() + 30_000;
 }
-async function api(path, init = {}) {
+async function api(path, init = {}, includeStatus = false) {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) headers.set('Content-Type', 'application/json');
   if (csrfToken !== '') headers.set('X-Pegma-CSRF', csrfToken);
@@ -293,7 +293,8 @@ async function api(path, init = {}) {
               ? { retryAt: retryDeadline(response.headers.get('Retry-After')) }
               : {}),
           });
-        return await response.json();
+        const body = await response.json();
+        return includeStatus ? { status: response.status, body } : body;
       })(),
       aborted,
     ]);
@@ -1007,6 +1008,8 @@ if (followupRoot !== null && typeof globalThis.PegmaSupportFollowup?.createPanel
       !learningOccupied() && !engineeringPending() && !engineeringBusy && engineeringRequests === 0 &&
       !suspended && !authorityReloadRequired && viewer !== null && currentView !== null && onThisTicket(),
     request: (path, init) => followupRequest(() => api(path, init)),
+    requestWithStatus: (path, init) =>
+      followupRequest(() => api(path, init, true)),
     readSession: () => followupRequest(() => readViewer(readGeneration)),
     readCurrentTicket: (id) => followupRequest(async () => {
       if (id !== ticketId) throw Object.assign(new Error('wrong_ticket'), { stale: true });

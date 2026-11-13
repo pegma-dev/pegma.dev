@@ -14,6 +14,8 @@
     let cursor = null;
     let associations = [];
     let mappingView = null;
+    let shownReport = null;
+    let reportVersion = 0;
     const now = options.now ?? Date.now;
     const commandId = options.commandId ?? (() => global.crypto.randomUUID());
     const doc = root.ownerDocument ?? document;
@@ -124,6 +126,40 @@
     reason.dataset.followupField = 'reason';
     reason.setAttribute('aria-label', 'Staff hold or rejection reason');
     const content = create('textarea');
+    const retestRequest = create('select');
+    retestRequest.dataset.followupField = 'retestRequestId';
+    const reportFields = {};
+    for (const name of ['articleId', 'ledgerEpoch', 'reportId']) {
+      const field = create('input');
+      field.maxLength = 200;
+      field.dataset.followupField = name;
+      reportFields[name] = field;
+      for (const event of ['input', 'change'])
+        field.addEventListener(event, () => {
+          ++reportVersion;
+          shownReport = null;
+          reportView.textContent = '';
+          render();
+        });
+    }
+    const reportView = create('pre');
+    reportView.className = 'support-message-body';
+    retestRequest.addEventListener('change', () => {
+      ++reportVersion;
+      shownReport = null;
+      reportView.textContent = '';
+      render();
+    });
+    const retestControls = create('fieldset');
+    retestControls.className = 'account-form';
+    retestControls.append(
+      create('legend', 'Record a verified retest result'),
+      labelled('Exact retest request', retestRequest),
+      labelled('Knowledge article ID', reportFields.articleId),
+      labelled('Report ledger epoch', reportFields.ledgerEpoch),
+      labelled('Knowledge report ID', reportFields.reportId),
+      reportView,
+    );
     content.dataset.followupField = 'content';
     content.setAttribute(
       'aria-label',
@@ -163,6 +199,9 @@
     add('reject', 'Reject checked bundle');
     add('retry', 'Retry draftless work');
     add('abandon', 'Hold this work');
+    add('report-read', 'Read current Knowledge report');
+    add('retest-receipt', 'Associate this report with the retest');
+    add('retest-result', 'Record the prepared retest result');
     add('exact-retry', 'Retry the exact previous command');
     root.replaceChildren(
       heading,
@@ -175,6 +214,7 @@
       labelled('Complete retained candidate JSON', content),
       privateView,
       mappingControls,
+      retestControls,
       actions,
     );
     function notify() {
@@ -198,7 +238,15 @@
           !ready ||
           busy ||
           now() < retryAt ||
-          (action === 'exact-retry' ? !owns : owner !== null) ||
+          (['exact-retry', 'retest-result'].includes(action)
+            ? !owns ||
+              (action === 'retest-result' && owner.operation !== 'retest')
+            : owner !== null) ||
+          (action === 'report-read' && work === null) ||
+          (action === 'retest-receipt' &&
+            (work === null ||
+              shownReport?.qualified !== true ||
+              retestRequest.value === '')) ||
           (['verify-mapping', 'withdraw-mapping'].includes(action) &&
             mappingView === null) ||
           (['reassess', 'post', 'reject', 'retry', 'abandon'].includes(
@@ -218,6 +266,8 @@
         facts,
         verified,
         ...Object.values(mappingFields),
+        retestRequest,
+        ...Object.values(reportFields),
       ])
         field.disabled = !ready || busy || owner !== null;
       if (timer !== null) {
@@ -235,6 +285,12 @@
     }
     function clearPrivate() {
       work = null;
+      ++reportVersion;
+      shownReport = null;
+      reportView.textContent = '';
+      retestRequest.replaceChildren();
+      retestRequest.value = '';
+      for (const field of Object.values(reportFields)) field.value = '';
       privateView.textContent = '';
       content.value = '';
       associations = [];
@@ -313,6 +369,149 @@
         });
       return text;
     }
+    function currentRetestRequests() {
+      const values =
+        work?.prepared?.bundle?.retestRequests ?? work?.handoff?.retestRequests;
+      return Array.isArray(values) &&
+        values.length <= 4 &&
+        values.every(
+          (value) =>
+            value &&
+            typeof value.requestId === 'string' &&
+            value.requestId.length > 0 &&
+            value.requestId.length <= 200,
+        )
+        ? values
+        : [];
+    }
+    function showRetestRequests() {
+      ++reportVersion;
+      shownReport = null;
+      reportView.textContent = '';
+      retestRequest.replaceChildren();
+      const placeholder = create('option', 'Choose the exact retest request');
+      placeholder.value = '';
+      retestRequest.append(placeholder);
+      for (const item of currentRetestRequests()) {
+        const option = create(
+          'option',
+          item.requestId + ' · ' + item.expectedBehavior,
+        );
+        option.value = item.requestId;
+        retestRequest.append(option);
+      }
+      retestRequest.value = '';
+    }
+    function reportCoordinates() {
+      const articleId = reportFields.articleId.value;
+      const reportId = reportFields.reportId.value;
+      if (
+        ![articleId, reportId].every(
+          (v) =>
+            typeof v === 'string' &&
+            v.trim().length > 0 &&
+            v.length <= 200 &&
+            !/[\u0000-\u001f\u007f]/u.test(v),
+        ) ||
+        !/^[1-9][0-9]*$/u.test(reportFields.ledgerEpoch.value)
+      )
+        throw Object.assign(
+          new Error(
+            'Complete the article, positive ledger epoch and report ID before reading.',
+          ),
+          { local: true },
+        );
+      const ledgerEpoch = Number(reportFields.ledgerEpoch.value);
+      if (!Number.isSafeInteger(ledgerEpoch))
+        throw Object.assign(new Error('Enter a valid report ledger epoch.'), {
+          local: true,
+        });
+      return { articleId, ledgerEpoch, reportId };
+    }
+    function readReportView(value, coordinates) {
+      if (
+        !value ||
+        value.articleId !== coordinates.articleId ||
+        value.ledgerEpoch !== coordinates.ledgerEpoch ||
+        value.reportId !== coordinates.reportId ||
+        !Number.isSafeInteger(value.reportGeneration) ||
+        value.reportGeneration < 1 ||
+        value.expectedReportGeneration !== value.reportGeneration ||
+        !/^[a-f0-9]{64}$/u.test(value.reviewBindingHash) ||
+        typeof value.receipt !== 'string' ||
+        value.receipt.length < 1 ||
+        value.receipt.length > 200 ||
+        !['pending', 'confirmed', 'rejected'].includes(value.status) ||
+        !['passed', 'failed', 'inconclusive'].includes(
+          value.evidence?.result,
+        ) ||
+        typeof value.report?.summary !== 'string' ||
+        typeof value.report?.details !== 'string'
+      )
+        throw new Error('invalid_current_report');
+      return Object.freeze({
+        ...coordinates,
+        expectedReportGeneration: value.reportGeneration,
+        reviewBindingHash: value.reviewBindingHash,
+        receipt: value.receipt,
+        qualified:
+          value.status === 'confirmed' &&
+          ['passed', 'failed'].includes(value.evidence.result) &&
+          value.confirmation !== null &&
+          typeof value.confirmation === 'object',
+        display: JSON.stringify(
+          {
+            articleId: value.articleId,
+            ledgerEpoch: value.ledgerEpoch,
+            reportId: value.reportId,
+            reportGeneration: value.reportGeneration,
+            status: value.status,
+            result: value.evidence.result,
+            summary: value.report.summary,
+            details: value.report.details,
+          },
+          null,
+          2,
+        ),
+      });
+    }
+    function preparationResult(httpStatus, value, packet) {
+      const pending = httpStatus === 202;
+      const keys = [
+        'actorId',
+        'ticketId',
+        'commandId',
+        'workId',
+        'retestRequestId',
+        ...(pending ? ['pending'] : ['receipt', 'validUntil']),
+      ];
+      if (
+        ![200, 202].includes(httpStatus) ||
+        !value ||
+        Object.keys(value).sort().join(',') !== keys.sort().join(',') ||
+        value.actorId !== packet.actorSubject ||
+        value.ticketId !== packet.ticketId ||
+        value.commandId !== packet.commandId ||
+        value.workId !== packet.workId ||
+        value.retestRequestId !== packet.retestRequestId
+      )
+        throw new Error('unconfirmed_retest_preparation');
+      if (pending) {
+        if (value.pending !== 'report')
+          throw new Error('invalid_pending_phase');
+        return { pending: true };
+      }
+      if (
+        typeof value.receipt !== 'string' ||
+        !value.receipt.trim() ||
+        value.receipt.length > 200 ||
+        typeof value.validUntil !== 'string' ||
+        !Number.isFinite(Date.parse(value.validUntil)) ||
+        new Date(value.validUntil).toISOString() !== value.validUntil
+      )
+        throw new Error('invalid_retest_receipt');
+      return { pending: false, receipt: value.receipt };
+    }
     function ack(value, packet) {
       if (['verify-mapping', 'withdraw-mapping'].includes(packet.operation))
         return (
@@ -339,6 +538,13 @@
           )
         );
       if (value.result.workId !== packet.workId) return false;
+      if (packet.operation === 'retest')
+        return (
+          Object.keys(value.result).sort().join(',') ===
+            'outcome,result,ticketId,workId' &&
+          ['recorded', 'unchanged', 'held'].includes(value.result.outcome) &&
+          ['passed', 'failed'].includes(value.result.result)
+        );
       if (packet.operation === 'post')
         return (
           value.result.messageId === packet.messageId &&
@@ -365,7 +571,7 @@
       const token = epoch;
       if (
         owner !== null &&
-        (action !== 'exact-retry' ||
+        (!['exact-retry', 'retest-result'].includes(action) ||
           owner.actorSubject !== selected.actorSubject ||
           owner.ticketId !== selected.ticketId)
       )
@@ -374,7 +580,54 @@
       options.onBusyChange?.(true);
       render();
       try {
-        const session = await authority(token, selected);
+        let session = await authority(token, selected);
+        if (action === 'report-read') {
+          if (
+            !currentRetestRequests().some(
+              (item) => item.requestId === retestRequest.value,
+            )
+          )
+            throw Object.assign(
+              new Error('Read work and choose its exact retest request first.'),
+              { local: true },
+            );
+          const coordinates = reportCoordinates();
+          const observed = reportVersion;
+          const chosen = retestRequest.value;
+          shownReport = null;
+          reportView.textContent = '';
+          const value = await request('/api/staff/knowledge/command', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Pegma-CSRF': session.csrfToken,
+            },
+            body: JSON.stringify({
+              operation: 'reportRead',
+              input: coordinates,
+            }),
+          });
+          ensure(token, selected);
+          const closing = await readSession();
+          ensure(token, selected);
+          if (!sameSession(session, closing))
+            throw Object.assign(new Error('session_changed'), { status: 401 });
+          if (
+            observed !== reportVersion ||
+            chosen !== retestRequest.value ||
+            JSON.stringify(reportCoordinates()) !== JSON.stringify(coordinates)
+          ) {
+            status.textContent =
+              'The report selection changed. Read the selected report again.';
+            return;
+          }
+          shownReport = readReportView(value, coordinates);
+          reportView.textContent = shownReport.display;
+          status.textContent = shownReport.qualified
+            ? 'Confirmed report shown. Associate this exact report version with the selected retest.'
+            : 'This report is pending, rejected or inconclusive. Use the existing Knowledge confirmation workflow before association.';
+          return;
+        }
         if (action === 'mapping-list' || action === 'mapping') {
           const suffix =
             action === 'mapping-list'
@@ -533,6 +786,7 @@
             )
               throw new Error('invalid_followup_work');
             work = value.result;
+            showRetestRequests();
             privateView.textContent = JSON.stringify(work, null, 2);
             content.value =
               work.candidate === undefined
@@ -546,7 +800,47 @@
         if (owner === null) {
           const id = commandId();
           let body;
-          if (action === 'verify-mapping' || action === 'withdraw-mapping') {
+          if (action === 'retest-receipt') {
+            const expectedTicketRevision =
+              work?.delivered?.ticketRevision ?? work?.acceptedTicketRevision;
+            const coordinates = reportCoordinates();
+            if (
+              work === null ||
+              work.workId !== workId.value.trim() ||
+              shownReport?.qualified !== true ||
+              ['articleId', 'ledgerEpoch', 'reportId'].some(
+                (key) => coordinates[key] !== shownReport[key],
+              ) ||
+              !currentRetestRequests().some(
+                (item) => item.requestId === retestRequest.value,
+              ) ||
+              !Number.isSafeInteger(expectedTicketRevision) ||
+              expectedTicketRevision < 1
+            )
+              throw Object.assign(
+                new Error(
+                  'Read current work, choose its retest and read a confirmed report first.',
+                ),
+                { local: true },
+              );
+            body = {
+              commandId: id,
+              expectedPrincipalId: selected.actorSubject,
+              workId: work.workId,
+              expectedWorkGeneration: work.workGeneration,
+              expectedTicketRevision: expectedTicketRevision,
+              retestRequestId: retestRequest.value,
+              report: {
+                ...coordinates,
+                expectedReportGeneration: shownReport.expectedReportGeneration,
+                reviewBindingHash: shownReport.reviewBindingHash,
+                receipt: shownReport.receipt,
+              },
+            };
+          } else if (
+            action === 'verify-mapping' ||
+            action === 'withdraw-mapping'
+          ) {
             if (
               mappingView === null ||
               mappingView.repositoryId !== repository.value ||
@@ -703,6 +997,70 @@
           notify();
         }
         const packet = owner;
+        if (packet.operation === 'retest-receipt') {
+          const sendPreparation = async () => {
+            const init = {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Pegma-CSRF': session.csrfToken,
+              },
+              body: packet.body,
+            };
+            const response = options.requestWithStatus
+              ? await options.requestWithStatus(
+                  path(selected, packet.operation),
+                  init,
+                )
+              : {
+                  status: 200,
+                  body: await request(path(selected, packet.operation), init),
+                };
+            ensure(token, selected);
+            const closing = await readSession();
+            ensure(token, selected);
+            if (
+              !sameSession(session, closing) ||
+              response.body?.csrfToken !== closing.csrfToken
+            )
+              throw new Error('unconfirmed_preparation_session');
+            return preparationResult(
+              response.status,
+              response.body?.result,
+              packet,
+            );
+          };
+          let result = await sendPreparation();
+          if (result.pending) {
+            session = await authority(token, selected);
+            result = await sendPreparation();
+          }
+          if (result.pending) {
+            status.textContent =
+              'Report association is pending. No retest result has been recorded. Retry the exact preparation.';
+            return;
+          }
+          const id = commandId();
+          const body = {
+            commandId: id,
+            workId: packet.workId,
+            retestRequestId: packet.retestRequestId,
+            receiptReference: result.receipt,
+          };
+          owner = Object.freeze({
+            actorSubject: packet.actorSubject,
+            ticketId: packet.ticketId,
+            operation: 'retest',
+            preparation: packet,
+            body: JSON.stringify(body),
+            ...body,
+          });
+          notify();
+          clearPrivate();
+          status.textContent =
+            'Report associated. No retest result has been recorded. Choose Record the prepared retest result.';
+          return;
+        }
         const value = await request(path(selected, packet.operation), {
           method: 'POST',
           headers: {
@@ -724,8 +1082,21 @@
         notify();
         clearPrivate();
         status.textContent =
-          'The exact command was acknowledged. Reloading current ticket state.';
+          packet.operation === 'retest'
+            ? value.result.outcome === 'held'
+              ? 'Retest result held. No new result was recorded.'
+              : 'Retest ' + value.result.result + ' result acknowledged.'
+            : 'The exact command was acknowledged. Reloading current ticket state.';
         await options.onSettled?.();
+        if (
+          packet.operation === 'retest' &&
+          context?.ticketId === packet.ticketId &&
+          context?.actorSubject === packet.actorSubject
+        )
+          status.textContent =
+            value.result.outcome === 'held'
+              ? 'Retest result held. No new result was recorded.'
+              : 'Retest ' + value.result.result + ' result acknowledged.';
       } catch (error) {
         if (epoch !== token) return;
         if (error.local === true && owner === null) {
