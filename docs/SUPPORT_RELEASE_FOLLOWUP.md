@@ -130,7 +130,11 @@ and packet; they never cause another association under a new identity.
 `POST retest` takes commandId, workId, retestRequestId and receiptReference.
 The real SDK owns current Source/association/release/Work checks and the late
 browser/session guard. The verifier reobserves the KB report under its original
-staff authority. Exact accepted SDK receipts recover before mutable proof reads.
+staff authority. Its operation-local observation remains provisional until the
+actual KB confirmation closes alongside the SDK's current Source versions.
+The original browser guard then runs before the final synchronous assertion
+and conditional commit. Handles are never serialized or reused across requests.
+Exact accepted SDK receipts recover before mutable proof reads.
 A delivered Work uses its handoff requests, original delivered bundle hash and
 delivered ticket revision. A later failed retest records failure and holds
 further work without retracting or sending another notice.
@@ -155,6 +159,28 @@ binds the original current staff resolver; it does not give Review to a service.
 Missing model, funding, key, evaluation or route approval holds paid preparation
 while ordinary Support and nonpaid Source actions remain available.
 
+Default background processing opts into the SDK's staged invocation mode.
+Planning records an explicit durable `not_called` state. A later one-shot begin
+marks a possible provider attempt before transport, records the bounded result
+and accounting, and releases it for a later completion stage. Unknown attempts
+remain held and cannot authorize another call. Independent checks likewise
+separate preparation, one provider attempt and a later fresh receipt phase;
+a recorded verdict is not an approval receipt. Staff reassessment remains the
+existing inline, original-staff-authorized flow. An injected legacy composition
+without staged mode retains its prior behavior.
+
+The host prewrites a bounded body-free Work or check-operation continuation
+before every possible paid phase, including a lost planning ACK. It does not
+infer a new paid chance from `model_prepared` or an unmarked pending result.
+Exhausted advisory hints settle in a separate no-SDK tick; a confirmed
+`not_claimed` result can drain its hint in that nonprovider invocation. Current
+SDK claims, receipts and live authority remain the sole work authority.
+
+Deferred request cleanup uses the existing inactive-sweep lane and accepted
+Source-withdraw hook. Its Store/Clock-only SDK helper requires no paid profile,
+provider key, receipt key or model funding. It erases private request payloads
+while retaining body-free one-shot intent tombstones.
+
 The existing cleanup cron seeds SD05 on UTC minutes 0, 15, 30 and 45. Existing
 engineering/learning cadence is unchanged. One queue invocation performs one
 body-free scan or one SDK stage, using a separate durable SD05 cursor. Finite
@@ -167,8 +193,9 @@ web notice, and KB review/publication remains separate.
 With the current `0-58 * * * *` cleanup schedule, two idle minute domains cost
 8,496 queue operations/day and SD05 adds 288, totaling 8,784 before retries or
 other queue traffic. Treating the first two as full minute domains gives a
-conservative 8,928. OFF adds zero. These are scheduling arithmetic, not a
-universal Free-tier traffic guarantee.
+conservative 8,928. A disabled SD05 worker adds zero queue operations; retention
+cleanup uses the existing maintenance invocation. These are scheduling
+arithmetic, not a universal Free-tier traffic guarantee.
 
 ## Evidence and validation
 

@@ -102,6 +102,7 @@ async function fixture() {
         sourceConfiguration ?? undefined,
     } as const;
     const context = createExecutionContext();
+    let drained = false;
     try {
       const response = await worker.fetch(
         request,
@@ -109,6 +110,8 @@ async function fixture() {
         context,
       );
       await response.clone().arrayBuffer();
+      await waitOnExecutionContext(context);
+      drained = true;
       const budget = meter.snapshot();
       console.info(
         'support-followup-host-d1',
@@ -123,7 +126,7 @@ async function fixture() {
       expect(budget.blockedParameters).toBe(0);
       return response;
     } finally {
-      await waitOnExecutionContext(context);
+      if (!drained) await waitOnExecutionContext(context);
     }
   }
   return { ...f, work, report, packet, invoke };
@@ -182,7 +185,7 @@ describe('default SD05 Source and real paired report entrypoints on Native D1', 
 });
 
 describe('default SD05 shared adapters on Native D1', () => {
-  it('keeps every real queued generation/checking stage within the invocation budget', async () => {
+  it('prepares checked work through queued phases and sends only after a real report and explicit staff approval', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(PAID_START));
     const f = await createSupportFollowupHostFixture(
@@ -193,18 +196,6 @@ describe('default SD05 shared adapters on Native D1', () => {
       }),
     );
     const paid = await supportFollowupPaidFixture();
-    const mapped = await f.source.mappings!.verify(
-      f.context,
-      f.f.identity.ticketId,
-      f.mappingPacket,
-    );
-    const observed = await f.runtime.observe(f.context, {
-      ...f.f.identity,
-      commandId: crypto.randomUUID(),
-      inputReference: mapped.inputReference,
-    });
-    if (!observed.workId) throw new Error('Actual follow-up work required');
-    const key = { ticketId: f.f.identity.ticketId, workId: observed.workId };
     const calls: unknown[] = [];
     vi.stubGlobal(
       'fetch',
@@ -247,6 +238,27 @@ describe('default SD05 shared adapters on Native D1', () => {
         buildId: f.product.buildId,
       },
     };
+    const mapping = await invoke('verify-mapping', f.mappingPacket);
+    expect(mapping.status).toBe(200);
+    const mappingAck = engineeringHttpResult(
+      await engineeringHttpObject(mapping),
+    );
+    const observed = await invoke('observe', {
+      commandId: crypto.randomUUID(),
+      ...f.f.identity.association,
+      inputReference: mappingAck.inputReference,
+    });
+    expect(observed.status).toBe(200);
+    const observedResult = engineeringHttpResult(
+      await engineeringHttpObject(observed),
+    );
+    if (typeof observedResult.workId !== 'string')
+      throw new Error('Actual follow-up work required');
+    const key = {
+      ticketId: f.f.identity.ticketId,
+      workId: observedResult.workId,
+    };
+    expect(calls).toHaveLength(0);
     let prepared = false;
     for (let tick = 0; tick < 16; tick++) {
       const meter = createSupportAssistantStageDatabase(env.IDENTITY_DB);
@@ -263,6 +275,7 @@ describe('default SD05 shared adapters on Native D1', () => {
         GITHUB_ALLOWED_REPOSITORY_IDS: f.f.identity.association.repositoryId,
       } as unknown as Parameters<typeof worker.fetch>[1];
       const context = createExecutionContext();
+      let drained = false;
       try {
         await worker.queue(
           {
@@ -283,6 +296,8 @@ describe('default SD05 shared adapters on Native D1', () => {
           environment,
           context,
         );
+        await waitOnExecutionContext(context);
+        drained = true;
         const budget = meter.snapshot();
         const work = await f.host.application.readEngineeringFollowupWork(
           f.staff,
@@ -307,10 +322,119 @@ describe('default SD05 shared adapters on Native D1', () => {
           break;
         }
       } finally {
-        await waitOnExecutionContext(context);
+        if (!drained) await waitOnExecutionContext(context);
       }
     }
     expect(prepared).toBe(true);
     expect(calls).toHaveLength(2);
+
+    async function invoke(
+      operation: string,
+      packet: unknown,
+      paidConfiguration = true,
+    ) {
+      const meter = createSupportAssistantStageDatabase(env.IDENTITY_DB);
+      const worker = createWorker();
+      const environment = {
+        ...env,
+        ...paid.env,
+        IDENTITY_DB: meter.database,
+        IDENTITY_EMAIL_CODE_SECRET_BASE64: btoa('e'.repeat(32)),
+        PEGMA_KNOWLEDGE_ENABLED: 'true',
+        PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED: 'false',
+        SUPPORT_LEARNING_SOURCE_CONFIGURATION_JSON: JSON.stringify(source),
+        GITHUB_ALLOWED_REPOSITORY_IDS: f.f.identity.association.repositoryId,
+      } as unknown as Parameters<typeof worker.fetch>[1];
+      if (!paidConfiguration) {
+        for (const name of [
+          'SUPPORT_PAID_CONFIGURATION_JSON',
+          'SUPPORT_ASSISTANT_OPENROUTER_API_KEY',
+          'SUPPORT_INDEPENDENT_CHECK_RECEIPT_KEY_BASE64',
+        ])
+          Reflect.deleteProperty(environment, name);
+      }
+      const context = createExecutionContext();
+      let drained = false;
+      try {
+        const response = await worker.fetch(
+          f.request(operation, packet),
+          environment,
+          context,
+        );
+        await response.clone().arrayBuffer();
+        await waitOnExecutionContext(context);
+        drained = true;
+        const budget = meter.snapshot();
+        console.info(
+          'support-followup-host-d1',
+          JSON.stringify({
+            operation: 'default.paid.' + operation,
+            status: response.status,
+            paidConfiguration,
+            budget,
+          }),
+        );
+        expect(budget.physicalQueries).toBeLessThanOrEqual(50);
+        expect(budget.maximumParameters).toBeLessThanOrEqual(100);
+        expect(budget.blockedQueries).toBe(0);
+        expect(budget.blockedParameters).toBe(0);
+        return response;
+      } finally {
+        if (!drained) await waitOnExecutionContext(context);
+      }
+    }
+    let work = await f.host.application.readEngineeringFollowupWork(
+      f.staff,
+      key,
+    );
+    expect(work.delivered).toBeUndefined();
+    const report = await f.report();
+    const packet = {
+      commandId: crypto.randomUUID(),
+      expectedPrincipalId: f.staff.principalId,
+      workId: work.workId,
+      expectedWorkGeneration: work.workGeneration,
+      expectedTicketRevision: work.acceptedTicketRevision,
+      retestRequestId: work.preparedBundle!.bundle.retestRequests[0]!.requestId,
+      report: {
+        articleId: report.articleId,
+        ledgerEpoch: report.ledgerEpoch,
+        reportId: report.reportId,
+        expectedReportGeneration: report.reportGeneration,
+        reviewBindingHash: report.reviewBindingHash,
+        receipt: report.receipt,
+      },
+    };
+    expect((await invoke('retest-receipt', packet)).status).toBe(202);
+    const receipt = await invoke('retest-receipt', packet);
+    expect(receipt.status).toBe(200);
+    const ack = engineeringHttpResult(await engineeringHttpObject(receipt));
+    expect(
+      (
+        await invoke('retest', {
+          commandId: crypto.randomUUID(),
+          workId: work.workId,
+          retestRequestId: packet.retestRequestId,
+          receiptReference: ack.receipt,
+        })
+      ).status,
+    ).toBe(200);
+    work = await f.host.application.readEngineeringFollowupWork(f.staff, key);
+    const post = {
+      commandId: crypto.randomUUID(),
+      workId: work.workId,
+      expectedWorkGeneration: work.workGeneration,
+      expectedTicketRevision: work.acceptedTicketRevision,
+      bundleHash: work.preparedBundle!.bundleHash,
+      messageId: crypto.randomUUID(),
+    };
+    expect((await invoke('post', post)).status).toBe(200);
+    expect((await invoke('post', post, false)).status).toBe(200);
+    expect(calls).toHaveLength(2);
+    expect(
+      (
+        await f.host.application.readStaffTicket(f.staff, work.ticketId)
+      ).messages.filter((message) => message.id === post.messageId),
+    ).toHaveLength(1);
   });
 });

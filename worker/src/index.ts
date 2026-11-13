@@ -11,6 +11,7 @@ import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './su
 import { SUPPORT_ENGINEERING_QUEUE, seedSupportEngineeringWake, consumeSupportEngineeringWake, seedSupportLearningWake, consumeSupportLearningWake, isSupportLearningWake, seedSupportReleaseFollowupWake, consumeSupportReleaseFollowupWake, isSupportReleaseFollowupWake, type SupportEngineeringWake, type SupportLearningWake, type SupportReleaseFollowupWake } from './support-engineering-queue';
 import { createSupportReleaseFollowupDriver, supportReleaseFollowupWakeDue } from './support-release-followup-driver';
 import { createSupportReleaseFollowupRuntime } from './support-release-followup';
+import { createSupportReleaseFollowupCheckCleanup } from '@pegma/support-desk-ai/openrouter';
 import { createSupportLearningComposition, type SupportLearningCompositionOptions } from './support-learning-composition';
 import { createSupportLearningBootstrap, type SupportLearningSourceEnvironment } from './support-learning-bootstrap';
 import { createSupportPaidBootstrap, type SupportPaidEnvironment } from './support-paid-bootstrap';
@@ -475,6 +476,24 @@ function createSupportHandler(
       ...(production.discardChecks === undefined ? {} : { discardChecks: production.discardChecks }),
     } };
   }
+  if (configured && selectedEngineering.configuration !== undefined) {
+    const original = selectedEngineering.configuration;
+    selectedEngineering = {
+      ...selectedEngineering,
+      configuration: {
+        ...original,
+        async discardChecks(ticketId) {
+          await Promise.all([
+            original.discardChecks?.(ticketId),
+            createSupportReleaseFollowupCheckCleanup({
+              store: supportRuntime.store,
+              clock: supportRuntime.clock,
+            }).discardTicket(ticketId),
+          ]);
+        },
+      },
+    };
+  }
   if (!withAnswering) selectedAnswering = answerConfigured ? { recoveryOnly: true } : {};
   let answeringRuntime;
   if (answerConfigured) {
@@ -585,6 +604,7 @@ function createSupportHandler(
       : createSupportReleaseFollowupDriver({
         store: supportRuntime.store,
         clock: supportRuntime.clock,
+        invocationMode: releaseFollowup?.configuration?.invocationMode,
         enabled: () => env.PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED === 'true' && supportReleaseFollowupEnabled(releaseFollowup),
         runtime: (current) => createSupportReleaseFollowupRuntime({
           application: supportRuntime.application,
@@ -1335,7 +1355,18 @@ return {
               ? { store: createProductionStore(env), clock: systemClock, limiters: [] }
               : createProductionSupportMaintenanceRuntime(env);
             await runSupportMaintenance(
-              { ...runtime, independentChecksPurge: () => purgeSupportIndependentCheckRequests(runtime).then(() => undefined) },
+              {
+                ...runtime,
+                independentChecksPurge: async () => {
+                  await Promise.all([
+                    purgeSupportIndependentCheckRequests(runtime),
+                    createSupportReleaseFollowupCheckCleanup({
+                      store: runtime.store,
+                      clock: runtime.clock,
+                    }).purgeExpired(),
+                  ]);
+                },
+              },
               logger,
               {
                 tasks: [cleanup.task],

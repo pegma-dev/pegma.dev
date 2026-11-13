@@ -244,8 +244,8 @@ export function createSupportFollowupRetests(
         reports: KnowledgeEvidenceReports;
       }
     | undefined;
-  function ports(signal: AbortSignal) {
-    if (signal.aborted || !options.enabled())
+  function boundPorts() {
+    if (!options.enabled())
       throw new ApiError(503, 'followup_retest_unavailable');
     const application = options.application();
     const knowledge = options.knowledge();
@@ -266,6 +266,10 @@ export function createSupportFollowupRetests(
       reports,
       observations: reports.observations,
     };
+  }
+  function ports(signal: AbortSignal) {
+    if (signal.aborted) throw new ApiError(503, 'followup_retest_unavailable');
+    return boundPorts();
   }
   function permit(access: AccessContext) {
     if (
@@ -372,6 +376,7 @@ export function createSupportFollowupRetests(
     },
     signal: AbortSignal,
     qualifyGovernance = true,
+    deferConfirmation = false,
   ) {
     const actual = ports(signal);
     const key = {
@@ -466,15 +471,23 @@ export function createSupportFollowupRetests(
       )
         throw new ApiError(409, 'followup_retest_changed');
     }
-    const checked = await reportRead(() =>
-      actual.observations.confirm(access, observed.observation),
-    );
-    // confirm() closes the exact current KB draft/requirements/governance
-    // generation observed above, as well as current actor/reviewer authority.
-    if (checked.receipt !== view.receipt)
-      throw new ApiError(409, 'followup_retest_changed');
-    ports(signal);
+    let consumed = false;
+    async function confirm(currentSignal: AbortSignal) {
+      if (consumed) throw new ApiError(409, 'followup_retest_changed');
+      consumed = true;
+      ports(currentSignal);
+      const checked = await reportRead(() =>
+        actual.observations.confirm(access, observed.observation),
+      );
+      // The actual pair closes the exact KB resources/report and current
+      // actor/reviewer authority. Keep its handle inside this one operation.
+      if (checked.receipt !== view.receipt)
+        throw new ApiError(409, 'followup_retest_changed');
+      ports(currentSignal);
+    }
+    if (!deferConfirmation) await confirm(signal);
     return {
+      confirm,
       fingerprint: await knowledgeDigest({
         key,
         reportHash: view.reportHash,
@@ -698,48 +711,60 @@ export function createSupportFollowupRetests(
     await current();
     return acknowledgement(recorded);
   }
-  const verifier: EngineeringFollowupRetestPort = {
-    async verify(reference, expected, signal) {
-      try {
-        if (!/^pgretest1\.[a-f0-9]{64}$/u.test(reference)) return null;
-        const value = await records.get({
-          partition: expected.ticketId,
-          id: 'receipt:' + reference.slice(10),
-        });
-        if (
-          value?.kind !== 'receipt' ||
-          canonical(value.binding) !== canonical(expected) ||
-          Date.parse(value.validUntil) <= Date.parse(options.clock.now())
-        )
-          return null;
-        const access = await options.resolvePrincipal(value.actorId, signal);
-        if (!access) return null;
-        permit(access);
-        // The actual SDK constructs this exact binding only after its current
-        // Source/association/release validation, and closes those versions at
-        // commit. Repeating that private protocol here would add no authority.
-        const report = await reportFacts(
-          access,
-          value.packet,
-          {
-            product: value.reportContext.product,
-            request: {
-              validationRequirementIds:
-                value.reportContext.validationRequirementIds,
-            },
+  async function openVerification(
+    reference: Parameters<EngineeringFollowupRetestPort['verify']>[0],
+    expected: Parameters<EngineeringFollowupRetestPort['verify']>[1],
+    signal: AbortSignal,
+    deferred: boolean,
+  ) {
+    try {
+      if (!/^pgretest1\.[a-f0-9]{64}$/u.test(reference)) return null;
+      const value = await records.get({
+        partition: expected.ticketId,
+        id: 'receipt:' + reference.slice(10),
+      });
+      if (
+        value?.kind !== 'receipt' ||
+        canonical(value.binding) !== canonical(expected) ||
+        Date.parse(value.validUntil) <= Date.parse(options.clock.now())
+      )
+        return null;
+      const access = await options.resolvePrincipal(value.actorId, signal);
+      if (!access) return null;
+      permit(access);
+      // The App owns current Work/accepted-association binding. The host reads
+      // only its own receipt and the real KB report under the original actor.
+      const report = await reportFacts(
+        access,
+        value.packet,
+        {
+          product: value.reportContext.product,
+          request: {
+            validationRequirementIds:
+              value.reportContext.validationRequirementIds,
           },
-          signal,
-          false,
-        );
-        // Paired confirm has just re-resolved this original full permission
-        // ceiling, including Support evidence/read authority.
-        ports(signal);
-        if (
-          report.fingerprint !== value.reportFingerprint ||
-          report.result !== value.result
-        )
-          return null;
-        return {
+        },
+        signal,
+        false,
+        deferred,
+      );
+      ports(signal);
+      if (
+        report.fingerprint !== value.reportFingerprint ||
+        report.result !== value.result
+      )
+        return null;
+      const expiry = Math.min(Date.parse(value.validUntil), report.expiry);
+      const assertCurrent = (): true => {
+        boundPorts();
+        const at = Date.parse(options.clock.now());
+        if (!Number.isFinite(at) || at >= expiry)
+          throw new ApiError(409, 'followup_retest_changed');
+        return true;
+      };
+      assertCurrent();
+      return Object.freeze({
+        verified: {
           binding: expected,
           result: value.result,
           executionId: value.executionId,
@@ -748,10 +773,31 @@ export function createSupportFollowupRetests(
           verifierVersion: 'pg-followup-kb-report-v1',
           verifiedAt: value.verifiedAt,
           validUntil: value.validUntil,
-        };
-      } catch {
-        return null;
-      }
+        },
+        async confirm(currentSignal: AbortSignal) {
+          await report.confirm(currentSignal);
+          assertCurrent();
+          // The SDK owns original cancellation and the late browser guard.
+          // This assertion remains valid after its bounded inner read ends.
+          return assertCurrent;
+        },
+      });
+    } catch {
+      return null;
+    }
+  }
+  const verifier: EngineeringFollowupRetestPort = {
+    async verify(reference, expected, signal) {
+      const observed = await openVerification(
+        reference,
+        expected,
+        signal,
+        false,
+      );
+      return observed?.verified ?? null;
+    },
+    observe(reference, expected, signal) {
+      return openVerification(reference, expected, signal, true);
     },
   };
   return Object.freeze({ prepare, verifier });

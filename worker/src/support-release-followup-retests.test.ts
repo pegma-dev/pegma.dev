@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSupportFollowupHostFixture } from './support-release-followup-host-fixtures';
 import { supportFollowupRetestReceipts } from './support-release-followup-retests';
 import {
+  engineeringFollowupRetestProductBinding,
+  engineeringFollowupRetestRequestHash,
+} from '@pegma/support-desk-application';
+import {
   engineeringHttpObject,
   engineeringHttpResult,
 } from './support-engineering-http-fixtures';
@@ -32,7 +36,77 @@ async function prepared(
   };
   return { f, work, report, packet };
 }
+
+async function observedRetest() {
+  const result = await prepared();
+  const { f, work, packet } = result;
+  const preparedResponse = await f.api(f.request('retest-receipt', packet));
+  const ack = engineeringHttpResult(
+    await engineeringHttpObject(preparedResponse),
+  );
+  const request = work.preparedBundle!.bundle.retestRequests[0]!;
+  const binding = {
+    ticketId: work.ticketId,
+    workId: work.workId,
+    workBindingHash: work.workBindingHash,
+    requestId: request.requestId,
+    requestHash: await engineeringFollowupRetestRequestHash(request),
+    bundleHash: work.preparedBundle!.bundleHash,
+    productBinding: await engineeringFollowupRetestProductBinding(
+      work.context!,
+    ),
+  };
+  const observe = f.source.retests!.verifier.observe;
+  if (!observe) throw new Error('Actual paired retest port required');
+  const observation = await observe(
+    String(ack.receipt),
+    binding,
+    new AbortController().signal,
+  );
+  if (!observation)
+    throw new Error('Actual confirmed report observation required');
+  return { ...result, observation };
+}
 describe('actual KB report association for exact release follow-up retests', () => {
+  it('rechecks the real report when its operation-local confirmation closes after reset', async () => {
+    const { f, packet, observation } = await observedRetest();
+    expect(observation.verified.result).toBe('passed');
+    await f.knowledge.evidence.reset(f.staff, {
+      articleId: f.articleId,
+      commandId: crypto.randomUUID(),
+      expectedLedgerEpoch: packet.report.ledgerEpoch,
+    });
+    await expect(
+      observation.confirm(new AbortController().signal),
+    ).rejects.toThrow();
+  });
+
+  it('keeps the actual KB handle single-use and rechecks Source and expiry synchronously at handoff', async () => {
+    const { f, observation } = await observedRetest();
+    const assertion = await observation.confirm(new AbortController().signal);
+    expect(assertion).toBeTypeOf('function');
+    if (typeof assertion !== 'function')
+      throw new Error('Final host assertion required');
+    expect(assertion()).toBe(true);
+    await expect(
+      observation.confirm(new AbortController().signal),
+    ).rejects.toThrow();
+    const clock = vi
+      .spyOn(f.f.clock, 'now')
+      .mockReturnValue(observation.verified.validUntil);
+    try {
+      expect(assertion).toThrow();
+    } finally {
+      clock.mockRestore();
+    }
+    Reflect.set(
+      f.environment,
+      'PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED',
+      'false',
+    );
+    expect(assertion).toThrow();
+  });
+
   it('records a confirmed passed report through normal authenticated routes with models OFF', async () => {
     const { f, work, packet } = await prepared();
     const calls = f.f.state.modelCalls;

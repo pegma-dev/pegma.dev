@@ -283,7 +283,10 @@ export function consumeSupportReleaseFollowupWake(
     isSupportReleaseFollowupWake,
     (result) => {
       if (!result.checkpointSaved) return false;
-      if (result.outcome === 'scanned') return result.selected;
+      if (result.outcome === 'scanned' || result.outcome === 'checks_scanned')
+        return result.selected;
+      if (result.outcome === 'settled' || result.outcome === 'checks')
+        return result.remainingTargets > 0;
       return result.outcome === 'work' && (
         result.remainingTargets > 0 ||
         result.result.outcome === 'candidate' ||

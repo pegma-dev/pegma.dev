@@ -78,6 +78,7 @@ export function bindSupportReleaseFollowupPaid(options: {
           : paid.checks.fetch(url, init),
       usagePolicy: paid.checks.usagePolicy,
       readReceiptKey: () => paid.checks.readReceiptKey?.() ?? null,
+      deferred: true,
       releaseEvidence: options.source.releaseEvidence,
       knowledge: reads,
       knowledgeAccess: paid.knowledgeAccess,
@@ -87,6 +88,8 @@ export function bindSupportReleaseFollowupPaid(options: {
   const model = createSupportReleaseFollowupModel(paid.generator, 'pegma.dev');
   return Object.freeze({
     ...options.source,
+    invocationMode: 'staged',
+    deferredChecks: checks,
     checks: {
       resolvePolicy: checks.resolvePolicy,
       async check() {

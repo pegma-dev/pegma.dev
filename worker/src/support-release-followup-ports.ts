@@ -9,9 +9,11 @@ import type { SupportFollowupMappings } from './support-release-followup-mapping
 import type { LearningServiceAccessPort } from '@pegma/support-desk-ai';
 import type { SupportFollowupRetests } from './support-release-followup-retests';
 import type { SupportReleaseFollowupPaidOptions } from './support-release-followup-production';
+import type { createSupportReleaseFollowupChecks } from '@pegma/support-desk-ai/openrouter';
 
 /** Trusted current facts, never a webhook body, release tag or browser assertion. */
 export interface SupportReleaseFollowupConfiguration {
+  readonly invocationMode?: SupportDeskReleaseFollowupOptions['invocationMode'];
   readonly releaseEvidence: EngineeringFollowupReleaseEvidencePort;
   readonly checks: SupportDeskReleaseFollowupOptions['checks'];
   readonly checksFor?: (
@@ -22,6 +24,10 @@ export interface SupportReleaseFollowupConfiguration {
     authority: LearningServiceAccessPort,
   ) => SupportDeskReleaseFollowupOptions['checks'];
   readonly reassessmentUsageScopeRef?: string;
+  readonly deferredChecks?: Pick<
+    ReturnType<typeof createSupportReleaseFollowupChecks>,
+    'scanPending' | 'precomputePending' | 'discardTicket' | 'purgeExpired'
+  >;
   readonly targets: SupportDeskReleaseFollowupOptions['targets'];
   readonly retestReceipts: NonNullable<
     EngineeringFollowupOptions['retestReceipts']

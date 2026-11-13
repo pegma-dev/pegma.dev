@@ -20,6 +20,7 @@ import { ApiError } from './api-auth';
 import type { SupportReleaseFollowupConfiguration } from './support-release-followup-ports';
 import { createSupportReleaseFollowupUsage } from './support-release-followup-usage';
 import { knowledgeDigest } from './knowledge-evidence';
+import type { ReleaseFollowupCheckPendingHint } from '@pegma/support-desk-ai/openrouter';
 
 export interface SupportReleaseFollowupContext {
   current(): Promise<AccessContext>;
@@ -111,6 +112,9 @@ export function createSupportReleaseFollowupRuntime(options: {
         ...(generation === undefined ? {} : { policy: generation.usagePolicy }),
       }),
       storageCommandAttempts: 1,
+      ...(context === undefined && config.invocationMode !== undefined
+        ? { invocationMode: config.invocationMode }
+        : {}),
     });
   }
   async function staff<Value>(
@@ -326,6 +330,40 @@ export function createSupportReleaseFollowupRuntime(options: {
     /** Body-free discovery for the existing bounded host queue. */
     scanProcessing(bounds: Parameters<ReturnType<typeof coordinator>['scanCandidates']>[0]) {
       return coordinator().scanCandidates(bounds);
+    },
+    async scanChecks(signal: AbortSignal) {
+      if (!options.enabled() || signal.aborted || !config.deferredChecks)
+        return [];
+      return (await config.deferredChecks.scanPending(signal)).filter(
+        (value) => value.mode === 'work',
+      );
+    },
+    async precomputeChecks(
+      hint: Pick<
+        ReleaseFollowupCheckPendingHint,
+        'operationId' | 'expiresAt'
+      > & EngineeringFollowupKey,
+      signal: AbortSignal,
+      current?: () => boolean,
+    ) {
+      const admitted = () =>
+        options.enabled() && !signal.aborted && current?.() !== false;
+      if (!admitted() || !config.deferredChecks)
+        return { outcome: 'held' as const };
+      return config.deferredChecks.precomputePending(
+        hint.operationId,
+        {
+          deadline: new Date(
+            Math.min(
+              Date.parse(options.clock.now()) + 25000,
+              Date.parse(hint.expiresAt),
+            ),
+          ).toISOString(),
+          signal,
+        },
+        { ticketId: hint.ticketId, workId: hint.workId },
+        admitted,
+      );
     },
     /** One bounded SDK stage; never posts or publishes automatically. */
     async process(
