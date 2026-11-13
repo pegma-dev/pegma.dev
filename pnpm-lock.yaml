@@ -89,20 +89,20 @@ importers:
         specifier: 0.4.0
         version: 0.4.0
       '@pegma/support-desk-ai':
-        specifier: 0.2.9
-        version: 0.2.9
+        specifier: 0.2.10
+        version: 0.2.10
       '@pegma/support-desk-application':
-        specifier: 0.2.9
-        version: 0.2.9
+        specifier: 0.2.10
+        version: 0.2.10
       '@pegma/support-desk-contracts':
-        specifier: 0.2.9
-        version: 0.2.9
+        specifier: 0.2.10
+        version: 0.2.10
       '@pegma/support-desk-core':
-        specifier: 0.2.9
-        version: 0.2.9
+        specifier: 0.2.10
+        version: 0.2.10
       '@pegma/support-desk-templates':
-        specifier: 0.2.9
-        version: 0.2.9
+        specifier: 0.2.10
+        version: 0.2.10
       '@pegma/webhooks':
         specifier: 0.1.1
         version: 0.1.1
@@ -1240,24 +1240,24 @@ packages:
     resolution: {integrity: sha512-aWbRhhis4Qs4TvH1Sb+OCI0a0ddOyV+6pm6HhPs+XPlaP86mTaV7OlwkIIPqk5Hw45t//tNaqfaggUeOc7rIGA==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-ai@0.2.9':
-    resolution: {integrity: sha512-z0nbIAmUEZMN769vCjX1kQxs9/3fRFLVt+KD/yh6EBjrXjzNAN9eaV6vRzbYuCYdSVFDlKErnJunkSgp3TD0Pg==}
+  '@pegma/support-desk-ai@0.2.10':
+    resolution: {integrity: sha512-PvQ/1DB54ev1sNV/jIuwRltdGCTKQ0GYNMSAtTzaWa1ErkZyLijgG3t8DPO+Z+O7aH5T5JL/3ECSHP38RMfshw==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-application@0.2.9':
-    resolution: {integrity: sha512-SKqzIWgyHgtY7tos9smvxPJ3MMLilp7Dyd7AsN29FvpwLrnFdiFQQ68wwuII8ah1aX75SJZD/3Jad6uOVlT2kg==}
+  '@pegma/support-desk-application@0.2.10':
+    resolution: {integrity: sha512-LVeGvoW0kHmkSYuxpVkbrgAsowNRaVAXlQ31SjcqCgD3iVgcICajXMv2kbqx1BRwODdFEZgJByFUBXcipXZ5Ig==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-contracts@0.2.9':
-    resolution: {integrity: sha512-hwtUOEWWPDeaDBjmW0mU8hnOomE6f7kWBsLABkXFtpoARZwAAv0/yWjqTL7NeymFfj2eH2DAx9kKag+eK1gGXg==}
+  '@pegma/support-desk-contracts@0.2.10':
+    resolution: {integrity: sha512-ZjpoS8Xqs1BtY/cH/hhvtE2JecKZ9AGEPWKeX0HG/tqvjjQ3h6ZiWxQQqvBizxyRxdZ+17U3XEs3Yg+EvGB5bA==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-core@0.2.9':
-    resolution: {integrity: sha512-UUANZWijqwjONPNlS0gdDFgGYgi8sJettQUl3qhVruxz5DUKeCBLTbchtUkVwlTBkYCs3szjvCdtxBqmbiukzg==}
+  '@pegma/support-desk-core@0.2.10':
+    resolution: {integrity: sha512-/YuOj/QEOtSzDbCO1nQhjyJv1g97z4s39BsznR9cFgeIyCAoF9ReXTPzZDCNLm/XApTrlNL47X1H93XoTJgb9w==}
     engines: {node: '>=22'}
 
-  '@pegma/support-desk-templates@0.2.9':
-    resolution: {integrity: sha512-6Q7SL59AuFx3T27X5SQczxdQN0hILpbZ7Xb6M7m/yZb9RZXi8caLcQiWBFe6/WBXZuo8/PsKXnZOMJH+SydyPw==}
+  '@pegma/support-desk-templates@0.2.10':
+    resolution: {integrity: sha512-Dtp7ilfsYuklSOIHRauBEtowUfbcwekoYzj3MoldBLzyQT20oTvyI8lekaY3S36k1sfBmyj+gAKrFN/Ed95Olg==}
     engines: {node: '>=22'}
 
   '@pegma/webhooks@0.1.1':
@@ -4245,35 +4245,35 @@ snapshots:
 
   '@pegma/storage-core@0.4.0': {}
 
-  '@pegma/support-desk-ai@0.2.9':
+  '@pegma/support-desk-ai@0.2.10':
     dependencies:
       '@pegma/authorization-core': 0.4.0
       '@pegma/knowledge-base-application': 0.1.8
       '@pegma/knowledge-base-contracts': 0.1.8
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
-      '@pegma/support-desk-application': 0.2.9
+      '@pegma/support-desk-application': 0.2.10
       zod: 4.6.7
 
-  '@pegma/support-desk-application@0.2.9':
+  '@pegma/support-desk-application@0.2.10':
     dependencies:
       '@pegma/audit': 0.2.0
       '@pegma/authorization-core': 0.4.0
       '@pegma/mail': 0.1.1
       '@pegma/spine': 0.1.2
       '@pegma/storage-core': 0.4.0
-      '@pegma/support-desk-contracts': 0.2.9
-      '@pegma/support-desk-core': 0.2.9
+      '@pegma/support-desk-contracts': 0.2.10
+      '@pegma/support-desk-core': 0.2.10
 
-  '@pegma/support-desk-contracts@0.2.9':
+  '@pegma/support-desk-contracts@0.2.10':
     dependencies:
       '@pegma/spine': 0.1.2
 
-  '@pegma/support-desk-core@0.2.9':
+  '@pegma/support-desk-core@0.2.10':
     dependencies:
-      '@pegma/support-desk-contracts': 0.2.9
+      '@pegma/support-desk-contracts': 0.2.10
 
-  '@pegma/support-desk-templates@0.2.9': {}
+  '@pegma/support-desk-templates@0.2.10': {}
 
   '@pegma/webhooks@0.1.1':
     dependencies:
