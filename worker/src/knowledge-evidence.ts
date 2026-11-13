@@ -33,7 +33,8 @@ type BrowserOperation<Method> = Method extends (
 
 /** The public factory validates the browser's untrusted JSON inputs. */
 export type KnowledgeEvidenceService = {
-  readonly [Name in keyof KnowledgeEvidenceReports]: Name extends 'verifier'
+  readonly [Name in keyof KnowledgeEvidenceReports]: Name extends
+    'verifier' | 'observations'
     ? KnowledgeEvidenceReports[Name]
     : BrowserOperation<KnowledgeEvidenceReports[Name]>;
 } & {
@@ -126,6 +127,9 @@ export function createKnowledgeEvidenceService(
   // factory performs all input validation, authorization and durable operations.
   return Object.freeze<KnowledgeEvidenceService>({
     verifier: reports.verifier,
+    ...(reports.observations === undefined
+      ? {}
+      : { observations: reports.observations }),
     agentReports: Object.freeze({
       report: reports.report,
       ledger: reports.ledger,

@@ -38,7 +38,9 @@ export const engineeringRepositories: readonly EngineeringRepositoryDescriptor[]
 /** Real SDK persistence/roles; only trusted external systems are fictional. */
 export async function createSupportEngineeringFixture(store: Store, options: {
   readonly intake?: boolean; readonly processing?: boolean;
+  readonly repositories?: readonly EngineeringRepositoryDescriptor[];
 } = {}) {
+  const selectedRepositories = options.repositories ?? engineeringRepositories;
   let milliseconds = Date.parse('2026-11-10T12:00:00.000Z');
   const clock = { now: () => new Date(milliseconds).toISOString() };
   let ordinal = 0;
@@ -81,7 +83,7 @@ export async function createSupportEngineeringFixture(store: Store, options: {
     publicReproduction: 'passed' as 'passed' | 'not_applicable',
     modelSecurity: 'ordinary' as EngineeringSecurity,
     modelRouting: 'selected' as 'selected' | 'ambiguous' | 'out_of_scope',
-    modelRepositoryId: engineeringRepositories[0]!.repositoryId,
+    modelRepositoryId: selectedRepositories[0]!.repositoryId,
     modelCalls: 0,
     modelInputs: [] as EngineeringModelInput[],
     modelHook: undefined as (() => Promise<void>) | undefined,
@@ -97,7 +99,7 @@ export async function createSupportEngineeringFixture(store: Store, options: {
     installationActive: true,
   };
   const validUntil = new Date(milliseconds + 3_600_000).toISOString();
-  const metadata = new Map<string, EngineeringRepositoryObservation>(engineeringRepositories.map((repository) => [repository.repositoryId,
+  const metadata = new Map<string, EngineeringRepositoryObservation>(selectedRepositories.map((repository) => [repository.repositoryId,
     { repositoryId: repository.repositoryId, owner: repository.owner, name: repository.name, visibility: repository.visibility,
       installationBinding: 'synthetic-installation-' + repository.repositoryId, metadataVersion: 'synthetic-metadata-v1' }]));
   const issuedRouting = new Map<string, VerifiedEngineeringRouting>();
@@ -232,7 +234,7 @@ export async function createSupportEngineeringFixture(store: Store, options: {
       applicability: { productId: 'workspace', version: '2.3.0', buildId: 'synthetic-build-230' }, security: state.modelSecurity,
       routing: state.modelRouting === 'selected' ? { outcome: 'selected', repositoryId: state.modelRepositoryId,
         alternativeRepositoryIds: [], rationale: 'The allowlisted core owns file generation.' } : {
-        outcome: state.modelRouting, alternativeRepositoryIds: engineeringRepositories.map((row) => row.repositoryId),
+        outcome: state.modelRouting, alternativeRepositoryIds: selectedRepositories.map((row) => row.repositoryId),
         rationale: 'Staff must choose between the two allowed components.' } };
   }
   const proposals: EngineeringProposalPort = {
@@ -283,7 +285,7 @@ export async function createSupportEngineeringFixture(store: Store, options: {
   const runtime = createSupportEngineeringRuntime({ application, clock, staffAccess: { resolve: (id) => resolve(id) },
     processingEnabled: () => state.enabled, ports });
   const initialPolicy = await runtime.putPolicy(actors.admin, { clientCommandId: 'POLICY-EXACT', expectedGeneration: 0,
-    policy: { enabled: true, repositories: engineeringRepositories } });
+    policy: { enabled: true, repositories: selectedRepositories } });
   state.calibrationPolicyHash = initialPolicy.policyHash;
   let acceptedKey: EngineeringKey | undefined;
   async function createTicket() {

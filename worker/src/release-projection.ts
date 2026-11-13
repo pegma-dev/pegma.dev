@@ -1,14 +1,10 @@
 import type { Store } from '@pegma/storage-core';
-import {
-  componentReleaseCollection,
-  componentReleaseKey,
-  type ComponentRelease,
-} from './component-release';
+import type { ComponentRelease } from './component-release';
+import { updateSupportFollowupRelease } from './support-release-followup-releases';
 
 const GITHUB_ORG_PREFIX = 'https://github.com/pegma-dev/';
 const SAFE_REPO_NAME = /^[A-Za-z0-9_.-]+$/;
 const SAFE_TAG_NAME = /^[A-Za-z0-9._+/~^-]+$/;
-const DELETE_ATTEMPTS = 3;
 
 /** Fields extracted from an authenticated GitHub release webhook payload. */
 export interface ReleaseEventFacts {
@@ -123,37 +119,19 @@ export async function applyReleaseProjection(
     return;
   }
 
-  const releases = store.collection(componentReleaseCollection());
-
-  if (decision.kind === 'delete') {
-    const key = componentReleaseKey(decision.repositoryId);
-    for (let attempt = 0; attempt < DELETE_ATTEMPTS; attempt += 1) {
-      const current = await releases.getVersioned(key);
-      if (current === null) {
-        return;
-      }
-      if (current.value.releaseId !== decision.releaseId) {
-        return;
-      }
-      if (await releases.deleteIfUnchanged(key, current.version)) {
-        return;
-      }
-    }
-    throw new Error('Release projection delete conflicted repeatedly.');
-  }
-
-  const incoming = decision.release;
-  await releases.update(componentReleaseKey(incoming.repositoryId), (current) => {
-    if (current === null) {
-      return { action: 'write', value: incoming };
-    }
-    if (current.releaseId === incoming.releaseId) {
-      return { action: 'write', value: incoming };
-    }
-    if (isNewerOrSameRelease(incoming, current)) {
-      return { action: 'write', value: incoming };
-    }
-    return { action: 'keep' };
+  const repositoryId =
+    decision.kind === 'delete'
+      ? decision.repositoryId
+      : decision.release.repositoryId;
+  await updateSupportFollowupRelease(store, repositoryId, (current) => {
+    if (decision.kind === 'delete')
+      return current?.releaseId === decision.releaseId ? null : undefined;
+    const incoming = decision.release;
+    return current === null ||
+      current.releaseId === incoming.releaseId ||
+      isNewerOrSameRelease(incoming, current)
+      ? incoming
+      : undefined;
   });
 }
 
@@ -171,24 +149,20 @@ export async function applyAuthoritativeCurrentRelease(
   store: Store,
   release: ComponentRelease,
 ): Promise<'written' | 'unchanged'> {
-  const releases = store.collection(componentReleaseCollection());
-  let changed: 'written' | 'unchanged' = 'unchanged';
-  await releases.update(componentReleaseKey(release.repositoryId), (current) => {
-    if (
+  const result = await updateSupportFollowupRelease(
+    store,
+    release.repositoryId,
+    (current) =>
       current !== null &&
-      current.releaseId === release.releaseId &&
-      current.tagName === release.tagName &&
-      current.publishedAt === release.publishedAt &&
-      current.releaseUrl === release.releaseUrl &&
-      current.repositoryName === release.repositoryName &&
-      current.observedAt === release.observedAt
-    ) {
-      return { action: 'keep' };
-    }
-    changed = 'written';
-    return { action: 'write', value: release };
-  });
-  return changed;
+      Object.keys(release).every(
+        (name) =>
+          current[name as keyof ComponentRelease] ===
+          release[name as keyof ComponentRelease],
+      )
+        ? undefined
+        : release,
+  );
+  return result.changed ? 'written' : 'unchanged';
 }
 
 /** Touch observedAt on an existing current row (successful 304 revalidation). */
@@ -197,20 +171,24 @@ export async function touchCurrentReleaseObservedAt(
   repositoryId: string,
   observedAt: string,
 ): Promise<boolean> {
-  const releases = store.collection(componentReleaseCollection());
-  let touched = false;
-  await releases.update(componentReleaseKey(repositoryId), (current) => {
-    if (current === null) {
-      return { action: 'keep' };
-    }
-    if (current.observedAt === observedAt) {
-      return { action: 'keep' };
-    }
-    touched = true;
-    return {
-      action: 'write',
-      value: { ...current, observedAt },
-    };
-  });
-  return touched;
+  return (
+    await updateSupportFollowupRelease(store, repositoryId, (current) =>
+      current === null || current.observedAt === observedAt
+        ? undefined
+        : { ...current, observedAt },
+    )
+  ).changed;
+}
+
+/** Authoritative absence retains the durable epoch while atomically deleting
+ * only the projection fenced by that same epoch row. */
+export async function clearCurrentRelease(
+  store: Store,
+  repositoryId: string,
+): Promise<boolean> {
+  return (
+    await updateSupportFollowupRelease(store, repositoryId, (current) =>
+      current === null ? undefined : null,
+    )
+  ).changed;
 }

@@ -19,6 +19,10 @@ import {
 import { mapSupportError } from './support-desk';
 import { supportHumanBrowser } from './support-human-auth';
 import type { LearningReviewIntentPacket, SupportLearningRuntime } from './support-learning';
+import {
+  LearningTestReceiptError,
+  type createSupportLearningTestReceipts,
+} from './support-learning-test-receipts';
 
 /** Trusted composition only. This module registers no route or worker. */
 export interface SupportLearningHandlerOptions extends AgentBrowserOptions {
@@ -26,12 +30,17 @@ export interface SupportLearningHandlerOptions extends AgentBrowserOptions {
   readonly enabled?: () => boolean;
   readonly stagedReviewsEnabled?: () => boolean;
   readonly runtime: () => SupportLearningRuntime;
+  readonly testReceiptPreparation?: Pick<
+    ReturnType<typeof createSupportLearningTestReceipts>,
+    'prepare'
+  >;
+  readonly testReceiptPreparationEnabled?: () => boolean;
   /** An existing host durable limiter, not a second admission ledger. */
   readonly limiter: DurableRateLimiter;
 }
 
-type Operation = 'source' | 'work' | 'proposal' | 'enroll' | 'enroll-recovery' | 'evidence' | 'evidence-recovery' | 'review' | 'review-receipt' | 'review-cancel' | 'review-queue' | 'review-queue-status' | 'review-queue-cancel' | 'withdraw' | 'invalidate';
-const path = /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/learning(?:\/(work|proposal|enroll|enroll-recovery|evidence|evidence-recovery|review|review-receipt|review-cancel|review-queue|review-queue-status|review-queue-cancel|withdraw|invalidate))?$/u;
+type Operation = 'test-receipt' | 'source' | 'work' | 'proposal' | 'enroll' | 'enroll-recovery' | 'evidence' | 'evidence-recovery' | 'review' | 'review-receipt' | 'review-cancel' | 'review-queue' | 'review-queue-status' | 'review-queue-cancel' | 'withdraw' | 'invalidate';
+const path = /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/learning(?:\/(test-receipt|work|proposal|enroll|enroll-recovery|evidence|evidence-recovery|review|review-receipt|review-cancel|review-queue|review-queue-status|review-queue-cancel|withdraw|invalidate))?$/u;
 
 function integer(value: unknown, minimum = 1): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum)
@@ -51,7 +60,7 @@ function sourceGeneration(url: URL): number {
 function operationPermission(operation: Operation): string {
   if (operation.startsWith('review')) return supportPermissions.learningReview;
   if (operation === 'withdraw') return supportPermissions.learningWithdraw;
-  if (operation === 'enroll' || operation === 'enroll-recovery' || operation === 'evidence' || operation === 'evidence-recovery' || operation === 'invalidate')
+  if (operation === 'test-receipt' || operation === 'enroll' || operation === 'enroll-recovery' || operation === 'evidence' || operation === 'evidence-recovery' || operation === 'invalidate')
     return supportPermissions.learningEvidenceSubmit;
   return supportPermissions.learningRead;
 }
@@ -85,6 +94,11 @@ function reviewIntent(raw: unknown, ticketId: string): LearningReviewIntent {
 }
 
 function mapped(error: unknown) {
+  if (error instanceof LearningTestReceiptError) {
+    const status = error.code === 'invalid' ? 400 : error.code === 'forbidden' ? 403
+      : error.code === 'unavailable' ? 503 : 409;
+    return new ApiError(status, 'support_test_receipt_' + error.code);
+  }
   if (error instanceof ApiError) return error;
   if (error instanceof KnowledgeBaseAuthorizationError)
     return new ApiError(403, 'forbidden');
@@ -115,6 +129,9 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
   function enabled() {
     try { return options.enabled?.() === true; } catch { return false; }
   }
+  function testReceiptEnabled() {
+    try { return options.testReceiptPreparation !== undefined && options.testReceiptPreparationEnabled?.() === true; } catch { return false; }
+  }
   function stagedEnabled() {
     try { return options.stagedReviewsEnabled?.() === true; } catch { return false; }
   }
@@ -126,9 +143,11 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
     const ticketId = match[1];
     if (ticketId === undefined) return json({ error: 'invalid_request' }, { status: 400 });
     const name = match[2] ?? 'source';
-    const operation: Operation = name === 'work' || name === 'proposal' || name === 'enroll' || name === 'enroll-recovery' ||
+    const operation: Operation = name === 'test-receipt' || name === 'work' || name === 'proposal' || name === 'enroll' || name === 'enroll-recovery' ||
       name === 'evidence' || name === 'evidence-recovery' || name === 'review' || name === 'review-receipt' || name === 'review-cancel' || name === 'review-queue' || name === 'review-queue-status' || name === 'review-queue-cancel' || name === 'withdraw' || name === 'invalidate'
       ? name : 'source';
+    if (operation === 'test-receipt' && !testReceiptEnabled())
+      return json({ error: 'support_test_receipt_unavailable' }, { status: 503 });
     const mutation = operation !== 'source' && operation !== 'work' && operation !== 'proposal';
     const permission = operationPermission(operation);
     const queued = operation.startsWith('review-queue');
@@ -152,9 +171,11 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
     let ceiling: AccessContext | undefined;
     async function current() {
       if (!enabled()) throw new ApiError(503, 'support_learning_disabled');
+      if (operation === 'test-receipt' && !testReceiptEnabled()) throw new ApiError(503, 'support_test_receipt_unavailable');
       if (queued && !stagedEnabled()) throw new ApiError(503, 'support_learning_disabled');
       const fresh = await browser.current();
       if (!enabled()) throw new ApiError(503, 'support_learning_disabled');
+      if (operation === 'test-receipt' && !testReceiptEnabled()) throw new ApiError(503, 'support_test_receipt_unavailable');
       if (queued && !stagedEnabled()) throw new ApiError(503, 'support_learning_disabled');
       ceiling ??= structuredClone(fresh.access);
       const access: AccessContext = {
@@ -200,10 +221,75 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
         }));
         result = { ticketId, intent: value.intent, draft: value.draft };
       } else {
-        // Recheck after the limiter and before reading the bounded body.
-        // The SDK operation resolves current authority again after the read.
-        const body = await withCurrentAccess(() => readJson(request, { timeoutMs: 10_000 }));
-        if (operation === 'enroll' || operation === 'enroll-recovery') {
+        // These packets have a full original-browser admission after their
+        // bounded parse, before any domain operation. Other routes retain
+        // their existing pre-body observation.
+        const reportEvidence = operation === 'test-receipt' || operation === 'evidence' || operation === 'evidence-recovery';
+        const body = reportEvidence ? await readJson(request, { timeoutMs: 10_000 })
+          : await withCurrentAccess(() => readJson(request, { timeoutMs: 10_000 }));
+        if (operation === "test-receipt") {
+          const packet = exactObject(body, [
+            "commandId",
+            "expectedPrincipalId",
+            "expectedRevision",
+            "resolutionCycle",
+            "solutionMessageId",
+            "report",
+          ]);
+          const expectedPrincipalId = boundedString(packet.expectedPrincipalId, 1, 200);
+          if (expectedPrincipalId !== principalId) throw new ApiError(403, "forbidden");
+          const report = exactObject(packet.report, [
+            "articleId",
+            "ledgerEpoch",
+            "reportId",
+            "expectedReportGeneration",
+            "reviewBindingHash",
+            "receipt",
+          ]);
+          const reviewBindingHash = boundedString(report.reviewBindingHash, 64, 64);
+          if (!/^[a-f0-9]{64}$/u.test(reviewBindingHash))
+            throw new ApiError(400, "invalid_request");
+          const clientCommandId = boundedString(packet.commandId, 1, 200);
+          const preparation = options.testReceiptPreparation;
+          if (preparation === undefined)
+            throw new ApiError(503, "support_test_receipt_unavailable");
+          const prepared = await preparation.prepare(
+            {
+              principalId,
+              signal: request.signal,
+              async current(signal) {
+                if (signal.aborted)
+                  throw new ApiError(503, "support_test_receipt_unavailable");
+                const value = await current();
+                if (signal.aborted)
+                  throw new ApiError(503, "support_test_receipt_unavailable");
+                return value.access;
+              },
+            },
+            {
+              ticketId,
+              clientCommandId,
+              expectedRevision: integer(packet.expectedRevision),
+              resolutionCycle: integer(packet.resolutionCycle),
+              solutionMessageId: boundedString(packet.solutionMessageId, 1, 200),
+              report: {
+                articleId: boundedString(report.articleId, 1, 200),
+                ledgerEpoch: integer(report.ledgerEpoch),
+                reportId: boundedString(report.reportId, 1, 200),
+                expectedReportGeneration: integer(report.expectedReportGeneration),
+                reviewBindingHash,
+                receipt: boundedString(report.receipt, 1, 200),
+              },
+            },
+          );
+          result = {
+            actorId: principalId,
+            ticketId,
+            commandId: clientCommandId,
+            receipt: prepared.receipt,
+            validUntil: prepared.validUntil,
+          };
+        } else if (operation === 'enroll' || operation === 'enroll-recovery') {
           const packet = exactObject(body, ['commandId', 'expectedRevision']);
           const clientCommandId = boundedString(packet.commandId, 1, 200);
           const expectedRevision = integer(packet.expectedRevision);
@@ -211,16 +297,59 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
             ticketId, clientCommandId, expectedRevision,
           }));
         } else if (operation === 'evidence' || operation === 'evidence-recovery') {
-          const packet = exactObject(body, ['commandId', 'expectedRevision', 'resolutionCycle', 'solutionMessageId', 'verificationReference']);
-          const clientCommandId = boundedString(packet.commandId, 1, 200);
-          const expectedRevision = integer(packet.expectedRevision);
-          const resolutionCycle = integer(packet.resolutionCycle);
-          const solutionMessageId = boundedString(packet.solutionMessageId, 1, 200);
-          const verificationReference = boundedString(packet.verificationReference, 1, 200);
-          result = await withCurrentAccess(async (access) => options.runtime()[operation === 'evidence' ? 'submitVerifiedFix' : 'recoverVerifiedFix'](access, {
-            ticketId, clientCommandId, expectedRevision, resolutionCycle,
-            evidence: { kind: 'staff_verified_fix', solutionMessageId, verificationReference },
-          }));
+          const successfulTest = typeof body === 'object' && body !== null &&
+            'kind' in body && body.kind === 'successful_test';
+          if (successfulTest) {
+            const packet = exactObject(body, [
+              'kind',
+              'commandId',
+              'expectedRevision',
+              'resolutionCycle',
+              'solutionMessageId',
+              'receipt',
+            ]);
+            const input = {
+              ticketId,
+              clientCommandId: boundedString(packet.commandId, 1, 200),
+              expectedRevision: integer(packet.expectedRevision),
+              resolutionCycle: integer(packet.resolutionCycle),
+              evidence: {
+                kind: 'successful_test' as const,
+                solutionMessageId: boundedString(packet.solutionMessageId, 1, 200),
+                receipt: boundedString(packet.receipt, 1, 200),
+              },
+            };
+            result = await withCurrentAccess<unknown>((access) =>
+              options
+                .runtime()
+                [operation === 'evidence' ? 'submitSuccessfulTest' : 'recoverSuccessfulTest'](
+                  access,
+                  input,
+                  async () => {
+                    await current();
+                    browser.assertCurrent();
+                    return () => {
+                      if (!enabled()) throw new ApiError(503, 'support_learning_disabled');
+                      browser.assertCurrent();
+                      return true;
+                    };
+                  },
+                ),
+            );
+          } else {
+            // Keep the additional authority observation for legacy fix packets.
+            await current();
+            const packet = exactObject(body, ['commandId', 'expectedRevision', 'resolutionCycle', 'solutionMessageId', 'verificationReference']);
+            const clientCommandId = boundedString(packet.commandId, 1, 200);
+            const expectedRevision = integer(packet.expectedRevision);
+            const resolutionCycle = integer(packet.resolutionCycle);
+            const solutionMessageId = boundedString(packet.solutionMessageId, 1, 200);
+            const verificationReference = boundedString(packet.verificationReference, 1, 200);
+            result = await withCurrentAccess(async (access) => options.runtime()[operation === 'evidence' ? 'submitVerifiedFix' : 'recoverVerifiedFix'](access, {
+              ticketId, clientCommandId, expectedRevision, resolutionCycle,
+              evidence: { kind: 'staff_verified_fix', solutionMessageId, verificationReference },
+            }));
+          }
         } else if (operation.startsWith('review')) {
           const packet = optionalKeysObject(body, ['commandId', 'intent', 'decision'], ['reason']);
           const clientCommandId = boundedString(packet.commandId, 1, 200);
@@ -284,6 +413,7 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
           return failureResponse(new ApiError(503, 'support_learning_disabled'));
         return failureResponse(authorityError);
       }
+      if (operation === 'test-receipt') browser.assertCurrent();
       return json({ result, csrfToken: final.csrfToken }, { status: responseStatus });
     } catch (error) {
       let failure = error;

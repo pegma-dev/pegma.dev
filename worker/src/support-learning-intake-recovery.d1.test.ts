@@ -191,14 +191,23 @@ describe('registered intake retry and reconciliation on clocked real Native D1',
       messageId: 'native-intake-competing-note', body: 'An independent fictional staff note advances the real revision.' });
     const original = await f.invoke('/' + operation, packet); expect(original.status).toBe(409);
     const before = await f.learning.rows();
+    const firstSessionRead = f.sessionReadObservations.length;
     const recovered = await f.observed.run(operation + '.recovery.stale', () => f.invoke('/' + operation + '-recovery', packet));
     expect(recovered.status).toBe(200);
     expect(resultObject(await responseObject(recovered))).toMatchObject({ outcome: 'superseded', operation,
       ticketId: learningTicketId, commandId, expectedRevision: ticket.revision, observedRevision: ticket.revision + 1 });
     expect(await f.learning.rows()).toEqual(before); expect(f.learning.state.modelCalls).toBe(0);
-    const observations = f.sessionObservations.filter((value) => value.previousLastSeenAt !== null);
-    expect(observations.length).toBeGreaterThan(2);
+    const observations = f.sessionReadObservations.slice(firstSessionRead);
+    const admissions = observations.filter((value) => value.operation === 'get');
+    const closings = observations.filter((value) => value.operation === 'observe');
+    expect(admissions).toHaveLength(1);
+    expect(observations[0]?.operation).toBe('get');
+    expect(closings.length).toBeGreaterThan(0);
     expect(observations.every((value) => value.previousLastSeenAt !== null && Date.parse(value.at) > Date.parse(value.previousLastSeenAt))).toBe(true);
+    const admission = admissions[0]; const last = closings.at(-1);
+    if (admission === undefined || last === undefined) throw new Error('Expected actual admission and closing session reads');
+    expect(closings.every((value) => value.previousLastSeenAt === admission.at)).toBe(true);
+    expect((await f.observeSessionAt(last.at))?.lastSeenAt).toBe(admission.at);
     f.observed.assertBounds();
   });
 });

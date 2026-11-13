@@ -7,6 +7,8 @@ const queueList = document.querySelector('#queue-list');
 const filterForm = document.querySelector('#queue-filters');
 
 let csrfToken = '';
+let viewerSubject = '';
+let reviewInbox = null;
 let queueGeneration = 0;
 let suspended = false;
 const requests = new Set();
@@ -19,6 +21,8 @@ function showStatus(message, isError = false) {
 
 function hideAll() {
   ++queueGeneration;
+  reviewInbox?.clear();
+  viewerSubject = '';
   signedOut.hidden = true;
   forbidden.hidden = true;
   panel.hidden = true;
@@ -128,6 +132,9 @@ function renderQueue(items) {
 function filterQuery() {
   const form = new FormData(filterForm);
   const params = new URLSearchParams();
+  const handling = form.get('handling');
+  if (handling === 'assistant' || handling === 'all')
+    params.set('handling', handling);
   const status = form.get('status');
   const sort = form.get('sort');
   if (typeof status === 'string' && status !== '') {
@@ -145,6 +152,8 @@ function filterQuery() {
 async function refreshQueue() {
   if (suspended) return false;
   const generation = ++queueGeneration;
+  reviewInbox?.clear();
+  const handling = new FormData(filterForm).get('handling');
   for (const controller of requests) controller.abort();
   requests.clear();
   let result;
@@ -158,6 +167,14 @@ async function refreshQueue() {
   if (typeof result.csrfToken === 'string') {
     csrfToken = result.csrfToken;
   }
+  const heading = document.querySelector('#queue-heading');
+  if (heading)
+    heading.textContent =
+      handling === 'assistant'
+        ? 'Assistant supervision'
+        : handling === 'all'
+          ? 'All support work'
+          : 'Human queue';
   renderQueue(result.items);
   return true;
 }
@@ -170,6 +187,7 @@ async function start() {
     const account = await api('/api/identity/account');
     if (generation !== queueGeneration || suspended) return;
     csrfToken = account.csrfToken;
+    viewerSubject = account.account.subject;
     emailNode.textContent = account.account.email;
   } catch (error) {
     if (generation !== queueGeneration || suspended) return;
@@ -228,6 +246,60 @@ filterForm.addEventListener('submit', async (event) => {
   }
 });
 
+const inboxRoot = document.querySelector('#engineering-review-inbox');
+if (
+  inboxRoot &&
+  typeof globalThis.PegmaSupportReviewInbox?.createReviewInbox === 'function'
+) {
+  reviewInbox = globalThis.PegmaSupportReviewInbox.createReviewInbox({
+    host: inboxRoot,
+    request: async (path) => {
+      try {
+        return { status: 200, body: await api(path) };
+      } catch (error) {
+        if (error.status === 429)
+          return {
+            status: 429,
+            headers: {
+              'retry-after': String(
+                Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000)),
+              ),
+            },
+          };
+        if (error.status) return { status: error.status };
+        throw error;
+      }
+    },
+    session: async () => {
+      const subject = viewerSubject;
+      if (!subject || suspended) return null;
+      const latest = await api('/api/identity/session');
+      return latest.account?.subject === subject
+        ? { accountId: subject }
+        : null;
+    },
+    capture: () => {
+      const generation = queueGeneration;
+      return () =>
+        generation === queueGeneration && !suspended && !panel.hidden;
+    },
+    openTicket: (id) => {
+      window.location.href =
+        '/staff/support/ticket/?id=' + encodeURIComponent(id);
+    },
+    denied: (status) => {
+      hideAll();
+      signedOut.hidden = status !== 401;
+      forbidden.hidden = status !== 403;
+      showStatus(
+        status === 401
+          ? 'Sign in to use the staff queue.'
+          : 'You do not have staff access.',
+        status !== 401,
+      );
+    },
+  });
+}
 function invalidate() {
   suspended = true;
   for (const controller of requests) controller.abort();

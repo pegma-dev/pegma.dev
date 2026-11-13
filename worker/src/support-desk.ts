@@ -23,7 +23,9 @@ import {
   ticketNumbers,
   type SupportDeskApplication,
   type ResolutionLearningOptions,
+  type ResolutionTestReceiptPort,
   type EngineeringOptions,
+  type EngineeringFollowupOptions,
   type AssistantTurnOptions,
 } from '@pegma/support-desk-application';
 import { defineTemplate } from '@pegma/support-desk-templates';
@@ -191,6 +193,7 @@ export interface SupportCompositionOptions {
   readonly engineeringMutationLimiter?: DurableRateLimiter;
   readonly resolutionLearning?: ResolutionLearningOptions;
   readonly engineering?: EngineeringOptions;
+  readonly engineeringFollowup?: EngineeringFollowupOptions;
   /** Explicit host configuration; omission keeps customer assistant intake OFF. */
   readonly assistantTurns?: AssistantTurnOptions;
 }
@@ -201,6 +204,10 @@ export interface SupportRuntime {
    * (docs/ROLE_ADOPTION_PLAN.md Phase 1). */
   readonly roleStore: RoleStore;
   readonly application: ReturnType<typeof createSupportDeskApplication>;
+  /** Trusted request-local public SDK composition; all other options are shared. */
+  readonly createResolutionEvidenceApplication: (
+    testReceipts: ResolutionTestReceiptPort,
+  ) => Pick<SupportDeskApplication, 'submitResolutionEvidence'>;
   readonly clock: Clock;
   readonly createLimiter: DurableRateLimiter;
   readonly replyLimiter: DurableRateLimiter;
@@ -350,7 +357,7 @@ export function createSupportRuntime(
   const engineeringReadLimiter = options.engineeringReadLimiter ?? defaults.engineeringReadLimiter;
   const engineeringMutationLimiter = options.engineeringMutationLimiter ?? defaults.engineeringMutationLimiter;
 
-  const application = createSupportDeskApplication({
+  const applicationOptions: Parameters<typeof createSupportDeskApplication>[0] = {
     store,
     clock,
     logger: options.logger,
@@ -360,7 +367,9 @@ export function createSupportRuntime(
     queueTerminalRetentionMilliseconds: SUPPORT_TERMINAL_RETENTION_MS,
     ...(options.resolutionLearning === undefined ? {} : { resolutionLearning: options.resolutionLearning }),
     ...(options.engineering === undefined ? {} : { engineering: options.engineering }),
-  });
+    ...(options.engineeringFollowup === undefined ? {} : { engineeringFollowup: options.engineeringFollowup }),
+  };
+  const application = createSupportDeskApplication(applicationOptions);
 
   // Audited role store on the SAME Store, partitioned by this host's
   // application id (docs/ROLE_ADOPTION_PLAN.md Phase 1).
@@ -370,6 +379,14 @@ export function createSupportRuntime(
     store,
     roleStore,
     application,
+    createResolutionEvidenceApplication(testReceipts: ResolutionTestReceiptPort) {
+      if (applicationOptions.resolutionLearning === undefined)
+        throw new TypeError('Resolution learning is unavailable');
+      return createSupportDeskApplication({
+        ...applicationOptions,
+        resolutionLearning: { ...applicationOptions.resolutionLearning, testReceipts },
+      });
+    },
     clock,
     createLimiter,
     replyLimiter,

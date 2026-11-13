@@ -1,4 +1,5 @@
 import type { Clock } from '@pegma/spine';
+import type { EngineeringCreationReceiptPort } from './support-engineering-acceptance';
 import type {
   EngineeringDispatchResultVerifier,
   EngineeringRepositoryMetadataPort,
@@ -42,6 +43,8 @@ export interface SupportEngineeringRepositoryOptions {
   readonly enabled?: () => boolean;
   /** Separate OFF-by-default write gate. Read-only reconciliation stays available. */
   readonly issueCreationEnabled?: () => boolean;
+  /** Durable historical provider acknowledgements; required before a new POST. */
+  readonly creationReceipts?: EngineeringCreationReceiptPort;
   readonly repositories?: readonly SupportEngineeringRepository[];
   readonly authentication?: {
     resolve(
@@ -55,6 +58,8 @@ export interface SupportEngineeringRepositoryOptions {
 const API = 'https://api.github.com';
 const API_VERSION = '2026-03-10';
 const MAX_BODY_BYTES = 65_536;
+const MAX_EMPTY_CHUNKS = 64;
+const MAX_BODY_READS = MAX_BODY_BYTES + MAX_EMPTY_CHUNKS;
 const MAX_DURATION = 10_000;
 const encoder = new TextEncoder();
 const noControls = /^[^\u0000-\u001F\u007F]+$/u;
@@ -179,12 +184,20 @@ async function json(response: Response, signal: AbortSignal): Promise<unknown> {
   signal.addEventListener('abort', cancel, { once: true });
   const chunks: Uint8Array[] = [];
   let length = 0;
+  let reads = 0;
+  let emptyChunks = 0;
   try {
     while (true) {
       if (signal.aborted) throw new Error('Unavailable metadata');
       const next = await reader.read();
       if (signal.aborted) throw new Error('Unavailable metadata');
       if (next.done) break;
+      if (++reads > MAX_BODY_READS) throw new Error('Unavailable metadata');
+      if (next.value.byteLength === 0) {
+        if (++emptyChunks > MAX_EMPTY_CHUNKS) throw new Error('Unavailable metadata');
+        continue;
+      }
+      emptyChunks = 0;
       length += next.value.byteLength;
       if (length > MAX_BODY_BYTES) throw new Error('Unavailable metadata');
       chunks.push(next.value);
@@ -479,6 +492,19 @@ export function createSupportEngineeringRepositoryPorts(
       const issuesEnabled = repository.has_issues;
       const defaultBranch = repository.default_branch;
       const repositoryUpdatedAt = repository.updated_at;
+      function sameRepositoryState(value: unknown) {
+        return record(value) &&
+          remoteId(value.id) === configured!.repositoryId &&
+          value.name === configured!.name &&
+          value.full_name === configured!.owner + '/' + configured!.name &&
+          record(value.owner) && value.owner.login === configured!.owner &&
+          value.owner.id === installationAccountId && value.owner.type === installationAccountType &&
+          value.visibility === configured!.visibility &&
+          value.private === (configured!.visibility === 'private') &&
+          value.archived === false && value.disabled === false &&
+          value.has_issues === issuesEnabled && value.default_branch === defaultBranch &&
+          value.updated_at === repositoryUpdatedAt;
+      }
       const appSlug =
         typeof installation.app_slug === 'string' &&
         /^[a-z0-9][a-z0-9-]{0,99}$/u.test(installation.app_slug)
@@ -532,23 +558,7 @@ export function createSupportEngineeringRepositoryPorts(
         )
           throw new Error('Unavailable metadata');
         const selected: unknown = grant.repositories[0];
-        if (
-          !record(selected) ||
-          remoteId(selected.id) !== configured!.repositoryId ||
-          selected.name !== configured!.name ||
-          selected.full_name !== configured!.owner + '/' + configured!.name ||
-          !record(selected.owner) ||
-          selected.owner.login !== configured!.owner ||
-          selected.owner.id !== installationAccountId ||
-          selected.owner.type !== installationAccountType ||
-          selected.visibility !== configured!.visibility ||
-          selected.private !== (configured!.visibility === 'private') ||
-          selected.archived !== false ||
-          selected.disabled !== false ||
-          selected.has_issues !== issuesEnabled ||
-          selected.default_branch !== defaultBranch ||
-          selected.updated_at !== repositoryUpdatedAt
-        )
+        if (!record(selected) || remoteId(selected.id) !== configured!.repositoryId)
           throw new Error('Unavailable metadata');
         const tokenExpires = Date.parse(grant.expires_at);
         if (tokenExpires <= (now() ?? Infinity))
@@ -560,6 +570,11 @@ export function createSupportEngineeringRepositoryPorts(
         current();
         const afterMint = await authority();
         sameAuthority(first, afterMint);
+        // Token scope proves only the immutable numeric destination. All names,
+        // visibility and state come from this authoritative scoped GET after
+        // every asynchronous authentication boundary, for reads and writes.
+        const finalRepository = await request(path, token);
+        if (!sameRepositoryState(finalRepository)) throw new Error('Unavailable metadata');
         current();
         writeCurrent();
         return request(url, token, body === undefined ? 'GET' : 'POST', body);
@@ -567,6 +582,9 @@ export function createSupportEngineeringRepositoryPorts(
       const value = await use({
         repository: observation,
         appId: configured!.appId,
+        installationId: configured!.installationId,
+        installationBinding: first.binding,
+        signal: controller.signal,
         appSlug,
         path,
         current,
@@ -626,6 +644,7 @@ export function createSupportEngineeringRepositoryPorts(
     (repositoryId, context, use) =>
       withinRepository(repositoryId, context.signal, use, context),
     options.clock,
+    options.creationReceipts,
   );
   return Object.freeze({
     repositoryMetadata: Object.freeze({

@@ -1,7 +1,10 @@
 import type { Logger } from '@pegma/spine';
 import { createAgentPrincipalResolver } from './agent-authority';
 import type { SupportRuntime } from './support-desk';
-import { createSupportEngineeringRuntime } from './support-engineering';
+import {
+  createSupportEngineeringRuntime,
+  type SupportEngineeringRuntimeOptions,
+} from './support-engineering';
 import {
   createSupportEngineeringModelPorts,
   type SupportEngineeringModelOptions,
@@ -29,6 +32,9 @@ export interface SupportEngineeringProcessingComposition {
     readonly usagePolicy: SupportEngineeringUsagePolicy;
     /** Same current verifiers must also configure the existing Support application. */
     readonly ports: RequiredPorts;
+    readonly checksFor?: SupportEngineeringRuntimeOptions['checksFor'];
+    readonly precomputeChecks?: SupportEngineeringRuntimeOptions['precomputeChecks'];
+    readonly discardChecks?: SupportEngineeringRuntimeOptions['discardChecks'];
   };
 }
 
@@ -153,6 +159,15 @@ export function composeSupportEngineeringProcessing(
     return createSupportEngineeringRuntime({
       ...base,
       processingEnabled: enabled,
+      ...(supplied.checksFor === undefined
+        ? {}
+        : { checksFor: supplied.checksFor }),
+      ...(supplied.precomputeChecks === undefined
+        ? {}
+        : { precomputeChecks: supplied.precomputeChecks }),
+      ...(supplied.discardChecks === undefined
+        ? {}
+        : { discardChecks: supplied.discardChecks }),
       ports: {
         ...supplied.ports,
         configuration,

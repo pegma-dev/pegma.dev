@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createIdentity, createHmacEmailCodeProtector } from '@pegma/identity';
 import { createSessionStore } from '@pegma/sessions';
@@ -70,7 +71,11 @@ export async function createStagedReviewFixture(store: Store, workerHarness?: St
         authenticationLearningStartedAt).toISOString();
     },
   } : undefined;
-  const sessionObservations: { readonly at: string; readonly previousLastSeenAt: string | null }[] = [];
+  type SessionObservation = { readonly operation: 'get' | 'observe'; readonly at: string; readonly previousLastSeenAt: string | null };
+  // Keep the existing admission-touch history for the calendar fixture; the
+  // complete read history also includes the host's read-only closing fences.
+  const sessionObservations: SessionObservation[] = [];
+  const sessionReadObservations: SessionObservation[] = [];
   function authority() {
     const base = createIdentityRuntime({ store,
       emailCodeSecretBase64: btoa('q'.repeat(32)), emailFrom: 'Pegma <synthetic@example.test>', emailEnabled: false }, logger);
@@ -85,12 +90,31 @@ export async function createStagedReviewFixture(store: Store, workerHarness?: St
         origins: [IDENTITY_ISSUER], registrationLimiter, authenticationLimiter,
         emailCodeRequestLimiter, emailCodeVerificationLimiter,
         emailCodeProtector: createHmacEmailCodeProtector(new Uint8Array(32).fill(113)), clock: authClock });
-      const actualSessions = createSessionStore(store, { logger, clock: authClock });
-      sessions = { ...actualSessions, async get(id, at = authClock.now()) {
-        const result = await actualSessions.get(id, at);
-        sessionObservations.push({ at, previousLastSeenAt: result?.lastSeenAt ?? null });
-        return result;
-      } };
+      const sessionClockSource = authClock;
+      const readClock = new AsyncLocalStorage<{ at?: string }>();
+      const actualSessions = createSessionStore(store, { logger, clock: { now() {
+        const at = sessionClockSource.now();
+        const read = readClock.getStore();
+        if (read !== undefined) read.at = at;
+        return at;
+      } } });
+      function readSession(operation: 'get' | 'observe', id: string, at?: string) {
+        const observed: { at?: string } = {};
+        return readClock.run(observed, async () => {
+          // Omit the default instant so the real public port still observes
+          // its clock after the backend read, including read-only fences.
+          const result = await actualSessions[operation](id, at);
+          const observation = { operation, at: at ?? observed.at ?? sessionClockSource.now(),
+            previousLastSeenAt: result?.lastSeenAt ?? null };
+          sessionReadObservations.push(observation);
+          if (operation === 'get') sessionObservations.push(observation);
+          return result;
+        });
+      }
+      sessions = { ...actualSessions,
+        get: (id, at) => readSession('get', id, at),
+        observe: (id, at) => readSession('observe', id, at),
+      };
     }
     const host = createSupportRuntime({ store, identity, sessions, logger, identityLinkFromClaims });
     return { identity, sessions, host, options: { identity, sessions, logger, identityLinkFromClaims, roleStore: host.roleStore } };
@@ -265,7 +289,8 @@ export async function createStagedReviewFixture(store: Store, workerHarness?: St
       revokedAtEpochMs: Date.now(), auditEventId: id + '-revoke' });
   }
   return { learning, state, principalId, messages, graph, request, invoke, deliver, scan, checked, multipleContributors, prepare, revoke,
-    sessionObservations, authenticationClockStartedAt, identityCreatedAt: seededIdentity.createdAt,
+    sessionObservations, sessionReadObservations, authenticationClockStartedAt, identityCreatedAt: seededIdentity.createdAt,
     readSessionAt: (at: string) => seed.sessions.get(sessionId, at),
+    observeSessionAt: (at: string) => seed.sessions.observe(sessionId, at),
     destroySession: () => seed.sessions.destroy(sessionId) };
 }

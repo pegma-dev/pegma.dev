@@ -544,7 +544,10 @@ describe('legacy Support intent retry packets (actual scripts, released SDK)', (
     async (kind) => {
       const sdk = await ledger(kind);
       const original = browserGate<void>();
+      const retryAcknowledgement = browserGate<void>();
       let firstServer: Promise<BrowserResponse> | undefined;
+      let retryCommit: Promise<BrowserResponse> | undefined;
+      let retryServer: Promise<BrowserResponse> | undefined;
       let attempts = 0;
       const page = supportBrowser(surface(kind), (call) => {
         if (call.method === 'GET') return sdk.read(call);
@@ -552,7 +555,12 @@ describe('legacy Support intent retry packets (actual scripts, released SDK)', (
           firstServer = original.promise.then(() => sdk.commit(call));
           return firstServer;
         }
-        return sdk.commit(call);
+        retryCommit = sdk.commit(call);
+        retryServer = retryCommit.then(async (response) => {
+          await retryAcknowledgement.promise;
+          return response;
+        });
+        return retryServer;
       });
       try {
         await ready(page, kind);
@@ -575,6 +583,22 @@ describe('legacy Support intent retry packets (actual scripts, released SDK)', (
         await until(page, () => sdk.observedCommands.length === 1);
         original.resolve();
         await firstServer;
+        if (retryCommit === undefined || retryServer === undefined)
+          throw new Error('The retry did not enter its actual SDK lifecycle.');
+        await retryCommit;
+        // The original request is settled, but this retry ACK is deliberately
+        // still pending. HTTP-idle microtasks cannot complete that lifecycle.
+        expect(writes(page)[1]?.signal?.aborted).toBe(false);
+        retryAcknowledgement.resolve();
+        await retryServer;
+        const applied = {
+          create: 'Ticket created.',
+          'customer-reply': 'Reply sent.',
+          'staff-reply': 'Public reply sent.',
+          note: 'Internal note saved.',
+          patch: 'Action change_priority applied.',
+        }[kind];
+        await until(page, () => page.node(controls(kind).status).textContent.includes(applied));
         await page.drain();
         const sent = writes(page);
         expect(sent).toHaveLength(2);
@@ -591,7 +615,9 @@ describe('legacy Support intent retry packets (actual scripts, released SDK)', (
         ).toBe(true);
       } finally {
         original.resolve();
+        retryAcknowledgement.resolve();
         await firstServer;
+        await retryServer;
         page.dispose();
       }
     },

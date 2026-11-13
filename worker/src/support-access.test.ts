@@ -24,6 +24,7 @@ const customerPermissions = [
   supportPermissions.readOwn,
   supportPermissions.replyOwn,
   supportPermissions.requestPerson,
+  supportPermissions.confirmSuccess,
 ];
 const staffPermissions = [
   supportPermissions.queueRead,
@@ -42,6 +43,9 @@ const staffPermissions = [
   supportPermissions.engineeringReview,
   supportPermissions.engineeringWithdraw,
   supportPermissions.engineeringPolicyRead,
+  supportPermissions.engineeringFollowupRead,
+  supportPermissions.engineeringFollowupReview,
+  supportPermissions.engineeringFollowupEvidenceSubmit,
 ];
 
 function roleStore() {

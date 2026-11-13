@@ -64,7 +64,20 @@ export interface SupportEngineeringRuntimeOptions {
   readonly processingEnabled?: () => boolean;
   readonly ports?: Partial<SupportEngineeringPorts>;
   readonly reviewProofs?: SupportEngineeringReviewProofs;
+  readonly checksFor?: (scope: EngineeringKey, onDurablyDeferred: (hint: SupportEngineeringDeferredCheckHint) => void) => SupportEngineeringPorts['checks'];
+  readonly precomputeChecks?: (hint: SupportEngineeringDeferredCheckHint, run: { readonly deadline: string; readonly signal: AbortSignal; readonly current: () => boolean }) => Promise<SupportEngineeringPrecomputeResult>;
+  /** Called after an accepted SDK privacy/delete transition; never grants authority. */
+  readonly discardChecks?: (ticketId: string) => Promise<void>;
 }
+
+export interface SupportEngineeringDeferredCheckHint {
+  readonly kind: 'checks';
+  readonly operationId: string;
+  readonly ticketId: string;
+  readonly sourceGeneration: number;
+  readonly expiresAt: string;
+}
+export type SupportEngineeringPrecomputeResult = { readonly outcome: 'checked' | 'held' | 'restricted' | 'unknown' };
 
 export class SupportEngineeringUnavailableError extends Error {
   readonly code = 'support_engineering_unavailable';
@@ -79,7 +92,10 @@ export function supportEngineeringApplicationOptions(options: EngineeringOptions
 const staffOperationMilliseconds = 25_000;
 
 type Held = { readonly outcome: 'held'; readonly reason: 'engineering_disabled' | 'engineering_unavailable' };
-export type SupportEngineeringProcessResult = EngineeringProcessResult | Held;
+export type SupportEngineeringProcessResult = EngineeringProcessResult | Held | {
+  readonly outcome: 'checks_pending';
+  readonly hint: SupportEngineeringDeferredCheckHint;
+};
 
 /** No application, Store, auth, HTTP, policy ledger or scheduler is created. */
 export function createSupportEngineeringRuntime(options: SupportEngineeringRuntimeOptions) {
@@ -115,13 +131,24 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
     github: { ...base.github, getMetadata: (...args) => proofs.github.getMetadata(...args) },
   };
   const coordinator = createSupportDeskEngineering(base);
-  const processing = createSupportDeskEngineering({ ...base, serviceAccess: {
+  const processingOptions = { ...base, serviceAccess: {
     async resolve(signal) {
       if (!enabled()) return { outcome: 'inactive' };
       const value = await base.serviceAccess.resolve(signal);
       return enabled() ? value : { outcome: 'inactive' };
     },
-  } });
+  } } satisfies SupportDeskEngineeringOptions;
+  const processing = createSupportDeskEngineering(processingOptions);
+  async function discard(ticketId: string) {
+    try { await options.discardChecks?.(ticketId); }
+    catch { /* The accepted SDK receipt remains authority. Nonpaid cleanup retries redaction. */ }
+  }
+  function validHint(hint: SupportEngineeringDeferredCheckHint): boolean {
+    return hint.kind === 'checks' && /^[0-9a-f]{64}$/u.test(hint.operationId) &&
+      typeof hint.ticketId === 'string' && hint.ticketId.length > 0 && hint.ticketId.length <= 200 &&
+      !/[\u0000-\u001f\u007f]/u.test(hint.ticketId) && Number.isSafeInteger(hint.sourceGeneration) && hint.sourceGeneration > 0 &&
+      typeof hint.expiresAt === 'string' && Number.isFinite(Date.parse(hint.expiresAt)) && new Date(hint.expiresAt).toISOString() === hint.expiresAt;
+  }
 
   async function staff<Result>(original: AccessContext, permission: string,
     run: (access: AccessContext, refresh: () => Promise<AccessContext>, signal: AbortSignal,
@@ -276,10 +303,14 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
         }),
     invalidate: (access: AccessContext, input: EngineeringInvalidationPacket, beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringWithdraw, 'invalidate', input.ticketId, input,
-        (current, packet, _refresh, _signal, control) => application.invalidateEngineeringSource(current, packet, control), beforeCommit),
+        async (current, packet, _refresh, _signal, control) => {
+          const result = await application.invalidateEngineeringSource(current, packet, control); await discard(packet.ticketId); return result;
+        }, beforeCommit),
     withdraw: (access: AccessContext, input: EngineeringWithdrawalPacket, beforeCommit?: SupportEngineeringHumanCommitGuard) =>
       command(access, supportPermissions.engineeringWithdraw, 'withdraw', input.ticketId, input,
-        (current, packet, _refresh, _signal, control) => application.withdrawEngineeringSource(current, packet, control), beforeCommit),
+        async (current, packet, _refresh, _signal, control) => {
+          const result = await application.withdrawEngineeringSource(current, packet, control); await discard(packet.ticketId); return result;
+        }, beforeCommit),
     readSource: (access: AccessContext, ticketId: string) =>
       staff(access, supportPermissions.engineeringRead, (current) => application.readEngineeringSource(current, ticketId)),
     readWork(access: AccessContext, input: EngineeringKey) {
@@ -314,13 +345,45 @@ export function createSupportEngineeringRuntime(options: SupportEngineeringRunti
       try { return await processing.scanCandidates(structuredClone(input)); }
       catch { return { outcome: 'held' as const, reason: 'engineering_unavailable' as const }; }
     },
-    async processWork(input: Parameters<SupportDeskEngineering['processWork']>[0]): Promise<SupportEngineeringProcessResult> {
+    async processWork(input: Parameters<SupportDeskEngineering['processWork']>[0],
+      run: Parameters<SupportDeskEngineering['processWork']>[1] = {}): Promise<SupportEngineeringProcessResult> {
       if (!enabled()) return { outcome: 'held', reason: 'engineering_disabled' };
       if (ports.serviceAccess === undefined) return { outcome: 'held', reason: 'engineering_unavailable' };
-      return processing.processWork(structuredClone(input));
+      const copied = structuredClone(input);
+      if (!options.checksFor) return processing.processWork(copied, run);
+      let pending: SupportEngineeringDeferredCheckHint | undefined;
+      const checks = options.checksFor({ ticketId: copied.ticketId, sourceGeneration: copied.sourceGeneration }, hint => {
+        if (!validHint(hint) || hint.ticketId !== copied.ticketId || hint.sourceGeneration !== copied.sourceGeneration)
+          throw new SupportEngineeringUnavailableError();
+        pending = Object.freeze({ ...hint });
+      });
+      const result = await createSupportDeskEngineering({ ...processingOptions, checks }).processWork(copied, run);
+      return pending && (result.outcome === 'held' || result.outcome === 'pending')
+        ? { outcome: 'checks_pending', hint: pending } : result;
+    },
+    async precomputeChecks(input: SupportEngineeringDeferredCheckHint, run: { readonly signal?: AbortSignal } = {}): Promise<SupportEngineeringPrecomputeResult> {
+      if (!enabled() || !options.precomputeChecks || run.signal?.aborted || !validHint(input)) return { outcome: 'held' };
+      const hint = structuredClone(input);
+      const deadlineAt = Math.min(Date.parse(options.clock.now()) + staffOperationMilliseconds, Date.parse(hint.expiresAt));
+      if (!Number.isFinite(deadlineAt) || deadlineAt <= Date.parse(options.clock.now())) return { outcome: 'held' };
+      const controller = new AbortController(); const abort = () => controller.abort();
+      run.signal?.addEventListener('abort', abort, { once: true });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const stop = new Promise<never>((_resolve, reject) => {
+          controller.signal.addEventListener('abort', () => reject(new SupportEngineeringUnavailableError()), { once: true });
+          timer = setTimeout(abort, Math.max(1, deadlineAt - Date.parse(options.clock.now())));
+        });
+        const current = () => enabled() && !controller.signal.aborted && Date.parse(options.clock.now()) < deadlineAt;
+        const result = await Promise.race([options.precomputeChecks(hint, { deadline: new Date(deadlineAt).toISOString(), signal: controller.signal, current }), stop]);
+        if (!enabled() || controller.signal.aborted || !['checked', 'held', 'restricted', 'unknown'].includes(result.outcome)) return { outcome: 'unknown' };
+        return { outcome: result.outcome };
+      } catch { return { outcome: 'unknown' }; }
+      finally { if (timer !== undefined) clearTimeout(timer); run.signal?.removeEventListener('abort', abort); controller.abort(); }
     },
     // Separate authority and no generation-config prerequisite, including after withdrawal.
-    reconcileSource: (ticketId: string) => coordinator.reconcileSource(ticketId),
+    reconcileSource: (ticketId: string, run: Parameters<SupportDeskEngineering['reconcileSource']>[1] = {}) =>
+      coordinator.reconcileSource(ticketId, run),
   });
 }
 

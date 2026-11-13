@@ -13,7 +13,7 @@ import {
 } from './support-access';
 import { createSupportRuntime } from './support-desk';
 import { controlledHumanBody, humanLatch } from './support-human-control-fixtures';
-import { createSupportLearningRuntime } from './support-learning';
+import { createSupportLearningRuntime, createSupportLearningBrowserHandlers } from './support-learning';
 import {
   createSupportLearningFixture, learningCanary, learningTicketId,
 } from './support-learning-fixtures';
@@ -42,12 +42,14 @@ function text(value: unknown) {
 }
 
 /** Actual Identity, session, audited host roles, limiter and both SDK factories. */
-async function fixture() {
+async function fixture(browserOwned = false) {
   const backing = createMemoryStore();
-  const hooks: { commit?: () => Promise<void>; draft?: () => Promise<void>; reviewProof?: () => Promise<void> } = {};
+  const hooks: { commit?: () => Promise<void>; draft?: () => Promise<void>; reviewProof?: () => Promise<void>; roleReads: number } = { roleReads: 0 };
   const store: Store = {
     collection<Value>(definition: CollectionDefinition<Value>): CollectionStore<Value> {
       const actual = backing.collection(definition);
+      if (definition.name === 'authorization_records') return { ...actual,
+        list(partition) { hooks.roleReads += 1; return actual.list(partition); } };
       if (definition.name !== supportRecords.name) return actual;
       return { ...actual, async transact(partition, actions) {
         const value = await actual.transact(partition, actions);
@@ -112,7 +114,12 @@ async function fixture() {
     runtime: () => { state.runtimeCalls += 1; return state.runtime; },
     limiter: host.replyLimiter,
   };
-  const handle = createSupportLearningHandlers(options);
+  const handle = browserOwned ? createSupportLearningBrowserHandlers({
+    ...options,
+    learning: { application: observedApplication, knowledge: observedKnowledge,
+      sources: learning.sources, clock: learning.clock, ports: learning.ports,
+      processingEnabled: () => learning.state.enabled },
+  }) : createSupportLearningHandlers(options);
   function request(operation = '', body?: unknown, actor: Actor = 'staff', query = '') {
     const headers: Record<string, string> = { Cookie: cookies.get(actor)! };
     if (body !== undefined) Object.assign(headers, { Origin: IDENTITY_ISSUER,
@@ -184,6 +191,101 @@ async function hashOnlyReviewPacket(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('unregistered staff learning HTTP with current public host authority', () => {
+  it('owns successful-test browser authority at admission, after body, before commit and response without duplicate runtime reads', async () => {
+    const f = await fixture(true);
+    const ticket = await f.learning.terminal();
+    expect((await f.send(f.request('enroll', { commandId: 'BROWSER-TEST-ENROLL',
+      expectedRevision: ticket.revision }))).status).toBe(200);
+    f.hooks.roleReads = 0;
+    const response = await f.send(f.request('evidence', { kind: 'successful_test',
+      commandId: 'BROWSER-TEST-BOUNDARY', expectedRevision: ticket.revision,
+      resolutionCycle: 1, solutionMessageId: 'learning-solution', receipt: 'unavailable-real-test-receipt' }));
+    expect(response.status).toBe(200);
+    expect(f.hooks.roleReads).toBe(4);
+    expect(f.learning.state.modelCalls).toBe(0);
+  });
+
+  it.each(['logout', 'role', 'header', 'csrf', 'configuration'] as const)(
+    'fences %s during a successful-test body before any domain CAS', async (change) => {
+      const f = await fixture(true);
+      const ticket = await f.learning.terminal();
+      expect((await f.send(f.request('enroll', { commandId: 'HELD-TEST-ENROLL',
+        expectedRevision: ticket.revision }))).status).toBe(200);
+      const before = await f.learning.rows();
+      let commits = 0;
+      f.hooks.commit = async () => { commits += 1; };
+      const body = await controlledHumanBody(f.request('evidence', { kind: 'successful_test',
+        commandId: 'HELD-TEST-BODY', expectedRevision: ticket.revision, resolutionCycle: 1,
+        solutionMessageId: 'learning-solution', receipt: 'unavailable-real-test-receipt' }));
+      const pending = f.send(body.request);
+      try {
+        await body.waitFor(pending);
+        if (change === 'logout') await f.destroy('staff');
+        else if (change === 'role') await f.revoke('staff', SUPPORT_ROLE);
+        else if (change === 'header') body.request.headers.set('Origin', 'https://changed.example.test');
+        else if (change === 'csrf') body.request.headers.set('X-Pegma-CSRF', 'changed-csrf');
+        else f.state.enabled = false;
+      } finally { body.complete(); }
+      const response = await pending;
+      expect(response.status).toBe(change === 'logout' ? 401 : change === 'configuration' ? 503 : 403);
+      expect(commits).toBe(0);
+      expect(await f.learning.rows()).toEqual(before);
+      expect(await object(response)).not.toHaveProperty('result');
+    },
+  );
+
+  it('withholds a committed successful-test ACK after logout and recovers its exact receipt once', async () => {
+    const f = await fixture(true);
+    const ticket = await f.learning.terminal();
+    expect((await f.send(f.request('enroll', { commandId: 'ACK-TEST-ENROLL',
+      expectedRevision: ticket.revision }))).status).toBe(200);
+    const packet = { kind: 'successful_test', commandId: 'ACK-TEST-EXACT',
+      expectedRevision: ticket.revision, resolutionCycle: 1,
+      solutionMessageId: 'learning-solution', receipt: 'unavailable-real-test-receipt' };
+    let commits = 0;
+    f.hooks.commit = async () => { commits += 1; await f.destroy('staff'); };
+    expect((await f.send(f.request('evidence', packet))).status).toBe(401);
+    expect(commits).toBe(1);
+    const accepted = await f.learning.rows();
+    await f.sessions.create('1'.repeat(43), { principalId: f.principals.staff,
+      data: JSON.stringify({ version: 1, csrfToken: f.csrf.get('staff'),
+        issuer: IDENTITY_ISSUER, subject: f.principals.staff }) });
+    const recovered = await f.send(f.request('evidence-recovery', packet));
+    expect(recovered.status).toBe(200);
+    expect(result(await object(recovered))).toMatchObject({ outcome: 'accepted' });
+    expect(commits).toBe(1);
+    expect(await f.learning.rows()).toEqual(accepted);
+  });
+
+  it('keeps the optimized runtime inside its own Request-only composition', async () => {
+    const f = await fixture(true);
+    expect(typeof f.handle).toBe('function');
+    expect(Reflect.get(f.handle, 'submitSuccessfulTest')).toBeUndefined();
+    expect(Reflect.get(f.handle, 'runtime')).toBeUndefined();
+    const ticket = await f.learning.terminal();
+    expect((await f.send(f.request('enroll', { commandId: 'DIRECT-ISOLATED-ENROLL',
+      expectedRevision: ticket.revision }))).status).toBe(200);
+    const ports = { application: f.learning.application, knowledge: f.learning.knowledge,
+      sources: f.learning.sources, clock: f.learning.clock };
+    let first = 0, second = 0;
+    const a = createSupportLearningRuntime({ ...ports, staffAccess: { async resolve(id) {
+      first += 1; return f.resolve(id);
+    } } });
+    const b = createSupportLearningRuntime({ ...ports, staffAccess: { async resolve(id) {
+      second += 1; return f.resolve(id);
+    } } });
+    const actor = await f.resolve(f.principals.staff);
+    if (actor === null) throw new Error('Actual staff absent');
+    const packet = { ticketId: learningTicketId, clientCommandId: 'DIRECT-ISOLATED-TEST',
+      expectedRevision: ticket.revision, resolutionCycle: 1,
+      evidence: { kind: 'successful_test' as const, solutionMessageId: 'learning-solution',
+        receipt: 'unavailable-real-test-receipt' } };
+    await a.submitSuccessfulTest(actor, packet);
+    await b.submitSuccessfulTest(actor, packet);
+    expect(first).toBe(3);
+    expect(second).toBe(2);
+  });
+
   it.each(['enroll', 'evidence'] as const)('returns an authenticated future-effect fence for the exact stale %s command', async (operation) => {
     const f = await fixture(); const ticket = await f.learning.terminal();
     if (operation === 'evidence') expect((await f.send(f.request('enroll', { commandId: 'SETUP-ENROLL', expectedRevision: ticket.revision }))).status).toBe(200);

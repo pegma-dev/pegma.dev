@@ -1,6 +1,6 @@
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { createMemoryStore, type CollectionDefinition, type CollectionStore, type Store } from '@pegma/storage-core';
-import { createSupportDeskApplication, engineeringPolicyRecords, supportRecords } from '@pegma/support-desk-application';
+import { createSupportDeskApplication, engineeringPolicyRecords, supportRecords, type EngineeringRepositoryDescriptor } from '@pegma/support-desk-application';
 import { createAgentPrincipalResolver } from './agent-authority';
 import { isPlainObject } from './api-auth';
 import { IDENTITY_ISSUER, SESSION_COOKIE } from './identity-api';
@@ -33,7 +33,7 @@ export function engineeringHttpNumber(value: unknown) {
 }
 
 /** Actual Identity, Sessions, host RoleStore, durable limiter and Support SDK. */
-export async function createSupportEngineeringHttpFixture(backing: Store = createMemoryStore()) {
+export async function createSupportEngineeringHttpFixture(backing: Store = createMemoryStore(), fixture: { readonly repositories?: readonly EngineeringRepositoryDescriptor[] } = {}) {
   const hooks: { commit?: () => Promise<void>; policy?: () => Promise<void> } = {};
   const store: Store = {
     collection<Value>(definition: CollectionDefinition<Value>): CollectionStore<Value> {
@@ -49,7 +49,7 @@ export async function createSupportEngineeringHttpFixture(backing: Store = creat
       } };
     },
   };
-  const engineering = await createSupportEngineeringFixture(store);
+  const engineering = await createSupportEngineeringFixture(store, fixture);
   const logger = { log() {} };
   const identityRuntime = createIdentityRuntime({ store, emailCodeSecretBase64: btoa('e'.repeat(32)),
     emailFrom: 'Pegma <synthetic@pegma.dev>', emailEnabled: false }, logger);
@@ -86,7 +86,7 @@ export async function createSupportEngineeringHttpFixture(backing: Store = creat
   const options = { ...authority, enabled: () => state.enabled,
     readLimiter: host.engineeringReadLimiter, mutationLimiter: host.engineeringMutationLimiter,
     runtime: () => { state.runtimeCalls += 1; return state.runtime; },
-    repositories: engineeringRepositories.map((descriptor) => ({ key: descriptor.repositoryId, descriptor })) };
+    repositories: (fixture.repositories ?? engineeringRepositories).map((descriptor) => ({ key: descriptor.repositoryId, descriptor })) };
   const handle = createSupportEngineeringHandlers(options);
   function request(operation = '', body?: unknown, actor: EngineeringHttpActor = 'staff', query = '') {
     const headers: Record<string, string> = { Cookie: cookies.get(actor)! };

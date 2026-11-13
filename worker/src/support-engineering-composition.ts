@@ -2,6 +2,8 @@ import type { EngineeringOptions } from '@pegma/support-desk-application';
 import type { Logger } from '@pegma/spine';
 import { createAgentPrincipalResolver } from './agent-authority';
 import type { SupportRuntime } from './support-desk';
+import { createSupportEngineeringDriver } from './support-engineering-driver';
+import { composeSupportEngineeringProcessing, type SupportEngineeringProcessingComposition } from './support-engineering-processing';
 import type { EngineeringHttpRepository } from './support-engineering-handlers';
 import type { SupportEngineeringRouterOptions } from './support-engineering-router';
 import { createSupportEngineeringRuntime, supportEngineeringApplicationOptions,
@@ -17,6 +19,7 @@ export interface SupportEngineeringHumanComposition {
     readonly repositories: readonly EngineeringHttpRepository[];
     /** Explicit current read-only proof ports; absence holds NEW approvals. */
     readonly reviewProofs?: SupportEngineeringReviewProofs;
+    readonly discardChecks?: (ticketId: string) => Promise<void>;
   };
 }
 export function supportEngineeringHumanEnabled(options: SupportEngineeringHumanComposition = {}): boolean {
@@ -42,6 +45,30 @@ export function composeSupportEngineeringHuman(runtime: SupportRuntime, logger: 
     runtime: () => createSupportEngineeringRuntime({ application: runtime.application,
       clock: runtime.clock, staffAccess: { resolve }, processingEnabled: () => false,
       ...(options.configuration!.reviewProofs === undefined ? {} : { reviewProofs: options.configuration!.reviewProofs }),
+      ...(options.configuration!.discardChecks === undefined ? {} : { discardChecks: options.configuration!.discardChecks }),
     }),
   } };
+}
+
+/** One driver stage over the same application instance used by normal Support.
+ * Admission is current after every driver/SDK await; it supplies no grants. */
+export function composeSupportEngineeringDriver(
+  runtime: SupportRuntime,
+  options: SupportEngineeringProcessingComposition = {},
+) {
+  const supplied = options.configuration;
+  const enabled = () => {
+    try {
+      return supplied !== undefined && options.configuration === supplied && options.enabled?.() === true;
+    } catch { return false; }
+  };
+  return createSupportEngineeringDriver({
+    store: runtime.store,
+    clock: runtime.clock,
+    isEnabled: enabled,
+    runtime: (current) => composeSupportEngineeringProcessing(runtime, {
+      ...options,
+      enabled: () => current() && enabled(),
+    }),
+  });
 }

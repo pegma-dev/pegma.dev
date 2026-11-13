@@ -71,6 +71,7 @@ export function createSupportLearningKnowledgePort(
 export type SupportLearningStaffOperation =
   | 'enroll'
   | 'verified_fix'
+  | 'successful_test'
   | 'review'
   | 'invalidate'
   | 'withdraw';
@@ -106,7 +107,7 @@ export async function supportLearningCommandIdentity(input: {
   const commandId = identifier(input.clientCommandId);
   const operation = input.operation;
   if (
-    !['enroll', 'verified_fix', 'review', 'invalidate', 'withdraw'].includes(
+    !['enroll', 'verified_fix', 'successful_test', 'review', 'invalidate', 'withdraw'].includes(
       operation,
     )
   )

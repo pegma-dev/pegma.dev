@@ -22,10 +22,13 @@ retiregolden.org, runs the stack on Azure).
   Datadog. Workers Logs persistence is enabled via Wrangler
   `observability` (the Cloudflare log store). Datadog ships when
   `DATADOG_API_KEY` is set as a Worker secret.
-- The **portability exhibit**: the account API composes exact
-  `@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.2.1`,
+- The **portability exhibit**: the account API composes
+  `@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions`,
   `@pegma/identity@0.1.2`, and `@pegma/authorization-identity@0.4.0`
-  through `worker/src/identity-runtime.ts`.
+  through `worker/src/identity-runtime.ts`. Current dependency selections are
+  recorded in [`package.json`](package.json) and [`pnpm-lock.yaml`](pnpm-lock.yaml);
+  the [Support composition snapshot](docs/SUPPORT_COMPOSITION.md#packages)
+  distinguishes the current public graph from historical qualification receipts.
 - **Environment runbooks** for a synthetic Bench Ticket demo (email-code
   identity, sessions, mail catcher, support desk, health):
   [https://pegma.dev/runbooks](https://pegma.dev/runbooks).

@@ -21,6 +21,9 @@ const handoffStatus = select('#staff-handoff-status');
 const handoffList = select('#staff-handoff-list');
 const learningRoot = select('#staff-learning-panel');
 const engineeringRoot = select('#staff-engineering-panel');
+const followupRoot = select('#staff-followup-panel');
+let followup = null;
+let followupBusy = false;
 const engineeringRecovery = select('#staff-engineering-recovery');
 const engineeringOwnerList = select('#staff-engineering-recovery-owners');
 const engineeringRecoveryStatus = select('#staff-engineering-recovery-status');
@@ -77,6 +80,8 @@ function cancelRequests() {
 function beginOperation() {
   // Retain unknown intent, but retire every old panel context before an
   // ordinary mutation or current-ticket reload can await anything.
+  followup?.suspend();
+  if (followupRoot !== null) followupRoot.hidden = true;
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
   engineeringPolicyRecovery = null;
@@ -102,6 +107,8 @@ function clearHandoff() {
   handoffPanel.hidden = true;
 }
 function hideAll() {
+  followup?.suspend();
+  if (followupRoot !== null) followupRoot.hidden = true;
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
   engineeringPolicyRecovery = null;
@@ -156,8 +163,8 @@ function selectedComposeMode() {
 function updateControls() {
   composeForm.noValidate = ordinaryPacket !== null && ordinaryPacket.kind !== 'patch';
   for (const link of signInLinks) {
-    link.node.target = ordinaryPacket === null && !learningPending() && !engineeringPending() ? link.target : '_blank';
-    link.node.rel = ordinaryPacket === null && !learningPending() && !engineeringPending() ? link.rel : 'noopener noreferrer';
+    link.node.target = ordinaryPacket === null && !learningPending() && !engineeringPending() && !followup?.hasPending() ? link.target : '_blank';
+    link.node.rel = ordinaryPacket === null && !learningPending() && !engineeringPending() && !followup?.hasPending() ? link.rel : 'noopener noreferrer';
   }
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
@@ -245,7 +252,7 @@ function retryDeadline(value) {
   // A missing or malformed server hint never triggers a tight retry loop.
   return Date.now() + 30_000;
 }
-async function api(path, init = {}) {
+async function api(path, init = {}, includeStatus = false) {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) headers.set('Content-Type', 'application/json');
   if (csrfToken !== '') headers.set('X-Pegma-CSRF', csrfToken);
@@ -279,14 +286,25 @@ async function api(path, init = {}) {
           cache: 'no-store',
           referrerPolicy: 'no-referrer',
         });
-        if (!response.ok)
+        if (!response.ok) {
+          let code;
+          if (response.status === 410 || response.status === 429) {
+            try {
+              const failure = await response.json();
+              if (typeof failure?.error === 'string' && failure.error.length <= 200)
+                code = failure.error;
+            } catch { /* Missing/malformed error data retains unknown-outcome handling. */ }
+          }
           throw Object.assign(new Error('request_failed'), {
             status: response.status,
+            ...(code === undefined ? {} : { code }),
             ...(response.status === 429
               ? { retryAt: retryDeadline(response.headers.get('Retry-After')) }
               : {}),
           });
-        return await response.json();
+        }
+        const body = await response.json();
+        return includeStatus ? { status: response.status, body } : body;
       })(),
       aborted,
     ]);
@@ -337,9 +355,11 @@ function validateView(view) {
   )
     throw Object.assign(new Error('invalid_response'), { status: 502 });
   if ((view.engineeringEnabled !== undefined && typeof view.engineeringEnabled !== 'boolean') ||
+    (view.releaseFollowupEnabled !== undefined && typeof view.releaseFollowupEnabled !== 'boolean') ||
     (view.engineeringReviewEnabled !== undefined && typeof view.engineeringReviewEnabled !== 'boolean') ||
     (view.learningReviewRecoveryEnabled !== undefined && typeof view.learningReviewRecoveryEnabled !== 'boolean') ||
     (view.learningEnabled !== undefined && typeof view.learningEnabled !== 'boolean') ||
+    (view.learningTestReceiptEnabled !== undefined && typeof view.learningTestReceiptEnabled !== 'boolean') ||
     (view.learningStagedReviewEnabled !== undefined && typeof view.learningStagedReviewEnabled !== 'boolean'))
     throw Object.assign(new Error('invalid_response'), { status: 502 });
   effectiveHandling(view.ticket);
@@ -841,6 +861,7 @@ if (learningRoot !== null && typeof globalThis.PegmaSupportLearning?.createPanel
   learning = globalThis.PegmaSupportLearning.createPanel({
     root: learningRoot,
     stagedReviewsEnabled: () => currentView?.learningStagedReviewEnabled === true,
+    testReceiptEnabled: () => currentView?.learningTestReceiptEnabled === true,
     request: (path, init) => learningRequest(() => api(path, init),
       learning.hasPendingReview?.() === true && /\/review(?:-receipt|-cancel|-queue(?:-status|-cancel)?)?$/u.test(path)),
     readSession: () => learningRequest(async () => {
@@ -871,8 +892,9 @@ if (learningRoot !== null && typeof globalThis.PegmaSupportLearning?.createPanel
 function engineeringPending() {
   return engineeringOwnershipInvalid || engineeringOwners.length > 0;
 }
+function followupOccupied() { return followupBusy || followup?.hasPending() === true; }
 function engineeringOccupied() {
-  return engineeringPending() || engineeringBusy || engineeringRequests > 0;
+  return followupOccupied() || engineeringPending() || engineeringBusy || engineeringRequests > 0;
 }
 function extensionOccupied() { return learningOccupied() || engineeringOccupied(); }
 function renderEngineeringRecovery() {
@@ -896,7 +918,7 @@ function renderEngineeringRecovery() {
 function requireEngineeringAdmission() {
   const policyMode = engineeringPolicyRecovery !== null;
   if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || ordinaryAcknowledged ||
-    learningOccupied() || suspended || authorityReloadRequired || viewer === null ||
+    learningOccupied() || followupOccupied() || suspended || authorityReloadRequired || viewer === null ||
     (!policyMode && (currentView?.engineeringEnabled !== true || !onThisTicket())) ||
     (policyMode && viewer.subject !== engineeringPolicyRecovery.actorSubject))
     throw Object.assign(new Error('engineering_suspended'), { stale: true });
@@ -909,6 +931,16 @@ async function engineeringRequest(run) {
 }
 async function syncExtensions(view) {
   const generation = readGeneration;
+  if (followup !== null) {
+    if (viewer !== null && isCurrent(generation) && currentView === view && view.releaseFollowupEnabled === true)
+      followup.showTicket({ ticketId: view.ticket.id, actorSubject: viewer.subject });
+    else {
+      // Keep any unknown packet in its owner closure while deployment admission
+      // is absent. A later current enabled view can recover that same packet.
+      followup.suspend();
+      if (followupRoot !== null) followupRoot.hidden = true;
+    }
+  }
   await syncLearning(view);
   if (!isCurrent(generation) || currentView !== view || engineering === null) return;
   if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || learningOccupied() || view.engineeringEnabled !== true) {
@@ -952,7 +984,7 @@ if (engineeringRoot !== null && typeof globalThis.PegmaSupportEngineering?.creat
     isEnabled: () => engineeringPolicyRecovery !== null || currentView?.engineeringEnabled === true,
     isReviewEnabled: () => currentView?.engineeringReviewEnabled === true,
     canRequest: () => busy === null && ordinaryPacket === null && takeoverPacket === null &&
-      !ordinaryAcknowledged && !learningOccupied() && !suspended && !authorityReloadRequired,
+      !ordinaryAcknowledged && !learningOccupied() && !followupOccupied() && !suspended && !authorityReloadRequired,
     request: (path, init) => engineeringRequest(() => api(path, init)),
     readSession: () => engineeringRequest(() => readViewer(readGeneration)),
     readCurrentTicket: (id) => engineeringRequest(async () => {
@@ -979,8 +1011,51 @@ if (engineeringRoot !== null && typeof globalThis.PegmaSupportEngineering?.creat
   });
   select('#staff-engineering-check-access')?.addEventListener('click', () => { void readEngineeringRecoveryAccount(); });
 }
+if (followupRoot !== null && typeof globalThis.PegmaSupportFollowup?.createPanel === 'function') {
+  function followupAdmission() {
+    if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || ordinaryAcknowledged ||
+      learningOccupied() || engineeringPending() || engineeringBusy || engineeringRequests > 0 ||
+      suspended || authorityReloadRequired || viewer === null || currentView?.releaseFollowupEnabled !== true || !onThisTicket())
+      throw Object.assign(new Error('followup_suspended'), { stale: true });
+  }
+  async function followupRequest(run) {
+    followupAdmission(); const generation = readGeneration;
+    const value = await run(); guard(generation); followupAdmission(); return value;
+  }
+  followup = globalThis.PegmaSupportFollowup.createPanel({ root: followupRoot,
+    canRequest: () => busy === null && ordinaryPacket === null && takeoverPacket === null && !ordinaryAcknowledged &&
+      !learningOccupied() && !engineeringPending() && !engineeringBusy && engineeringRequests === 0 &&
+      !suspended && !authorityReloadRequired && viewer !== null && currentView?.releaseFollowupEnabled === true && onThisTicket(),
+    request: (path, init) => followupRequest(() => api(path, init)),
+    requestWithStatus: (path, init) =>
+      followupRequest(() => api(path, init, true)),
+    readSession: () => followupRequest(() => readViewer(readGeneration)),
+    readCurrentTicket: (id) => followupRequest(async () => {
+      if (id !== ticketId) throw Object.assign(new Error('wrong_ticket'), { stale: true });
+      const generation = readGeneration;
+      const value = await api('/api/support/admin/tickets/' + encodeURIComponent(id)); guard(generation); validateView(value);
+      if (value.releaseFollowupEnabled !== true) {
+        // Retire cached admission without replacing the ticket facts the staff
+        // member has actually seen. Unknown command ownership remains intact.
+        currentView = { ...currentView, releaseFollowupEnabled: false };
+        followup.suspend(); followupRoot.hidden = true; updateControls();
+        throw Object.assign(new Error('followup_suspended'), { stale: true });
+      }
+      return value;
+    }),
+    onPendingChange: () => updateControls(),
+    onBusyChange: (value) => { followupBusy = value === true; updateControls(); },
+    onSettled: () => loadTicket(),
+    onAccessLost: ({ status }) => {
+      ++readGeneration; cancelRequests(); busy = null; viewer = null; csrfToken = ''; authorityReloadRequired = true;
+      hideAll(); signedOut.hidden = status !== 401; forbidden.hidden = status !== 403;
+      showStatus('Restore the original account in another tab, then reload this ticket to retry its exact follow-up command.', true);
+      updateControls();
+    },
+  });
+}
 window.addEventListener('beforeunload', (event) => {
-  if (!learningPending() && !engineeringPending() && ordinaryPacket === null && takeoverPacket === null) return;
+  if (!followup?.hasPending() && !learningPending() && !engineeringPending() && ordinaryPacket === null && takeoverPacket === null) return;
   event.preventDefault();
   event.returnValue = '';
 });

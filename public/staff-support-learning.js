@@ -33,6 +33,7 @@
     let source = null;
     let work = null;
     let shownBinding = null;
+    let shownReport = null;
     let pending = null;
     let pendingAction = 'submit';
     let pollTimer = null;
@@ -55,8 +56,16 @@
     const proposalButton = button('proposal', 'Read private KB proposal', () => read('proposal'));
     const enrollButton = button('enroll', 'Enroll this resolved ticket', () => mutate('enroll'));
     const solution = field('solution', 'Public solution message ID');
+    const evidenceKind = choice('evidence-kind', 'Evidence', ['staff_verified_fix', 'successful_test']);
     const verification = field('verification', 'Staff verification reference');
-    const evidenceButton = button('evidence', 'Record staff-verified fix', () => mutate('evidence'));
+    const reportArticle = field('report-article', 'Knowledge article ID');
+    const reportLedger = field('report-ledger', 'Report ledger epoch');
+    const reportId = field('report-id', 'Knowledge report ID');
+    const reportReadButton = button('report-read', 'Read current Knowledge report', () => readReport());
+    const reportText = element('pre');
+    const reportAssociateButton = button('report-associate', 'Associate shown report with this solution', () => mutate('test-receipt'));
+    const testNotice = element('p', 'Read a confirmed passed report, explicitly associate it with this ticket and solution, then record resolution evidence. Report confirmation remains in the existing Knowledge workflow.');
+    const evidenceButton = button('evidence', 'Record resolution evidence', () => mutate('evidence'));
     const reviewReason = field('review-reason', 'Review reason (optional)');
     const approveButton = button('approve', 'Approve shown proposal', () => mutate('approve'));
     const rejectButton = button('reject', 'Reject shown proposal', () => mutate('reject'));
@@ -68,12 +77,22 @@
     const receiptButton = button('check-review', 'Check the unresolved review', () => recoverReview('receipt'));
     const cancelButton = button('cancel-review', 'Cancel the unresolved review', () => recoverReview('cancel'));
     privatePanel.append(sourceText, workText, readWorkButton, proposalButton,
-      proposalText, enrollButton, solution.label, verification.label, evidenceButton,
+      proposalText, enrollButton, solution.label, evidenceKind.label, verification.label,
+      reportArticle.label, reportLedger.label, reportId.label, reportReadButton,
+      reportText, reportAssociateButton, testNotice, evidenceButton,
       reviewReason.label, approveButton, rejectButton, withdrawReason.label,
       withdrawButton, invalidateReason.label, invalidateButton);
     root.replaceChildren(element('h2', 'Resolution learning'),
       element('p', 'Staff review only. Approved proposals remain KB drafts for a separate publication review.'),
       status, refreshButton, privatePanel, retryButton, receiptButton, cancelButton);
+    for (const input of [reportArticle.input, reportLedger.input, reportId.input]) {
+      input.addEventListener('input', () => {
+        shownReport = null;
+        reportText.textContent = '';
+        controls();
+      });
+    }
+    evidenceKind.input.addEventListener('change', controls);
     hidePrivate();
     controls();
 
@@ -123,6 +142,11 @@
       proposalText.textContent = '';
       solution.input.value = '';
       verification.input.value = '';
+      reportArticle.input.value = '';
+      reportLedger.input.value = '';
+      reportId.input.value = '';
+      reportText.textContent = '';
+      shownReport = null;
       reviewReason.input.value = '';
       source = null;
       work = null;
@@ -149,6 +173,24 @@
     function canRecordEvidence() {
       return source !== null && source.state !== 'withdrawn' && context?.resolved === true;
     }
+    function testReceiptEnabled() {
+      try {
+        return options.testReceiptEnabled?.() === true;
+      } catch {
+        return false;
+      }
+    }
+    function ownsPending() {
+      return (
+        pending !== null &&
+        context !== null &&
+        pending.subject === context.actorSubject &&
+        pending.ticketId === context.ticketId
+      );
+    }
+    function preparedEvidence() {
+      return ownsPending() && pending.intake === 'evidence' && pendingAction === 'prepared';
+    }
     function canReadWork() {
       return source !== null && source.state === 'eligible' && source.sourceGeneration > 0;
     }
@@ -157,7 +199,11 @@
       const blocked = busy || !ready || context === null;
       for (const node of [enrollButton, evidenceButton, approveButton, rejectButton,
         withdrawButton, invalidateButton]) node.disabled = blocked || pending !== null;
-      evidenceButton.disabled ||= !canRecordEvidence();
+      evidenceButton.disabled ||= !canRecordEvidence() || evidenceKind.input.value === 'successful_test';
+      if (preparedEvidence()) evidenceButton.disabled = blocked;
+      reportReadButton.disabled = blocked || pending !== null || !testReceiptEnabled();
+      reportAssociateButton.disabled = blocked || pending !== null || !canRecordEvidence() ||
+        !testReceiptEnabled() || shownReport?.qualified !== true;
       approveButton.disabled ||= shownBinding === null || !canReadWork();
       rejectButton.disabled ||= shownBinding === null || !canReadWork();
       readWorkButton.disabled = blocked || !canReadWork();
@@ -170,12 +216,16 @@
         node.disabled = busy || context === null || pending?.review !== true ||
           pending.subject !== context?.actorSubject || pending.ticketId !== context?.ticketId;
       }
-      if (pending?.review === true && pendingAction === 'cancel') retryButton.textContent = 'Retry the exact cancellation';
+      if (preparedEvidence()) retryButton.textContent = 'Record evidence from the associated report';
+      else if (pending?.preparation === true) retryButton.textContent = 'Retry the exact report association';
+      else if (pending?.review === true && pendingAction === 'cancel') retryButton.textContent = 'Retry the exact cancellation';
       else if (pending?.queued === true) retryButton.textContent = 'Retry the exact queued review intent';
       else if (pending?.intake) retryButton.textContent = 'Retry and reconcile the previous intake action';
       else retryButton.textContent = 'Retry the previous exact action';
-      for (const node of [solution.input, verification.input, reviewReason.input,
+      for (const node of [solution.input, evidenceKind.input, verification.input, reviewReason.input,
         withdrawReason.input, invalidateReason.input]) node.disabled = blocked || pending !== null;
+      for (const node of [reportArticle.input, reportLedger.input, reportId.input])
+        node.disabled = blocked || pending !== null || !testReceiptEnabled();
     }
     function cancelReads() {
       for (const controller of controllers) controller.abort();
@@ -201,7 +251,7 @@
         throw Object.assign(new Error('session_changed'), { status: 401 });
       return next;
     }
-    async function call(path, init, generation, actor) {
+    async function callRaw(path, init, generation, actor) {
       current(generation);
       const controller = new AbortController();
       controllers.add(controller);
@@ -212,10 +262,14 @@
           signal: controller.signal,
         });
         current(generation);
-        if (!object(result) || !Object.prototype.hasOwnProperty.call(result, 'result') ||
-          result.csrfToken !== actor.csrfToken) throw invalid();
-        return result.result;
+        return result;
       } finally { controllers.delete(controller); }
+    }
+    async function call(path, init, generation, actor) {
+      const result = await callRaw(path, init, generation, actor);
+      if (!object(result) || !Object.prototype.hasOwnProperty.call(result, 'result') ||
+        result.csrfToken !== actor.csrfToken) throw invalid();
+      return result.result;
     }
     function base() {
       return `/api/support/admin/tickets/${encodeURIComponent(context.ticketId)}/learning`;
@@ -351,15 +405,140 @@
         notice(kind === 'work' ? 'Current learning work read.' : 'Checked private KB proposal shown. Choose approve or reject explicitly.');
       });
     }
+    function reportCoordinates() {
+      const articleId = scalar(reportArticle.input.value);
+      const reportIdValue = scalar(reportId.input.value);
+      const ledger = reportLedger.input.value;
+      if (!/^[1-9][0-9]*$/u.test(ledger)) throw new Error('invalid_input');
+      return Object.freeze({
+        articleId,
+        ledgerEpoch: positive(Number(ledger)),
+        reportId: reportIdValue,
+      });
+    }
+    function checkedReport(value, selected) {
+      if (
+        !object(value) ||
+        value.articleId !== selected.articleId ||
+        value.reportId !== selected.reportId ||
+        value.ledgerEpoch !== selected.ledgerEpoch ||
+        !['pending', 'confirmed', 'rejected'].includes(value.status) ||
+        !object(value.report) ||
+        typeof value.report.summary !== 'string' ||
+        typeof value.report.details !== 'string' ||
+        !object(value.evidence) ||
+        !['passed', 'failed', 'inconclusive'].includes(value.evidence.result)
+      )
+        throw invalid();
+      positive(value.reportGeneration);
+      if (
+        value.expectedReportGeneration !== value.reportGeneration ||
+        typeof value.reviewBindingHash !== 'string' ||
+        !/^[0-9a-f]{64}$/u.test(value.reviewBindingHash)
+      )
+        throw invalid();
+      const receipt = scalar(value.receipt);
+      const qualified =
+        value.status === 'confirmed' &&
+        value.evidence.result === 'passed' &&
+        object(value.confirmation);
+      return Object.freeze({
+        ...selected,
+        expectedReportGeneration: value.expectedReportGeneration,
+        reviewBindingHash: value.reviewBindingHash,
+        receipt,
+        qualified,
+        display: JSON.stringify(
+          {
+            articleId: value.articleId,
+            ledgerEpoch: value.ledgerEpoch,
+            reportId: value.reportId,
+            reportGeneration: value.reportGeneration,
+            status: value.status,
+            result: value.evidence.result,
+            summary: value.report.summary,
+            details: value.report.details,
+          },
+          null,
+          2,
+        ),
+      });
+    }
+    async function readReport() {
+      if (!ready || pending !== null || !testReceiptEnabled()) return;
+      let selected;
+      try {
+        selected = reportCoordinates();
+      } catch {
+        notice('Complete the article, positive ledger epoch and report ID before reading.', true);
+        return;
+      }
+      const expected = session;
+      shownReport = null;
+      reportText.textContent = '';
+      return operation(async (generation) => {
+        const actor = await viewer(generation, expected);
+        const value = await callRaw(
+          '/api/staff/knowledge/command',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operation: 'reportRead', input: selected }),
+          },
+          generation,
+          actor,
+        );
+        const checked = checkedReport(value, selected);
+        await viewer(generation, actor);
+        current(generation);
+        if (!testReceiptEnabled()) {
+          notice('Test-report association is unavailable.', true);
+          return;
+        }
+        session = actor;
+        shownReport = checked;
+        reportText.textContent = checked.display;
+        notice(
+          checked.qualified
+            ? 'Confirmed passed report shown. Explicitly associate it with this ticket revision, resolution cycle and public solution.'
+            : 'This report cannot be associated. Use the existing Knowledge confirmation workflow for a confirmed passed report.',
+        );
+      });
+    }
     function packet(action) {
       if (!ready || session === null || context === null) throw new Error('not_ready');
       let path = action;
       let value;
-      if (action === 'enroll') value = { expectedRevision: context.revision };
+      if (action === 'test-receipt') {
+        if (!canRecordEvidence() || !testReceiptEnabled() || shownReport?.qualified !== true)
+          throw new Error('not_ready');
+        const selected = reportCoordinates();
+        if (selected.articleId !== shownReport.articleId ||
+          selected.ledgerEpoch !== shownReport.ledgerEpoch ||
+          selected.reportId !== shownReport.reportId)
+          throw new Error('report_changed');
+        value = {
+          expectedPrincipalId: context.actorSubject,
+          expectedRevision: context.revision,
+          resolutionCycle: source.resolutionCycle,
+          solutionMessageId: scalar(solution.input.value),
+          report: {
+            articleId: shownReport.articleId,
+            ledgerEpoch: shownReport.ledgerEpoch,
+            reportId: shownReport.reportId,
+            expectedReportGeneration: shownReport.expectedReportGeneration,
+            reviewBindingHash: shownReport.reviewBindingHash,
+            receipt: shownReport.receipt,
+          },
+        };
+      } else if (action === 'enroll') value = { expectedRevision: context.revision };
       else if (action === 'evidence') {
         if (!canRecordEvidence()) throw new Error('not_ready');
-        value = { expectedRevision: context.revision, resolutionCycle: source.resolutionCycle,
-          solutionMessageId: scalar(solution.input.value), verificationReference: scalar(verification.input.value) };
+        const common = { expectedRevision: context.revision, resolutionCycle: source.resolutionCycle,
+          solutionMessageId: scalar(solution.input.value) };
+        if (evidenceKind.input.value === 'staff_verified_fix')
+          value = { ...common, verificationReference: scalar(verification.input.value) };
+        else throw new Error('invalid_input');
       } else if (action === 'approve' || action === 'reject') {
         if (shownBinding === null || !canReadWork()) throw new Error('not_ready');
         try { path = options.stagedReviewsEnabled?.() === true ? 'review-queue' : 'review'; }
@@ -376,10 +555,49 @@
       const body = JSON.stringify({ commandId: id, ...value });
       return Object.freeze({ subject: context.actorSubject, ticketId: context.ticketId,
         path: `${base()}/${path}`, body, commandId: id,
+        preparation: action === 'test-receipt',
+        preparationEvidence: action === 'test-receipt' ? Object.freeze({ expectedRevision: value.expectedRevision,
+          resolutionCycle: value.resolutionCycle, solutionMessageId: value.solutionMessageId }) : undefined,
         review: path === 'review' || path === 'review-queue', queued: path === 'review-queue',
         intake: action === 'enroll' || action === 'evidence' ? action : null,
         expectedRevision: action === 'enroll' || action === 'evidence' ? value.expectedRevision : undefined,
         reviewGeneration: path === 'review' || path === 'review-queue' ? shownBinding.intent.sourceGeneration : undefined });
+    }
+    function checkedPreparation(candidate, result) {
+      const keys = ['actorId', 'ticketId', 'commandId', 'receipt', 'validUntil'];
+      if (
+        !object(result) ||
+        Object.keys(result).length !== keys.length ||
+        !keys.every((key) => Object.prototype.hasOwnProperty.call(result, key)) ||
+        result.actorId !== candidate.subject ||
+        result.ticketId !== candidate.ticketId ||
+        result.commandId !== candidate.commandId
+      )
+        throw invalid();
+      const receipt = scalar(result.receipt);
+      const stamp = scalar(result.validUntil, 40);
+      const parsed = Date.parse(stamp);
+      if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== stamp) throw invalid();
+      return receipt;
+    }
+    function preparedPacket(candidate, receipt) {
+      const id = scalar(commandId());
+      return Object.freeze({
+        subject: candidate.subject,
+        ticketId: candidate.ticketId,
+        path: candidate.path.replace(/\/test-receipt$/u, '/evidence'),
+        body: JSON.stringify({
+          commandId: id,
+          ...candidate.preparationEvidence,
+          kind: 'successful_test',
+          receipt,
+        }),
+        commandId: id,
+        review: false,
+        queued: false,
+        intake: 'evidence',
+        expectedRevision: candidate.preparationEvidence.expectedRevision,
+      });
     }
     function pendingChanged() {
       try { options.onPendingChange?.(pending !== null); } catch { /* The packet remains owned here. */ }
@@ -406,8 +624,23 @@
       const path = candidate.review && action !== 'submit'
         ? candidate.path + (action === 'receipt' ? (candidate.queued ? '-status' : '-receipt') : '-cancel')
         : candidate.intake && action === 'recover' ? candidate.path + '-recovery' : candidate.path;
+      if (pendingAction === 'prepared') pendingAction = 'submit';
       let result = await call(path, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: candidate.body }, generation, actor);
+      if (candidate.preparation === true) {
+        const receipt = checkedPreparation(candidate, result);
+        await viewer(generation, actor);
+        current(generation);
+        if (pending !== candidate) throw invalid();
+        pending = preparedPacket(candidate, receipt);
+        pendingAction = 'prepared';
+        session = actor;
+        ready = true;
+        privatePanel.hidden = false;
+        pendingChanged();
+        notice('Report associated. Resolution evidence has not been recorded. Choose Record resolution evidence explicitly.');
+        return;
+      }
       let cancelled = false;
       let superseded = false;
       if (candidate.intake && action === 'recover') {
@@ -480,6 +713,8 @@
         : 'Action acknowledged. Read the source again before another action.');
     }
     async function mutate(action) {
+      if (action === 'evidence' && preparedEvidence() && !busy && ready)
+        return operation((generation) => send(pending, generation));
       if (pending !== null || busy || !ready) return;
       let candidate;
       try { candidate = packet(action); }
@@ -488,7 +723,7 @@
     }
     async function retry() {
       if (pending === null || (pending.review !== true && !ready) || busy) return;
-      return operation((generation) => send(pending, generation, pending.intake ? 'recover' : 'submit'));
+      return operation((generation) => send(pending, generation, pending.intake && pendingAction !== 'prepared' ? 'recover' : 'submit'));
     }
     async function recoverReview(action) {
       if (pending?.review !== true || context === null || busy) return;

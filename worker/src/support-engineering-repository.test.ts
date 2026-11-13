@@ -798,3 +798,34 @@ describe('bounded trusted GitHub engineering repository reads', () => {
     expect(expiring).toHaveBeenCalledTimes(2);
   });
 });
+
+
+describe('engineering response progress regressions', () => {
+  it('refuses non-progressing empty response chunks within a finite read budget', async () => {
+    const f = fixture();
+    let reads = 0;
+    f.transport.mockImplementation(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              reads += 1;
+              if (reads <= 200) controller.enqueue(new Uint8Array());
+              else {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    JSON.stringify(f.state.installation),
+                  ),
+                );
+                controller.close();
+              }
+            },
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    expect(await f.ports.github.getMetadata('101', context())).toBeNull();
+    expect(reads).toBeLessThan(100);
+    expect(f.transport).toHaveBeenCalledTimes(1);
+  });
+});

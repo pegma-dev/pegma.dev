@@ -10,6 +10,7 @@ import {
   createSupportDeskStagedLearningReviews,
   createSupportDeskLearningSourceVerifier,
   type LearningProcessResult,
+  type LearningRunOptions,
   type LearningScanBounds,
   type LearningReviewCommand,
   type ProcessLearningWorkCommand,
@@ -30,9 +31,11 @@ import {
   type ResolutionLearningOptions,
   type ReviewResolutionLearningProposalCommand,
   type SubmitResolutionEvidenceCommand,
+  type SubmitResolutionEvidenceOptions,
   type WithdrawResolutionLearningSourceCommand,
 } from '@pegma/support-desk-application';
 import type { Clock } from '@pegma/spine';
+import type { IndependentCheckCapture } from './support-independent-checks';
 import {
   createSupportLearningKnowledgePort,
   supportLearningCommandIdentity,
@@ -56,9 +59,18 @@ export type LearningVerifiedFixPacket = Packet<
     >;
   }
 >;
+export type LearningSuccessfulTestPacket = Packet<
+  Omit<SubmitResolutionEvidenceCommand, 'evidence'> & {
+    readonly evidence: Extract<
+      SubmitResolutionEvidenceCommand['evidence'],
+      { readonly kind: 'successful_test' }
+    >;
+  }
+>;
 export type LearningReviewPacket = Packet<ReviewResolutionLearningProposalCommand>;
 export type LearningReviewIntentPacket = Packet<LearningReviewCommand>;
 export type LearningReviewHumanGuard = () => void | Promise<void>;
+export type LearningEvidenceHumanGuard = NonNullable<SubmitResolutionEvidenceOptions['verifyBeforeCommit']>;
 export type LearningInvalidationPacket = Packet<InvalidateResolutionEvidenceCommand>;
 export type LearningWithdrawalPacket = Packet<WithdrawResolutionLearningSourceCommand>;
 
@@ -100,13 +112,24 @@ export interface SupportLearningRuntimeOptions {
   readonly sources: SupportDeskLearningOptions['sources'];
   readonly clock: Clock;
   readonly staffAccess: SupportLearningStaffAccess;
+  /** One private receipt observation per SDK attempt, closed after the human guard. */
+  readonly successfulTestScope?: () => {
+    readonly application: Pick<ResolutionLearningApplication, 'submitResolutionEvidence'>;
+    readonly confirm: (signal: AbortSignal) => Promise<(() => true) | undefined>;
+  };
   /** Server-only staff boundary, including authority, SDK work and final ACK. */
   readonly staffOperationMilliseconds?: number;
   readonly processingEnabled?: () => boolean;
   readonly ports?: Partial<SupportLearningProcessingPorts>;
+  readonly processingPortsFor?: (
+    key: ResolutionLearningKey,
+    capture?: IndependentCheckCapture,
+  ) => SupportLearningProcessingPorts | undefined;
   readonly stagedReviews?: SupportLearningStagedReviewOptions;
   /** Explicit only for the known real SDK read graph; custom ports remain serial. */
   readonly readScheduling?: SupportDeskLearningOptions['readScheduling'];
+  /** Explicit opt-in to SDK delivery checkpoints; omission keeps legacy delivery. */
+  readonly deliveryMode?: SupportDeskLearningOptions['deliveryMode'];
 }
 
 export type SupportLearningUnavailableReason =
@@ -186,6 +209,7 @@ function createLearningRuntime(
     tokenCounter: ports.tokenCounter ?? { count: () => { throw new SupportLearningUnavailableError(); } },
     storageCommandAttempts: 2,
     ...(options.readScheduling === undefined ? {} : { readScheduling: options.readScheduling }),
+    ...(options.deliveryMode === undefined ? {} : { deliveryMode: options.deliveryMode }),
   };
   const coordinator = createSupportDeskLearning(coordinatorOptions);
   function stagedEnabled(): boolean {
@@ -226,12 +250,14 @@ function createLearningRuntime(
       ensure(): void;
       current(): Promise<AccessContext>;
     }) => Promise<Result>,
+    successfulTest = false,
   ): Promise<Result> {
     const bound = structuredClone(original);
-    // Ordinary intake/evidence/withdrawal retain their standalone resolver
-    // path. Only reads and the exact review protocol share browser fences.
+    // Only the private Request-only factory supplies this instance's browser
+    // lane. Direct runtime calls retain independent authority observations.
     const browserOperation = lane === browserLane &&
-      (permission === supportPermissions.learningRead || permission === supportPermissions.learningReview);
+      (permission === supportPermissions.learningRead || permission === supportPermissions.learningReview ||
+        (successfulTest && permission === supportPermissions.learningEvidenceSubmit));
     const started = performance.now();
     const controller = new AbortController();
     const ensure = (): void => {
@@ -332,20 +358,23 @@ function createLearningRuntime(
       });
       boundary.ensure();
       return invoke(current, { ...fields, ...identity }, boundary.signal, boundary);
-    });
+    }, operation === 'successful_test');
   }
 
   function recoverIntake<Command extends { readonly ticketId: string; readonly clientCommandId: string; readonly expectedRevision: number }>(
     access: AccessContext, operation: 'enroll' | 'evidence', input: Command,
-    invoke: (current: AccessContext, packet: Omit<Command, 'clientCommandId'> & { commandId: string; correlationId: string }) => Promise<ResolutionLearningSourceResult>,
+    invoke: (current: AccessContext, packet: Omit<Command, 'clientCommandId'> & { commandId: string; correlationId: string }, boundary: {
+      readonly signal: AbortSignal; ensure(): void; current(): Promise<AccessContext>;
+    }) => Promise<ResolutionLearningSourceResult>,
     contentFence?: (view: StaffTicketView, packet: Omit<Command, 'clientCommandId'>,
       current: () => Promise<AccessContext>) => Promise<LearningIntakeContentFence | undefined>,
+    evidenceOperation: 'verified_fix' | 'successful_test' = 'verified_fix',
   ): Promise<LearningIntakeRecoveryResult> {
-    return command(access, supportPermissions.learningEvidenceSubmit, operation === 'enroll' ? 'enroll' : 'verified_fix', input,
+    return command(access, supportPermissions.learningEvidenceSubmit, operation === 'enroll' ? 'enroll' : evidenceOperation, input,
       async (current, packet, _signal, boundary): Promise<LearningIntakeRecoveryResult> => {
         const scope = { ticketId: packet.ticketId, commandId: packet.commandId, operation };
         // An exact accepted ACK wins before any mutable ticket observation.
-        try { return { ...scope, outcome: 'accepted', result: await invoke(current, packet) }; }
+        try { return { ...scope, outcome: 'accepted', result: await invoke(current, packet, boundary) }; }
         catch (error) { boundary.ensure(); if (!(error instanceof SupportDeskConflictError)) throw error; }
         const read = options.application.readStaffTicket;
         if (read === undefined) throw new SupportLearningUnavailableError();
@@ -363,7 +392,7 @@ function createLearningRuntime(
         // excludes future application. Public message/status/cycle repairs
         // advance the ticket revision. Retry the exact command AFTER the proof
         // so a raced accepted receipt wins before ownership is released.
-        try { return { ...scope, outcome: 'accepted', result: await invoke(await boundary.current(), packet) }; }
+        try { return { ...scope, outcome: 'accepted', result: await invoke(await boundary.current(), packet, boundary) }; }
         catch (error) { boundary.ensure(); if (!(error instanceof SupportDeskConflictError)) throw error; }
         // This proves that the old revision cannot act in the future. Earlier
         // acceptance may remain historically unknown for retained legacy data.
@@ -372,12 +401,18 @@ function createLearningRuntime(
       });
   }
 
-  function processingReady(): 'disabled' | 'readiness_unavailable' | 'unavailable' | 'ready' {
+  function processingState(): 'disabled' | 'readiness_unavailable' | 'ready' {
     try { if (!processingEnabled()) return 'disabled'; }
     catch { return 'readiness_unavailable'; }
-    return [ports.serviceAccess, ports.knowledgeAccess, ports.retirementAccess,
-      ports.configuration, ports.checks, ports.model, ports.usage, ports.targets,
-      ports.tokenCounter].some((port) => port === undefined) ? 'unavailable' : 'ready';
+    return 'ready';
+  }
+
+  function processingReady(selected: Partial<SupportLearningProcessingPorts> = ports): 'disabled' | 'readiness_unavailable' | 'unavailable' | 'ready' {
+    const state = processingState();
+    if (state !== 'ready') return state;
+    return [selected.serviceAccess, selected.knowledgeAccess, selected.retirementAccess,
+      selected.configuration, selected.checks, selected.model, selected.usage, selected.targets,
+      selected.tokenCounter].some((port) => port === undefined) ? 'unavailable' : 'ready';
   }
 
   async function reviewCommand<Result>(
@@ -423,6 +458,36 @@ function createLearningRuntime(
     });
   }
 
+  function submitSuccessfulEvidence(
+    access: AccessContext,
+    packet: SubmitResolutionEvidenceCommand,
+    boundary: { readonly signal: AbortSignal; ensure(): void; current(): Promise<AccessContext> },
+    verifyHumanBeforeCommit?: LearningEvidenceHumanGuard,
+  ) {
+    const scope = options.successfulTestScope?.();
+    return (scope?.application ?? options.application).submitResolutionEvidence(access, packet, {
+      signal: boundary.signal,
+      async verifyBeforeCommit() {
+        boundary.ensure();
+        const assertion =
+          verifyHumanBeforeCommit === undefined
+            ? (await boundary.current(), undefined)
+            : await verifyHumanBeforeCommit();
+        boundary.ensure();
+        // The SDK has completed proof/planning and the original browser's last
+        // async authority check. Close the request-local KB observation now.
+        const receiptAssertion = await scope?.confirm(boundary.signal);
+        boundary.ensure();
+        return () => {
+          boundary.ensure();
+          assertion?.();
+          receiptAssertion?.();
+          return true;
+        };
+      },
+    });
+  }
+
   return Object.freeze({
     enroll: (access: AccessContext, input: LearningEnrollmentPacket) =>
       command(access, supportPermissions.learningEvidenceSubmit, 'enroll', input,
@@ -430,6 +495,14 @@ function createLearningRuntime(
     submitVerifiedFix: (access: AccessContext, input: LearningVerifiedFixPacket) =>
       command(access, supportPermissions.learningEvidenceSubmit, 'verified_fix', input,
         (current, packet) => options.application.submitResolutionEvidence(current, packet)),
+    submitSuccessfulTest: (access: AccessContext, input: LearningSuccessfulTestPacket,
+      verifyHumanBeforeCommit?: LearningEvidenceHumanGuard) =>
+      command(access, supportPermissions.learningEvidenceSubmit, 'successful_test', input,
+        (current, packet, _signal, boundary) => submitSuccessfulEvidence(current, packet, boundary, verifyHumanBeforeCommit)),
+    recoverSuccessfulTest: (access: AccessContext, input: LearningSuccessfulTestPacket,
+      verifyHumanBeforeCommit?: LearningEvidenceHumanGuard) =>
+      recoverIntake(access, 'evidence', input,
+        (current, packet, boundary) => submitSuccessfulEvidence(current, packet, boundary, verifyHumanBeforeCommit), undefined, 'successful_test'),
     recoverEnrollment: (access: AccessContext, input: LearningEnrollmentPacket) =>
       recoverIntake(access, 'enroll', input, (current, packet) => options.application.enrollResolutionLearning(current, packet)),
     recoverVerifiedFix: (access: AccessContext, input: LearningVerifiedFixPacket) =>
@@ -572,14 +645,52 @@ function createLearningRuntime(
       if (state !== 'ready') return { outcome: 'held' as const, reason: `learning_${state}` };
       return processingCoordinator.scanCandidates(structuredClone(bounds));
     },
-    async processWork(input: ProcessLearningWorkCommand): Promise<LearningProcessResult> {
-      const state = processingReady();
+    // Discovery uses current source authority even when paid processing is OFF.
+    scanMaintenanceCandidates: (bounds: LearningScanBounds) =>
+      coordinator.scanCandidates(structuredClone(bounds)),
+    async processWork(input: ProcessLearningWorkCommand, run?: LearningRunOptions,
+      capture?: IndependentCheckCapture): Promise<LearningProcessResult> {
+      const packet = structuredClone(input);
+      let scoped: SupportLearningProcessingPorts | undefined;
+      if (options.processingPortsFor !== undefined) {
+        // Readiness precedes scoped construction; no Work claim occurs on failure.
+        const state = processingState();
+        if (state !== 'ready') return { outcome: 'held', reason: `learning_${state}` };
+        try {
+          scoped = options.processingPortsFor({ ticketId: packet.ticketId,
+            sourceGeneration: packet.sourceGeneration }, capture);
+        } catch {
+          return { outcome: 'held', reason: 'learning_unavailable' };
+        }
+        if (scoped === undefined) return { outcome: 'held', reason: 'learning_unavailable' };
+      }
+      const state = processingReady(scoped ?? ports);
       if (state !== 'ready') return { outcome: 'held', reason: `learning_${state}` };
-      return processingCoordinator.processWork(structuredClone(input));
+      if (scoped === undefined) return processingCoordinator.processWork(packet, run);
+      const selected = scoped;
+      const operation = createSupportDeskLearning({
+        ...coordinatorOptions,
+        ...selected,
+        serviceAccess: {
+          async resolve(signal) {
+            if (!processingEnabled()) return { outcome: 'inactive' };
+            const result = await selected.serviceAccess.resolve(signal);
+            return processingEnabled() ? result : { outcome: 'inactive' };
+          },
+        },
+        configuration: {
+          async resolve(expected, signal) {
+            if (!processingEnabled()) return { outcome: 'disabled' };
+            const result = await selected.configuration.resolve(expected, signal);
+            return processingEnabled() ? result : { outcome: 'disabled' };
+          },
+        },
+      });
+      return operation.processWork(packet, run);
     },
     // Privacy and source reconciliation stay available independently of the
     // generation switch and provider configuration. The SDK checks authority.
-    reconcileSource: (ticketId: string) => coordinator.reconcileSource(ticketId),
+    reconcileSource: (ticketId: string, run?: LearningRunOptions) => coordinator.reconcileSource(ticketId, run),
   });
 }
 

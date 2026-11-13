@@ -10,7 +10,12 @@ import {
   readAgentClients,
   type AgentAccessRuntime,
 } from './agent-access-runtime';
-import { createKnowledgeRuntime } from './knowledge-runtime';
+import {
+  createKnowledgeRuntime,
+  type KnowledgeRuntime,
+  type KnowledgeRuntimeOptions,
+} from './knowledge-runtime';
+import type { SupportRuntime } from './support-desk';
 import { AUTHORIZATION_APPLICATION_ID } from './support-access';
 import { knowledgeAdmissionCount } from './knowledge-admission';
 
@@ -54,42 +59,92 @@ function unavailable(error: string): Response {
   );
 }
 
+export interface KnowledgeHostRuntime {
+  readonly agentAccess: AgentAccessRuntime | null;
+  /** Lazy so metadata/consent requests do not construct the KB application. */
+  knowledge(): KnowledgeRuntime;
+}
+
+/** Shared normal host construction. An explicit factory refusal never falls
+ * back to a KB without the selected private-source verifier. */
+export function createKnowledgeHostRuntime(
+  env: IdentityRuntimeEnv & KnowledgeConfiguration,
+  logger: Logger,
+  composition: {
+    readonly support?: SupportRuntime;
+    readonly createKnowledge?: (
+      options: KnowledgeRuntimeOptions,
+    ) => KnowledgeRuntime | undefined;
+  } = {},
+): KnowledgeHostRuntime {
+  const identity =
+    composition.support ?? createProductionIdentityRuntime(env, logger, 512);
+  const options = {
+    store: identity.store,
+    clock: composition.support?.clock ?? systemClock,
+    sessions: identity.sessions,
+    identity: identity.identity,
+    identityLinkFromClaims:
+      composition.support?.identityLinkFromClaims ??
+      identityLinkKeyFromVerifiedIdentityClaims,
+    roleStore:
+      composition.support?.roleStore ??
+      createRoleStore(identity.store, AUTHORIZATION_APPLICATION_ID),
+    logger,
+  };
+  let agentAccess: AgentAccessRuntime | null = null;
+  try {
+    agentAccess = createAgentAccessRuntime({
+      ...options,
+      clients: readAgentClients(env.PEGMA_AGENT_CLIENTS_JSON),
+      resourceLimitCount: knowledgeAdmissionCount(
+        env.PEGMA_AGENT_RESOURCE_LIMIT,
+        300,
+      ),
+    });
+  } catch (error) {
+    logger.log('error', 'agent_access.configuration_unavailable', {
+      error: error instanceof Error ? error.name : 'unknown',
+    });
+  }
+  let knowledge: KnowledgeRuntime | undefined;
+  return {
+    agentAccess,
+    knowledge() {
+      if (knowledge !== undefined) return knowledge;
+      const input: KnowledgeRuntimeOptions = {
+        ...options,
+        agentAccess,
+        isEnabled: () => env.PEGMA_KNOWLEDGE_ENABLED === 'true',
+        browserLimitCount: knowledgeAdmissionCount(
+          env.PEGMA_KNOWLEDGE_BROWSER_LIMIT,
+          120,
+        ),
+      };
+      knowledge =
+        composition.createKnowledge === undefined
+          ? createKnowledgeRuntime(input)
+          : composition.createKnowledge(input);
+      if (knowledge === undefined)
+        throw new TypeError('Knowledge composition unavailable');
+      return knowledge;
+    },
+  };
+}
+
 /** One explicit composition over this site's existing Identity and D1 store. */
 export async function handleKnowledgeRequest(
   request: Request,
   env: IdentityRuntimeEnv & KnowledgeConfiguration,
   logger: Logger,
+  configured?: KnowledgeHostRuntime | null,
 ): Promise<Response> {
   if (env.PEGMA_KNOWLEDGE_ENABLED !== 'true')
     return unavailable('knowledge_disabled');
   try {
-    const identity = createProductionIdentityRuntime(env, logger, 512);
-    const options = {
-      store: identity.store,
-      clock: systemClock,
-      sessions: identity.sessions,
-      identity: identity.identity,
-      identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
-      roleStore: createRoleStore(identity.store, AUTHORIZATION_APPLICATION_ID),
-      logger,
-    };
-    let agentAccess: AgentAccessRuntime | null = null;
-    try {
-      agentAccess = createAgentAccessRuntime({
-        ...options,
-        clients: readAgentClients(env.PEGMA_AGENT_CLIENTS_JSON),
-        resourceLimitCount: knowledgeAdmissionCount(
-          env.PEGMA_AGENT_RESOURCE_LIMIT,
-          300,
-        ),
-      });
-    } catch (error) {
-      // An invalid optional agent registration must not disable browser guides
-      // or human review. The issuer and bearer paths remain unavailable.
-      logger.log('error', 'agent_access.configuration_unavailable', {
-        error: error instanceof Error ? error.name : 'unknown',
-      });
-    }
+    if (configured === null) return unavailable('knowledge_unavailable');
+    const host = configured ?? createKnowledgeHostRuntime(env, logger);
+    const agentAccess = host.agentAccess;
     const path = new URL(request.url).pathname;
     if (metadataPaths.has(path) || path.startsWith('/api/agent-access/')) {
       if (agentAccess === null)
@@ -106,15 +161,7 @@ export async function handleKnowledgeRequest(
       );
     }
     return (
-      (await createKnowledgeRuntime({
-        ...options,
-        agentAccess,
-        isEnabled: () => env.PEGMA_KNOWLEDGE_ENABLED === 'true',
-        browserLimitCount: knowledgeAdmissionCount(
-          env.PEGMA_KNOWLEDGE_BROWSER_LIMIT,
-          120,
-        ),
-      }).handle(request)) ??
+      (await host.knowledge().handle(request)) ??
       new Response('Not Found', {
         status: 404,
         headers: { 'Cache-Control': 'no-store' },

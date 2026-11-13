@@ -7,18 +7,20 @@ proposal for human review. Approval records the exact checked proposal; KB
 publication remains a separate human workflow. The learning panel does not
 publish articles, call a model, or notify customers.
 
-The factories, authenticated routes and staff panel exist in source. The current
-[Worker entry point](../worker/src/index.ts) does **not** compose the learning
-handler, processing worker or required trusted processing ports. Learning remains
-default off. Passing factory and synthetic integration tests is not deployment or
+The factories, authenticated routes and staff panel exist in source. The
+[Worker entry point](../worker/src/index.ts) supports an optional learning
+composition. Intake, model processing and staged review remain default off in the
+[checked-in configuration](../worker/wrangler.jsonc).
+Activation requires the corresponding flags, trusted configuration and authority
+ports. Passing factory and synthetic integration tests is not deployment or
 activation evidence.
 
 ## Packages and authority
 
-The host selects all five published Support Desk packages at **0.2.7** and its
-four direct Knowledge Base packages at **0.1.6**. The qualified
-[Support 0.2.7 release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7)
-also uses exact KB **0.1.6** public contracts. The
+The host selects all five published Support Desk packages at **0.2.10** and its
+four direct Knowledge Base packages at **0.1.8**. The qualified
+[Support 0.2.10 release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.10)
+also uses exact KB **0.1.8** public contracts. The
 [public forwarding port](../worker/src/support-learning-ports.ts) preserves the
 actual KB error instances; the obsolete KB 0.1.2 constructor alias and translation
 shim are removed. See [package pins](../package.json) and the
@@ -29,10 +31,11 @@ Historically, Support **0.2.1** used nested KB **0.1.2** while this host selecte
 direct KB **0.1.5**. The exact `@pegma/knowledge-base-ai-compat` registry alias and
 recognized-error translation belonged to that earlier assembly. Its failed
 isolated production-layout diagnostic remains historical evidence; neither its
-ordinary fixture passes nor that failure qualifies the current 0.2.7 graph.
+ordinary fixture passes nor that failure qualifies the current 0.2.10 graph.
 
-The current [host policy](../worker/src/support-access.ts) grants four human
-learning permissions through the actual stored, audited **Support** role:
+The current [host policy](../worker/src/support-access.ts), `pegma.dev-policy-8`,
+grants four human learning permissions through the actual stored, audited
+**Support** role:
 
 | Permission | Human operation |
 | --- | --- |
@@ -301,8 +304,9 @@ worker is constructed from an HTTP packet. Staged review requires
 `PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED` exactly `"true"`, a
 `SUPPORT_LEARNING_REVIEWS` binding and a trusted `learningReviews` composition
 whose readiness callback returns true. The checked-in flag is `"false"`, and the
-production default `createWorker()` supplies no such learning bundle. The flag
-alone supplies neither that runtime nor its trusted processing ports. See the
+default `createWorker()` has no staged-review composition. Intake and processing
+have separate flags and configuration; the review flag alone supplies neither
+their runtime nor trusted processing ports. See the
 [composition controls](SUPPORT_COMPOSITION.md#optional-resolution-learning).
 
 For executed lower-layer composition, see
@@ -325,7 +329,7 @@ cases, with zero errors in its Astro, Worker and recipe check. These historical
 counts overlap the assembly baseline. They predate the earlier 0.2.2 adoption and
 full-intent/commit-guard changes and do not qualify the current host source.
 The earlier public `0.2.5` [adoption checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint)
-passed 1,125 tests locally and in CI. It does not qualify the current `0.2.7`
+passed 1,125 tests locally and in CI. It does not qualify the current `0.2.10`
 graph. Current host validation, review and deployment acceptance remain pending.
 
 Relevant executable sources are the

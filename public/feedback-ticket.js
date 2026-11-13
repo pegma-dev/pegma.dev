@@ -2,7 +2,9 @@ const select = (selector) => document.querySelector(selector);
 const statusNode = select('#ticket-status');
 const signedOut = select('#ticket-signed-out');
 const signInLinks = [...signedOut.querySelectorAll('a')].map((node) => ({
-  node, target: node.target ?? '', rel: node.rel ?? '',
+  node,
+  target: node.target ?? '',
+  rel: node.rel ?? '',
 }));
 const detail = select('#ticket-detail');
 const heading = select('#ticket-heading');
@@ -12,6 +14,7 @@ const replyForm = select('#reply-form');
 const humanControls = select('#ticket-human-controls');
 const humanStatus = select('#ticket-human-status');
 const personButton = select('#request-person');
+const successButton = select('#confirm-success');
 const ticketId = new URL(window.location.href).searchParams.get('id') ?? '';
 let csrfToken = '';
 let viewer = null;
@@ -20,6 +23,9 @@ let currentView = null;
 let readGeneration = 0;
 let busy = null;
 let personPacket = null;
+let successPacket = null;
+let successAcknowledged = false;
+const successOwners = new Map();
 let replyPacket = null;
 let replyAcknowledged = false;
 let packetOutcome = 'unconfirmed';
@@ -74,6 +80,7 @@ function clearTicket() {
   humanControls.hidden = true;
   humanStatus.textContent = '';
   personButton.disabled = true;
+  successButton.disabled = true;
   for (const button of replyForm.querySelectorAll('button'))
     button.disabled = true;
   // Unsent reply text stays in the form when the private view is cleared.
@@ -86,6 +93,7 @@ function invalidate() {
   viewer = null;
   csrfToken = '';
   if (!onThisTicket()) personPacket = null;
+  if (!onThisTicket()) successPacket = null;
   if (retryTimer !== null) clearTimeout(retryTimer);
   retryTimer = null;
   clearTicket();
@@ -123,8 +131,12 @@ function armRetryTimer() {
 function updateHumanControl() {
   replyForm.noValidate = replyPacket !== null;
   for (const link of signInLinks) {
-    link.node.target = replyPacket === null ? link.target : '_blank';
-    link.node.rel = replyPacket === null ? link.rel : 'noopener noreferrer';
+    link.node.target =
+      replyPacket === null && successPacket === null ? link.target : '_blank';
+    link.node.rel =
+      replyPacket === null && successPacket === null
+        ? link.rel
+        : 'noopener noreferrer';
   }
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
@@ -133,29 +145,32 @@ function updateHumanControl() {
   humanControls.hidden =
     viewer === null ||
     authorityReloadRequired ||
-    (ticket === undefined && personPacket === null);
+    (ticket === undefined && personPacket === null && successPacket === null);
   humanStatus.textContent = humanControls.hidden
     ? ''
-    : personPacket !== null
-      ? packetOutcome === 'rate_limited'
-        ? seconds > 0
-          ? `The server rate limited this request. Wait at least ${seconds} seconds before retrying the same request.`
-          : 'Retry the same human-support request when ready.'
-        : 'The previous human-support request has no confirmed acknowledgement. Retry that same request.'
-      : terminal
-        ? `This ticket is ${ticket.status}. Request human support to reopen it.`
-        : state === 'assistant'
-          ? 'You can ask for human support at any time.'
-          : state === 'human-active'
-            ? 'Human support is active on this ticket.'
-            : state === 'human-pending'
-              ? 'This ticket is waiting for human support.'
-              : 'Human support handles this ticket.';
+    : successPacket !== null
+      ? 'The confirmation has no settled acknowledgement. Retry the same confirmation.'
+      : personPacket !== null
+        ? packetOutcome === 'rate_limited'
+          ? seconds > 0
+            ? `The server rate limited this request. Wait at least ${seconds} seconds before retrying the same request.`
+            : 'Retry the same human-support request when ready.'
+          : 'The previous human-support request has no confirmed acknowledgement. Retry that same request.'
+        : terminal
+          ? `This ticket is ${ticket.status}. Request human support to reopen it.`
+          : state === 'assistant'
+            ? 'You can ask for human support at any time.'
+            : state === 'human-active'
+              ? 'Human support is active on this ticket.'
+              : state === 'human-pending'
+                ? 'This ticket is waiting for human support.'
+                : 'Human support handles this ticket.';
   personButton.hidden =
     personPacket === null && !terminal && state !== 'assistant';
   personButton.disabled =
     busy !== null ||
     replyPacket !== null ||
+    successPacket !== null ||
     viewer === null ||
     authorityReloadRequired ||
     suspended ||
@@ -167,6 +182,23 @@ function updateHumanControl() {
       : personPacket === null
         ? 'Request human support'
         : 'Retry human-support request';
+  const confirmable = ticket?.status === 'resolved';
+  successButton.hidden = successPacket === null && !confirmable;
+  successButton.disabled =
+    busy !== null ||
+    viewer === null ||
+    authorityReloadRequired ||
+    suspended ||
+    seconds > 0 ||
+    personPacket !== null ||
+    replyPacket !== null ||
+    successAcknowledged ||
+    (successPacket === null &&
+      (!confirmable || !currentView?.messages.at(-1)?.id));
+  successButton.textContent =
+    successPacket === null
+      ? 'Confirm this solved my issue'
+      : 'Retry the same confirmation';
   for (const button of replyForm.querySelectorAll('button')) {
     button.textContent =
       replyPacket === null ? 'Send reply' : 'Retry previous reply';
@@ -174,6 +206,7 @@ function updateHumanControl() {
       busy !== null ||
       currentView === null ||
       personPacket !== null ||
+      successPacket !== null ||
       authorityReloadRequired ||
       replyAcknowledged ||
       suspended ||
@@ -257,6 +290,9 @@ async function readViewer(generation, expected = viewer) {
     subject: result.account.subject,
     csrfToken: result.csrfToken,
   });
+  restoreSuccess(next);
+  if (successPacket !== null && next.subject !== successPacket.subject)
+    throw Object.assign(new Error('session_changed'), { status: 401 });
   // An unresolved command belongs to its original principal, not old credentials.
   if (personPacket !== null && next.subject !== personPacket.subject) {
     personPacket = null;
@@ -274,6 +310,99 @@ async function readViewer(generation, expected = viewer) {
   viewer = next;
   csrfToken = next.csrfToken;
   return next;
+}
+function successKey(subject) {
+  return (
+    'pegma.support.success.v1:' +
+    encodeURIComponent(subject) +
+    ':' +
+    encodeURIComponent(ticketId)
+  );
+}
+function restoreSuccess(next) {
+  if (successPacket !== null && successPacket.subject !== next.subject) {
+    successOwners.set(successPacket.subject, {
+      packet: successPacket,
+      acknowledged: successAcknowledged,
+    });
+    successPacket = null;
+    successAcknowledged = false;
+  }
+  if (successPacket !== null) return;
+  const retained = successOwners.get(next.subject);
+  if (retained) {
+    successPacket = retained.packet;
+    successAcknowledged = retained.acknowledged;
+    return;
+  }
+  let saved;
+  try {
+    saved = window.sessionStorage?.getItem(successKey(next.subject));
+  } catch {
+    return;
+  }
+  if (!saved) return;
+  try {
+    const packet = JSON.parse(saved);
+    if (
+      !packet ||
+      typeof packet !== 'object' ||
+      Array.isArray(packet) ||
+      typeof packet.body !== 'string'
+    )
+      return;
+    const body = JSON.parse(packet.body);
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      typeof body.commandId !== 'string' ||
+      packet.subject !== next.subject ||
+      packet.ticketId !== ticketId ||
+      Object.keys(packet).sort().join(',') !== 'body,subject,ticketId' ||
+      Object.keys(body).sort().join(',') !==
+        'commandId,lastSeenVisibleMessageId' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(body.commandId) ||
+      typeof body.lastSeenVisibleMessageId !== 'string' ||
+      body.lastSeenVisibleMessageId.length < 1 ||
+      body.lastSeenVisibleMessageId.length > 200 ||
+      /[\u0000-\u001F\u007F-\u009F]/u.test(body.lastSeenVisibleMessageId)
+    )
+      return;
+    successPacket = Object.freeze(packet);
+    successOwners.set(next.subject, {
+      packet: successPacket,
+      acknowledged: false,
+    });
+  } catch {
+    // Invalid saved data is not a replayable command or authority for this viewer.
+  }
+}
+function retainSuccess(packet) {
+  successOwners.set(packet.subject, {
+    packet,
+    acknowledged: successAcknowledged,
+  });
+  try {
+    window.sessionStorage?.setItem(
+      successKey(packet.subject),
+      JSON.stringify(packet),
+    );
+  } catch {
+    /* The same immutable packet remains in this tab if storage is unavailable. */
+  }
+}
+function clearSuccess() {
+  if (successPacket !== null) {
+    successOwners.delete(successPacket.subject);
+    try {
+      window.sessionStorage?.removeItem(successKey(successPacket.subject));
+    } catch {
+      /* Replaying a retained exact SDK receipt is safe. */
+    }
+  }
+  successPacket = null;
+  successAcknowledged = false;
 }
 function validateView(view) {
   if (
@@ -327,8 +456,9 @@ function failure(error, action, generation) {
     personPacket = null;
   }
   if (
-    error.status === 401 || error.status === 403 ||
-    (error.status === 404 && replyPacket !== null)
+    error.status === 401 ||
+    error.status === 403 ||
+    (error.status === 404 && (replyPacket !== null || successPacket !== null))
   ) {
     // A denied ACK may follow a real commit. Retain exact JSON for its owner,
     // including a not-found read under raced cookies. Neither 404 nor GET can
@@ -388,6 +518,7 @@ async function loadTicket() {
       replyPacket = null;
       replyAcknowledged = false;
     }
+    if (successPacket !== null && successAcknowledged) clearSuccess();
     renderTicket(view);
     showStatus('Ticket loaded.');
     return { generation, loaded: true };
@@ -406,6 +537,7 @@ personButton.addEventListener('click', async () => {
     !onThisTicket() ||
     authorityReloadRequired ||
     replyPacket !== null ||
+    successPacket !== null ||
     viewer === null
   )
     return;
@@ -461,6 +593,78 @@ personButton.addEventListener('click', async () => {
     finishOperation(operation);
   }
 });
+successButton.addEventListener('click', async () => {
+  if (
+    busy !== null ||
+    retrySeconds() > 0 ||
+    suspended ||
+    !onThisTicket() ||
+    authorityReloadRequired ||
+    viewer === null ||
+    personPacket !== null ||
+    replyPacket !== null ||
+    successAcknowledged
+  )
+    return;
+  if (successPacket === null) {
+    if (currentView?.ticket.status !== 'resolved') return;
+    const lastSeenVisibleMessageId = currentView.messages.at(-1)?.id;
+    if (
+      typeof lastSeenVisibleMessageId !== 'string' ||
+      lastSeenVisibleMessageId.length < 1 ||
+      lastSeenVisibleMessageId.length > 200
+    )
+      return;
+    successPacket = Object.freeze({
+      subject: viewer.subject,
+      ticketId,
+      body: JSON.stringify({
+        commandId: crypto.randomUUID(),
+        lastSeenVisibleMessageId,
+      }),
+    });
+    retainSuccess(successPacket);
+  }
+  const packet = successPacket;
+  const expectedViewer = viewer;
+  const operation = beginOperation();
+  const generation = operation.generation;
+  updateHumanControl();
+  try {
+    await readViewer(generation, expectedViewer);
+    const result = await api(
+      '/api/support/tickets/' +
+        encodeURIComponent(ticketId) +
+        '/confirm-success',
+      { method: 'POST', body: packet.body },
+    );
+    guard(generation);
+    validateView(result);
+    await readViewer(generation, expectedViewer);
+    successAcknowledged = true;
+    const refreshed = await loadTicket();
+    if (isCurrent(refreshed.generation))
+      showStatus(
+        refreshed.loaded
+          ? 'Resolution confirmed. Thank you.'
+          : 'Confirmation accepted. Reload to refresh the current ticket.',
+        !refreshed.loaded,
+      );
+  } catch (error) {
+    if (!isCurrent(generation) || error.stale) return;
+    if (error.status === 409) {
+      clearSuccess();
+      const refreshed = await loadTicket();
+      if (refreshed.loaded && isCurrent(refreshed.generation))
+        showStatus(
+          'The visible conversation changed. Review it before making a new confirmation.',
+          true,
+        );
+    } else failure(error, 'Resolution confirmation', generation);
+  } finally {
+    finishOperation(operation);
+  }
+});
 replyForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (
@@ -469,6 +673,7 @@ replyForm.addEventListener('submit', async (event) => {
     suspended ||
     authorityReloadRequired ||
     personPacket !== null ||
+    successPacket !== null ||
     replyAcknowledged ||
     viewer === null ||
     currentView === null ||
@@ -478,10 +683,15 @@ replyForm.addEventListener('submit', async (event) => {
   if (replyPacket === null) {
     const body = new FormData(replyForm).get('body');
     if (
-      typeof body !== 'string' || body.trim() === '' || body.length > 20_000 ||
+      typeof body !== 'string' ||
+      body.trim() === '' ||
+      body.length > 20_000 ||
       /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(body)
     ) {
-      showStatus('Check the reply. Remove unsupported control characters and stay within the field limit.', true);
+      showStatus(
+        'Check the reply. Remove unsupported control characters and stay within the field limit.',
+        true,
+      );
       return;
     }
     const expectedAccountId = viewer.subject;
@@ -492,7 +702,10 @@ replyForm.addEventListener('submit', async (event) => {
         /^[A-Za-z0-9._~-]{1,128}$/u.test(id),
       )
     ) {
-      showStatus('Could not prepare a retry-safe reply for this account.', true);
+      showStatus(
+        'Could not prepare a retry-safe reply for this account.',
+        true,
+      );
       return;
     }
     replyPacket = Object.freeze({

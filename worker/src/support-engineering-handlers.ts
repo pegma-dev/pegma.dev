@@ -90,10 +90,30 @@ export interface SupportEngineeringHandlerOptions extends AgentBrowserOptions {
   readonly repositories?: readonly EngineeringHttpRepository[];
 }
 
-type Operation = 'source' | 'work' | 'proposal' | 'review' | 'enroll' | 'evidence' | 'withdraw' | 'invalidate' | 'repository' |
+type Operation = 'review_inbox' | 'source' | 'work' | 'proposal' | 'review' | 'enroll' | 'evidence' | 'withdraw' | 'invalidate' | 'repository' |
   'policy_read' | 'policy_prepare' | 'policy_put' | 'policy_disable';
 const ticketPath = /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/engineering(?:\/(work|proposal|review|enroll|evidence|withdraw|invalidate|repository))?$/u;
 const policyPath = '/api/support/admin/engineering/policy';
+const reviewInboxPath = '/api/support/admin/engineering/review-inbox';
+
+function reviewBounds(url: URL): { limit: number; cursor?: string } {
+  if (
+    [...url.searchParams.keys()].some(
+      (key) => key !== 'limit' && key !== 'cursor',
+    ) ||
+    url.searchParams.getAll('limit').length > 1 ||
+    url.searchParams.getAll('cursor').length > 1
+  )
+    throw new ApiError(400, 'invalid_request');
+  const limit = url.searchParams.get('limit');
+  if (limit !== null && (!/^[1-9][0-9]?$/u.test(limit) || Number(limit) > 10))
+    throw new ApiError(400, 'invalid_request');
+  const cursor = url.searchParams.get('cursor');
+  return {
+    limit: limit === null ? 10 : Number(limit),
+    ...(cursor === null ? {} : { cursor: boundedString(cursor, 1, 20_000) }),
+  };
+}
 
 function integer(value: unknown, minimum = 1): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum)
@@ -122,7 +142,7 @@ function generation(url: URL): number {
 function permission(operation: Operation): string {
   if (operation === 'enroll' || operation === 'evidence') return supportPermissions.engineeringEvidenceSubmit;
   if (operation === 'withdraw' || operation === 'invalidate') return supportPermissions.engineeringWithdraw;
-  if (operation === 'repository' || operation === 'review') return supportPermissions.engineeringReview;
+  if (operation === 'review_inbox' || operation === 'repository' || operation === 'review') return supportPermissions.engineeringReview;
   if (operation === 'policy_read') return supportPermissions.engineeringPolicyRead;
   if (operation === 'policy_prepare' || operation === 'policy_put' || operation === 'policy_disable') return supportPermissions.engineeringPolicyManage;
   return supportPermissions.engineeringRead;
@@ -189,11 +209,12 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
     const url = new URL(request.url);
     const match = ticketPath.exec(url.pathname);
     const policy = url.pathname === policyPath || url.pathname === policyPath + '/disable' || url.pathname === policyPath + '/prepare';
-    if (match === null && !policy) return null;
+    const inbox = url.pathname === reviewInboxPath;
+    if (match === null && !policy && !inbox) return null;
     if (!enabled()) return json({ error: 'support_engineering_disabled' }, { status: 503 });
     const ticketId = match?.[1];
     const suffix = match?.[2];
-    const operation: Operation = policy
+    const operation: Operation = inbox ? 'review_inbox' : policy
       ? url.pathname.endsWith('/disable') ? 'policy_disable' : url.pathname.endsWith('/prepare') ? 'policy_prepare'
         : request.method === 'GET' ? 'policy_read' : 'policy_put'
       : suffix === 'work' || suffix === 'proposal' || suffix === 'review' || suffix === 'enroll' || suffix === 'evidence' || suffix === 'withdraw' ||
@@ -203,7 +224,13 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
       try { admitted = options.reviewEnabled?.() === true; } catch { /* Default OFF. */ }
       if (!admitted) return json({ error: 'support_engineering_review_disabled' }, { status: 503 });
     }
-    const mutation = !['source', 'work', 'proposal', 'policy_read'].includes(operation);
+    const mutation = ![
+      'review_inbox',
+      'source',
+      'work',
+      'proposal',
+      'policy_read',
+    ].includes(operation);
     const required = permission(operation);
     const browser = supportHumanBrowser(request, {
       sessions: options.sessions, mutation, permission: required,
@@ -250,12 +277,28 @@ export function createSupportEngineeringHandlers(options: SupportEngineeringHand
     }
     try {
       if (request.method !== (mutation ? 'POST' : 'GET')) throw new ApiError(405, 'method_not_allowed');
-      if (url.hash !== '' || (!['work', 'proposal'].includes(operation) && url.search !== '')) throw new ApiError(400, 'invalid_request');
+      if (url.hash !== '' || (!['review_inbox', 'work', 'proposal'].includes(operation) && url.search !== '')) throw new ApiError(400, 'invalid_request');
       const initial = await current();
       const principalId = initial.access.principalId;
       await enforceRateLimit(mutation ? options.mutationLimiter : options.readLimiter, principalId);
       let result: unknown;
-      if (operation === 'policy_read') {
+      if (operation === 'review_inbox') {
+        const page = await awaited((access) =>
+          options.runtime().scanReview(access, reviewBounds(url)),
+        );
+        result = {
+          reviewSources: [...page.reviewSources],
+          reviewCandidates: page.reviewCandidates.map(
+            ({ ticketId, sourceGeneration }) => ({
+              ticketId,
+              sourceGeneration,
+            }),
+          ),
+          physicalRows: page.physicalRows,
+          pages: page.pages,
+          nextCursor: page.nextCursor,
+        };
+      } else if (operation === 'policy_read') {
         const value = await awaited((access) => options.runtime().readPolicy(access));
         const repositories = value.policy.repositories.flatMap((descriptor) => {
           const entry = configured.find((item) => item.descriptor.repositoryId === descriptor.repositoryId);

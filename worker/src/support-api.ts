@@ -1,3 +1,6 @@
+import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
+import type { SupportLearningHandlerOptions } from './support-learning-handlers';
+import { createSupportReleaseFollowupHandlers, type SupportReleaseFollowupHandlerOptions } from './support-release-followup-handlers';
 import {
   bestEffortSupportAssistantHint,
   supportAssistantAcceptedTarget,
@@ -90,6 +93,8 @@ const ADMIN_TICKET_PATH =
   /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})(?:\/(messages|notes))?$/u;
 const PERSON_PATH =
   /^\/api\/support\/tickets\/([A-Za-z0-9._~-]{1,200})\/request-person$/u;
+const SUCCESS_PATH =
+  /^\/api\/support\/tickets\/([A-Za-z0-9._~-]{1,200})\/confirm-success$/u;
 const HUMAN_STAFF_PATH =
   /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/(take-over|handoff)$/u;
 
@@ -136,8 +141,8 @@ interface SupportApiOptions {
   readonly replyLimiter: DurableRateLimiter;
   readonly logger: Logger;
   /**
-   * Audited role store — the ONLY staff gate (docs/ROLE_ADOPTION_PLAN.md
-   * Phase 4). Absent ⇒ staff routes are a controlled 503, fail closed.
+   * Audited role store - the ONLY staff gate (docs/ROLE_ADOPTION_PLAN.md
+   * Phase 4). Absent => staff routes are a controlled 503, fail closed.
    */
   readonly roleStore?: SupportRoleReader & BootstrapRoleStore;
   /** One-time Support bootstrap principals (Phase 3). */
@@ -148,9 +153,14 @@ interface SupportApiOptions {
   readonly learningRuntime?: Omit<SupportLearningRuntimeOptions, 'staffAccess'>;
   /** Current server flag. Only strict true plus a handler enables this surface. */
   readonly learningEnabled?: () => boolean;
+  readonly learningTestReceiptPreparation?: SupportLearningHandlerOptions['testReceiptPreparation'];
+  readonly learningTestReceiptEnabled?: () => boolean;
+  /** Current deployment capability; absent or failed composition is disabled. */
+  readonly releaseFollowupEnabled?: () => boolean;
   /** Additive trusted staged-review capability; it never enables learning itself. */
   readonly learningStagedReviewsEnabled?: () => boolean;
   readonly engineering?: SupportEngineeringRouterOptions;
+  readonly releaseFollowup?: SupportReleaseFollowupHandlerOptions;
 }
 
 async function requireAuthentication(
@@ -163,7 +173,7 @@ async function requireAuthentication(
   }
   // One-time Support bootstrap (docs/ROLE_ADOPTION_PLAN.md Phase 3): any
   // authenticated support touch by a listed principal seeds the audited
-  // grant. Fail OPEN — a seed failure must not break the request; it
+  // grant. Fail OPEN - a seed failure must not break the request; it
   // retries on the next touch. The set-membership check short-circuits for
   // everyone not listed.
   if (
@@ -383,11 +393,22 @@ function parseStaffPatchAction(value: unknown): StaffPatchAction {
 
 function parseStaffQueueQuery(url: URL): StaffQueueQuery {
   const query: {
+    handling?: 'human' | 'assistant' | 'all';
     status?: TicketStatus;
     priority?: TicketPriority;
     sort?: QueueSort;
     unassignedOnly?: boolean;
   } = {};
+
+  const handling = url.searchParams.get('handling');
+  if (handling !== null) {
+    if (
+      url.searchParams.getAll('handling').length !== 1 ||
+      (handling !== 'human' && handling !== 'assistant' && handling !== 'all')
+    )
+      throw new ApiError(400, 'invalid_request');
+    query.handling = handling;
+  }
 
   const statusParam = url.searchParams.get('status');
   if (statusParam !== null && statusParam !== '') {
@@ -766,14 +787,24 @@ async function stableBrowserMutation(
  *
  * Session cookie `__Host-pegma_session`, CSRF `X-Pegma-CSRF`, same-origin
  * Fetch Metadata for mutations. Principal is the Identity subject from the
- * session — never taken from the request body.
+ * session - never taken from the request body.
  *
- * Staff routes live under `/api/support/admin/…` and require the stored,
+ * Staff routes live under `/api/support/admin/...` and require the stored,
  * audited `Support` role.
  */
 export function createSupportApi(
   options: SupportApiOptions,
 ): (request: Request) => Promise<Response> {
+  const followupHandler = createSupportReleaseFollowupHandlers(options.releaseFollowup);
+  const followupReady = (): boolean => {
+    if (options.releaseFollowup === undefined) return false;
+    try {
+      return options.releaseFollowupEnabled?.() === true &&
+        options.releaseFollowup.enabled() === true;
+    } catch {
+      return false;
+    }
+  };
   const engineeringRouter = createSupportEngineeringRouter(options.engineering);
   const engineeringReady = (): boolean => {
     if (options.engineering?.configuration === undefined) return false;
@@ -808,6 +839,10 @@ export function createSupportApi(
           ...(options.learningEnabled === undefined
             ? {}
             : { enabled: options.learningEnabled }),
+          ...(options.learningTestReceiptPreparation === undefined ? {} : {
+            testReceiptPreparation: options.learningTestReceiptPreparation,
+            testReceiptPreparationEnabled: options.learningTestReceiptEnabled,
+          }),
           limiter: options.replyLimiter,
           learning: options.learningRuntime,
         })
@@ -823,6 +858,12 @@ export function createSupportApi(
     } catch {
       return false;
     }
+  };
+  const testReceiptsReady = (): boolean => {
+    try {
+      return learningReady() && options.learningTestReceiptPreparation !== undefined &&
+        options.learningTestReceiptEnabled?.() === true;
+    } catch { return false; }
   };
   const stagedReviewsReady = (): boolean => {
     if (
@@ -843,6 +884,8 @@ export function createSupportApi(
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      const followupResponse = await followupHandler(request);
+      if (followupResponse !== null) return followupResponse;
       const engineeringResponse = await engineeringRouter(request);
       if (engineeringResponse !== null) return engineeringResponse;
       if (LEARNING_NAMESPACE.test(path)) {
@@ -857,6 +900,64 @@ export function createSupportApi(
         if (!learningReady() || response === null)
           throw new ApiError(404, 'not_found');
         return response;
+      }
+      const success = SUCCESS_PATH.exec(path);
+      if (success !== null) {
+        if (request.method !== 'POST')
+          return json(
+            { error: 'method_not_allowed' },
+            { status: 405, headers: { Allow: 'POST' } },
+          );
+        if (url.search !== '') throw new ApiError(400, 'invalid_request');
+        const browser = supportHumanBrowser(request, {
+          sessions: options.sessions,
+          authenticate: (incoming) => requireAuthentication(incoming, options),
+          access: (authenticated) => humanAccess(authenticated, options, false),
+          permission: supportPermissions.confirmSuccess,
+          mutation: true,
+        });
+        const initial = await browser.current();
+        const packet = exactObject(await readJson(request, { timeoutMs: 10_000 }), [
+          'commandId',
+          'lastSeenVisibleMessageId',
+        ]);
+        const commandId = clientCommand(packet.commandId);
+        const lastSeenVisibleMessageId = boundedString(
+          packet.lastSeenVisibleMessageId,
+          1,
+          200,
+        );
+        await enforceRateLimit(
+          options.replyLimiter,
+          initial.authenticated.link.subject,
+        );
+        const current = await browser.current();
+        const view = await options.application
+          .confirmCustomerSuccess(current.access, {
+            ticketId: success[1]!,
+            commandId,
+            correlationId: mintSupportId(),
+            lastSeenVisibleMessageId,
+          }, {
+            signal: request.signal,
+            async verifyBeforeCommit() {
+              await browser.current();
+              return () => {
+                browser.assertCurrent();
+                return true;
+              };
+            },
+          })
+          .catch((error: unknown) => {
+            if (error instanceof TicketWorkflowError)
+              throw new ApiError(409, 'conflict');
+            throw error;
+          });
+        const final = await browser.current();
+        return json({
+          ...publicTicketView(view),
+          csrfToken: final.authenticated.csrfToken,
+        });
       }
       if (supportBrowserCommandMode(request))
         return await stableBrowserMutation(request, options);
@@ -1021,7 +1122,8 @@ export function createSupportApi(
         const ticketId = adminMatch[1]!;
         if (
           typeof options.learningEnabled === 'function' ||
-          options.engineering !== undefined
+          options.engineering !== undefined ||
+          options.releaseFollowupEnabled !== undefined
         ) {
           // This optional hint comes from current real stored Support authority,
           // active Identity and the same live session, never browser role fields.
@@ -1044,6 +1146,10 @@ export function createSupportApi(
             return json({
               ...staffTicketView(view),
               csrfToken: final.authenticated.csrfToken,
+              ...(options.releaseFollowupEnabled === undefined ? {} : {
+                releaseFollowupEnabled: followupReady() &&
+                  hasPermission(final.access, supportPermissions.engineeringFollowupRead),
+              }),
               ...(options.engineering === undefined
                 ? {}
                 : {
@@ -1075,6 +1181,12 @@ export function createSupportApi(
                   supportPermissions.learningReview,
                 ) &&
                 hasPermission(final.access, supportPermissions.queueRead),
+              ...(options.learningTestReceiptEnabled === undefined ? {} : {
+                learningTestReceiptEnabled: testReceiptsReady() &&
+                  hasPermission(final.access, supportPermissions.learningEvidenceSubmit) &&
+                  hasPermission(final.access, knowledgePermissions.draftRead) &&
+                  hasPermission(final.access, knowledgePermissions.evidenceRead),
+              }),
               ...(options.learningStagedReviewsEnabled === undefined
                 ? {}
                 : {
@@ -1123,7 +1235,7 @@ export function createSupportApi(
           ['priority'],
         );
         const action = parseStaffPatchAction(body.action);
-        // priority is only meaningful for change_priority — reject silent ignore.
+        // priority is only meaningful for change_priority - reject silent ignore.
         if (action !== 'change_priority' && Object.hasOwn(body, 'priority')) {
           throw new ApiError(400, 'invalid_request');
         }
@@ -1220,7 +1332,7 @@ export function createSupportApi(
         const messageBody = boundedString(body.body, 1, 20_000, {
           allowMultiline: true,
         });
-        // Mail/outbound notification deferred (Task 10) — omit notification.
+        // Mail/outbound notification deferred (Task 10) - omit notification.
         const view = await options.application.replyAsStaff(access, {
           commandId: mintSupportId(),
           correlationId: mintSupportId(),

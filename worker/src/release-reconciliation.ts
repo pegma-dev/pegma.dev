@@ -1,9 +1,6 @@
 import type { Store } from '@pegma/storage-core';
 import type { Logger } from '@pegma/spine';
-import {
-  componentReleaseCollection,
-  componentReleaseKey,
-} from './component-release';
+import { componentReleaseStateCollection } from './component-release';
 import {
   allowedReleaseCatalog,
   type ReleaseCatalogEntry,
@@ -15,6 +12,7 @@ import {
 } from './release-ops-state';
 import {
   applyAuthoritativeCurrentRelease,
+  clearCurrentRelease,
   buildPegmaReleaseUrl,
   touchCurrentReleaseObservedAt,
   type ReleaseEventFacts,
@@ -42,6 +40,7 @@ export interface ReleaseReconciliationSummary {
 }
 
 export interface RunReleaseReconciliationOptions {
+  readonly followupTracking?: () => boolean;
   readonly store: Store;
   readonly logger: Logger;
   readonly config: ReleaseReconciliationConfig;
@@ -160,24 +159,6 @@ async function readBoundedJson(
   } catch {
     return { ok: false, reason: 'invalid_json' };
   }
-}
-
-async function clearCurrentRelease(
-  store: Store,
-  repositoryId: string,
-): Promise<boolean> {
-  const releases = store.collection(componentReleaseCollection());
-  const key = componentReleaseKey(repositoryId);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const current = await releases.getVersioned(key);
-    if (current === null) {
-      return false;
-    }
-    if (await releases.deleteIfUnchanged(key, current.version)) {
-      return true;
-    }
-  }
-  throw new Error('Release clear conflicted repeatedly.');
 }
 
 async function reconcileOneRepository(options: {
@@ -413,9 +394,9 @@ export async function runReleaseReconciliation(
 
 /** Count current release summaries in D1 (for health detail). */
 export async function countCurrentReleases(store: Store): Promise<number> {
-  const releases = store.collection(componentReleaseCollection());
+  const releases = store.collection(componentReleaseStateCollection());
   const rows = await releases.list('current');
-  return rows.length;
+  return rows.filter((row) => row.kind === 'release').length;
 }
 
 /** Backfill is the same path as reconciliation (no receipt rows). */
