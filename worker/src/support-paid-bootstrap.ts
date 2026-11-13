@@ -52,6 +52,17 @@ interface Options {
   readonly keyProvider?: SupportReceiptKeyProvider;
   readonly fetch?: typeof globalThis.fetch;
 }
+const reusableSelections = new WeakMap<object, () => boolean>();
+/** Pending callers join in the root; fulfilled credential failures can retry
+ * without putting secret values in the public configuration signature. */
+export function supportPaidBootstrapReusable(bundle: object | undefined): boolean {
+  if (bundle === undefined) return false;
+  try {
+    return reusableSelections.get(bundle)?.() ?? true;
+  } catch {
+    return false;
+  }
+}
 const allowed = Object.freeze([
   {
     model: 'openai/gpt-4.1-mini',
@@ -622,7 +633,7 @@ export async function createSupportPaidBootstrap(
       }
     }
     if (!current()) return undefined;
-    return Object.freeze({
+    const bundle = Object.freeze({
       profile,
       current,
       learning: Object.freeze(learning),
@@ -630,6 +641,8 @@ export async function createSupportPaidBootstrap(
       engineering,
       releaseFollowup,
     });
+    reusableSelections.set(bundle, () => current() && (!checksFlag() || currentKey() !== null));
+    return bundle;
   } catch {
     return undefined;
   }

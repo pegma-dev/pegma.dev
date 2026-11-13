@@ -135,6 +135,25 @@ async function harness() {
 }
 
 describe('release follow-up panel with actual SDK and current browser authority', () => {
+  it('settles observe with the actual public SDK head generation and current handler envelope', async () => {
+    const h = await harness();
+    let observed: any;
+    h.state.fault = async (operation, response) => {
+      if (operation === 'observe') observed = await response.clone().json();
+    };
+    h.open();
+    h.field('repositoryId').value = h.f.identity.association.repositoryId;
+    h.field('issueId').value = h.f.identity.association.issueId;
+    h.field('inputReference').value = h.f.identity.inputReference;
+    await h.panel.perform('observe');
+    expect(h.writes).toHaveLength(1);
+    expect(h.writes[0]!.status).toBe(200);
+    expect(observed.operation).toBe('observe');
+    expect(Number.isSafeInteger(observed.result.headGeneration)).toBe(true);
+    expect(observed.result.outcome).toBe('unchanged');
+    expect(h.panel.hasPending()).toBe(false);
+    expect(h.ownerChanges.at(-1)).toBeNull();
+  });
   it('keeps every control inert until a current ticket is supplied and renders all data as text', async () => {
     const h = await harness();
     expect(h.button('post').disabled).toBe(true);

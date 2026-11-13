@@ -4,7 +4,8 @@ Developer and operator documentation for the optional engineering assembly.
 The Worker and staff ticket controller accept the human engineering composition
 through explicit trusted configuration. The default Worker supplies no such
 configuration, so engineering intake and review remain OFF. This assembly uses
-the five published Support Desk packages at exact version `0.2.8`.
+the [current public package graph](SUPPORT_COMPOSITION.md#packages), with exact
+selections recorded in the manifest and lockfile.
 
 The [runtime](../worker/src/support-engineering.ts),
 [HTTP adapter](../worker/src/support-engineering-handlers.ts),
@@ -21,8 +22,10 @@ producer and host validation holds are documented in that guide.
 
 ## Authority and defaults
 
-The [stored-role policy](../worker/src/support-access.ts),
-`pegma.dev-policy-7`, retains these five human engineering permissions:
+The [stored-role policy](../worker/src/support-access.ts) retains these five
+human engineering permissions. See the [current policy and full permission
+sets](SUPPORT_COMPOSITION.md#authorization) for its authority revision, customer
+defaults and separate human release-follow-up grants:
 
 | Published `supportPermissions` member | Current human surface |
 | --- | --- |
@@ -302,9 +305,10 @@ The earlier standalone source checkpoint passed its 1,142-test suite with
 engineering HTTP scenarios passed the 50-binding-call and 100-parameter test
 ceilings. Those results describe the earlier standalone assembly.
 
-The current source selects the verified
-[Sessions `0.2.1` release](https://github.com/pegma-dev/sessions/releases/tag/v0.2.1).
-Its default read and expiry-sweep observations follow their awaited storage
+The current Sessions selection is recorded in the
+[public package graph](SUPPORT_COMPOSITION.md#packages) and manifest. The earlier
+[Sessions `0.2.1` producer checkpoint](https://github.com/pegma-dev/sessions/releases/tag/v0.2.1)
+established that default read and expiry-sweep observations follow their awaited storage
 snapshots under a consistent advancing clock. Explicit caller instants retain
 their semantics, and future idle anchors from rollback or skew still fail closed.
 

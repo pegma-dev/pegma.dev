@@ -9,9 +9,10 @@ including an explicitly absent selection. OFF routes return 404 before Store
 initialization. No new cron, queue, remote issue write or automatic send/publish
 is installed.
 
-This isolated development graph uses unpublished Support 0.2.9 packs and KB
-0.1.8 packs. It is not public release or deployment acceptance. Development
-functional evidence and the unchanged Native 50-query/100-parameter acceptance
+This source selects the [current published package graph](SUPPORT_COMPOSITION.md#packages);
+the manifest and lockfile record its exact versions. Producer publication is
+separate from host deployment acceptance. Development functional evidence and
+the unchanged Native 50-query/100-parameter acceptance
 are recorded separately; a functional Memory result does not establish that
 physical budget, provider quality, CPU use or Workers Free acceptance.
 
@@ -27,7 +28,8 @@ model, token counter and bounded durable usage policy. Missing generation is
 held without a provider call. Checks on retained content remain independent of
 paid generation availability.
 
-The current policy retains the Support-role grants introduced in version 7: engineeringFollowupRead,
+The [current host policy](SUPPORT_COMPOSITION.md#authorization) retains the
+Support-role grants introduced in version 7: engineeringFollowupRead,
 engineeringFollowupReview and engineeringFollowupEvidenceSubmit, alongside its
 existing queue and reply authority. Admin or Knowledge alone receives no
 follow-up authority. Processing uses an intrinsic service identity with exactly follow-up Process,
@@ -61,9 +63,17 @@ New posting additionally requires replyAny.
 | POST abandon      | commandId, workId, expectedWorkGeneration, reason                                            |
 
 Client command IDs are stable UUIDs. The server derives correlation from actor,
-operation, ticket and command. Mutation responses contain result, commandId,
-operation and the current csrfToken. The SDK owns exact fingerprints, accepted
-receipts, generations, semantic identities and conditional commits. Private
+operation, ticket and command. Work-command mutations (`observe`, `reassess`,
+`post`, `reject`, `retry`, `abandon` and `retest`) return
+`{ result, commandId, operation, csrfToken }`. Mapping mutations
+(`verify-mapping`, `withdraw-mapping`) and `retest-receipt` instead return
+`{ result, csrfToken }`; their command identity is inside `result`, with no
+top-level `commandId` or `operation`. Retest preparation can return HTTP 202
+while the report phase is pending, then HTTP 200 when its receipt is ready.
+The [HTTP adapter](../worker/src/support-release-followup-handlers.ts) owns these
+envelopes; SDK result DTOs remain nested under `result`.
+The SDK owns exact fingerprints, accepted receipts, generations, semantic
+identities and conditional commits. Private
 views expose selected metadata and candidate/checked content, while claim
 identities, provider metadata and private check receipts stay server-side.
 
@@ -99,7 +109,7 @@ New mapping routes share the existing namespace and quotas:
 | POST verify-mapping   | commandId, expectedPrincipalId, expectedTicketRevision, expectedMappingGeneration, repositoryId, issueId, releaseRef, issueState, deploymentState, fixedProduct, deploymentId, deploymentEpoch, scopeRef, verificationReference, publicFacts |
 | POST withdraw-mapping | commandId, expectedPrincipalId, expectedTicketRevision, expectedMappingGeneration, repositoryId, issueId, reason                                                                                                                             |
 
-`fixedProduct` is exactly productId/version/buildId. Public facts have 1Ã¢â‚¬â€œ4 unique
+`fixedProduct` is exactly productId/version/buildId. Public facts have 1-4 unique
 references (200 characters each), with text bounded to 1,000 characters.
 Mapping ACKs contain only actorId, ticketId, commandId, mappingGeneration and
 inputReference, plus the normal CSRF envelope. Observing that reference remains

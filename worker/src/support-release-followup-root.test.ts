@@ -11,7 +11,10 @@ import {
   componentReleaseCollection,
   componentReleaseKey,
 } from './component-release';
-import { supportFollowupReleaseObservations } from './support-release-followup-releases';
+import {
+  supportFollowupReleaseObservations,
+  supportFollowupReleaseObservationKey,
+} from './support-release-followup-releases';
 
 // Select Memory in place of the platform adapter. All host/Identity/RoleStore,
 // Sessions, Support/KB application methods, policies, limits and writes are real.
@@ -319,7 +322,7 @@ describe('normal default Worker release-followup Source composition', () => {
     expect((await f.fetch(await event('published'))).status).toBe(204);
     const journal = f.store.collection(supportFollowupReleaseObservations);
     expect(
-      await journal.get({ partition: 'repositories', id: repositoryId }),
+      await journal.get(supportFollowupReleaseObservationKey(repositoryId)),
     ).toMatchObject({ epoch: 1, state: 'active' });
     const missing = await f.fetch(
       f.request('observe', {
@@ -348,14 +351,14 @@ describe('normal default Worker release-followup Source composition', () => {
     ).toMatchObject({ outcome: 'queued' });
     expect((await f.fetch(await event('unpublished'))).status).toBe(204);
     expect(
-      await journal.get({ partition: 'repositories', id: repositoryId }),
+      await journal.get(supportFollowupReleaseObservationKey(repositoryId)),
     ).toMatchObject({ epoch: 2, state: 'withdrawn' });
     expect(
       engineeringHttpResult(await engineeringHttpObject(await observe())),
     ).toMatchObject({ outcome: 'held' });
     expect((await f.fetch(await event('published'))).status).toBe(204);
     expect(
-      await journal.get({ partition: 'repositories', id: repositoryId }),
+      await journal.get(supportFollowupReleaseObservationKey(repositoryId)),
     ).toMatchObject({ epoch: 3, state: 'active' });
     expect(
       engineeringHttpResult(await engineeringHttpObject(await observe())),

@@ -11,6 +11,16 @@ import {
   type ResolutionTrustContext,
 } from "@pegma/support-desk-application";
 import { describe, expect, it } from "vitest";
+import { identityLinkKeyFromVerifiedIdentityClaims } from "@pegma/authorization-identity";
+import { createIdentityRuntime } from "./identity-runtime";
+import { createSupportRuntime } from "./support-desk";
+import { createSupportLearningBrowserHandlers } from "./support-learning";
+import {
+  APPLICATION_SCOPE,
+  KNOWLEDGE_ROLE,
+  SUPPORT_ROLE,
+} from "./support-access";
+import { IDENTITY_ISSUER, SESSION_COOKIE } from "./identity-api";
 import {
   createSupportLearningFixture,
   learningTicketId,
@@ -369,6 +379,113 @@ async function fixture(
 }
 
 describe("staff-approved KB report associations", () => {
+  it.each(["evidence", "evidence-recovery"] as const)(
+    "prevents the actual %s evidence transaction when the original browser is revoked during current KB proof verification",
+    async (operation) => {
+      const f = await fixture({ observations: true });
+      const input = await f.input();
+      const receipt = await f.bridge.prepare(f.staff(), input);
+      const identity = createIdentityRuntime(
+        {
+          store: f.store,
+          emailCodeSecretBase64: btoa("s".repeat(32)),
+          emailFrom: "Pegma <synthetic@example.test>",
+          emailEnabled: false,
+        },
+        { log() {} },
+      );
+      const host = createSupportRuntime({
+        store: f.store,
+        clock: f.f.clock,
+        identity: identity.identity,
+        sessions: identity.sessions,
+        logger: { log() {} },
+        identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+      });
+      const principalId = f.f.actors.staff.principalId;
+      await identity.identity.provisionVerifiedUser({
+        principalId,
+        email: "staff@example.test",
+      });
+      for (const role of [SUPPORT_ROLE, KNOWLEDGE_ROLE])
+        await host.roleStore.grantRoleAssignmentWithAudit({
+          assignment: {
+            id: "proof-browser-" + role,
+            principalId,
+            role,
+            scope: APPLICATION_SCOPE,
+            grantedBy: { kind: "system", systemId: "fictional-proof-browser" },
+            grantedAtEpochMs: Date.now(),
+            status: "active",
+          },
+          auditEventId: "proof-browser-grant-" + role,
+        });
+      const sid = "x".repeat(43),
+        csrf = "y".repeat(43);
+      await identity.sessions.create(sid, {
+        principalId,
+        data: JSON.stringify({
+          version: 1,
+          issuer: IDENTITY_ISSUER,
+          subject: principalId,
+          csrfToken: csrf,
+        }),
+      });
+      const handler = createSupportLearningBrowserHandlers({
+        ...host,
+        roleStore: host.roleStore,
+        identity: identity.identity,
+        sessions: identity.sessions,
+        logger: { log() {} },
+        limiter: host.replyLimiter,
+        identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+        enabled: () => true,
+        learning: {
+          application: f.application,
+          knowledge: f.f.knowledge,
+          sources: f.f.sources,
+          clock: f.f.clock,
+        },
+      });
+      let proofs = 0;
+      f.state.policyHook = async () => {
+        if (++proofs === 1) await identity.sessions.destroy(sid);
+      };
+      const before = await f.f.rows();
+      const response = await handler(
+        new Request(
+          IDENTITY_ISSUER +
+            "/api/support/admin/tickets/" +
+            learningTicketId +
+            "/learning/" +
+            operation,
+          {
+            method: "POST",
+            headers: {
+              Cookie: SESSION_COOKIE + "=" + sid,
+              Origin: IDENTITY_ISSUER,
+              "X-Pegma-CSRF": csrf,
+              "Sec-Fetch-Site": "same-origin",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              kind: "successful_test",
+              commandId: "fictional-late-proof-" + operation,
+              expectedRevision: input.expectedRevision,
+              resolutionCycle: input.resolutionCycle,
+              solutionMessageId: input.solutionMessageId,
+              receipt: receipt.receipt,
+            }),
+          },
+        ),
+      );
+      expect(proofs, await response?.clone().text()).toBeGreaterThan(0);
+      expect(response?.status).toBe(401);
+      expect(await f.f.rows()).toEqual(before);
+      expect(f.f.state.modelCalls).toBe(0);
+    },
+  );
+
   it.each([false, true])(
     "uses actual paired report observations for original owner=%s without legacy hydration",
     async (sameOwner) => {

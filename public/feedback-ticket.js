@@ -2,7 +2,9 @@ const select = (selector) => document.querySelector(selector);
 const statusNode = select('#ticket-status');
 const signedOut = select('#ticket-signed-out');
 const signInLinks = [...signedOut.querySelectorAll('a')].map((node) => ({
-  node, target: node.target ?? '', rel: node.rel ?? '',
+  node,
+  target: node.target ?? '',
+  rel: node.rel ?? '',
 }));
 const detail = select('#ticket-detail');
 const heading = select('#ticket-heading');
@@ -23,6 +25,7 @@ let busy = null;
 let personPacket = null;
 let successPacket = null;
 let successAcknowledged = false;
+const successOwners = new Map();
 let replyPacket = null;
 let replyAcknowledged = false;
 let packetOutcome = 'unconfirmed';
@@ -128,8 +131,12 @@ function armRetryTimer() {
 function updateHumanControl() {
   replyForm.noValidate = replyPacket !== null;
   for (const link of signInLinks) {
-    link.node.target = replyPacket === null && successPacket === null ? link.target : '_blank';
-    link.node.rel = replyPacket === null && successPacket === null ? link.rel : 'noopener noreferrer';
+    link.node.target =
+      replyPacket === null && successPacket === null ? link.target : '_blank';
+    link.node.rel =
+      replyPacket === null && successPacket === null
+        ? link.rel
+        : 'noopener noreferrer';
   }
   const ticket = currentView?.ticket;
   const terminal = ticket?.status === 'resolved' || ticket?.status === 'closed';
@@ -143,21 +150,21 @@ function updateHumanControl() {
     ? ''
     : successPacket !== null
       ? 'The confirmation has no settled acknowledgement. Retry the same confirmation.'
-    : personPacket !== null
-      ? packetOutcome === 'rate_limited'
-        ? seconds > 0
-          ? `The server rate limited this request. Wait at least ${seconds} seconds before retrying the same request.`
-          : 'Retry the same human-support request when ready.'
-        : 'The previous human-support request has no confirmed acknowledgement. Retry that same request.'
-      : terminal
-        ? `This ticket is ${ticket.status}. Request human support to reopen it.`
-        : state === 'assistant'
-          ? 'You can ask for human support at any time.'
-          : state === 'human-active'
-            ? 'Human support is active on this ticket.'
-            : state === 'human-pending'
-              ? 'This ticket is waiting for human support.'
-              : 'Human support handles this ticket.';
+      : personPacket !== null
+        ? packetOutcome === 'rate_limited'
+          ? seconds > 0
+            ? `The server rate limited this request. Wait at least ${seconds} seconds before retrying the same request.`
+            : 'Retry the same human-support request when ready.'
+          : 'The previous human-support request has no confirmed acknowledgement. Retry that same request.'
+        : terminal
+          ? `This ticket is ${ticket.status}. Request human support to reopen it.`
+          : state === 'assistant'
+            ? 'You can ask for human support at any time.'
+            : state === 'human-active'
+              ? 'Human support is active on this ticket.'
+              : state === 'human-pending'
+                ? 'This ticket is waiting for human support.'
+                : 'Human support handles this ticket.';
   personButton.hidden =
     personPacket === null && !terminal && state !== 'assistant';
   personButton.disabled =
@@ -177,10 +184,21 @@ function updateHumanControl() {
         : 'Retry human-support request';
   const confirmable = ticket?.status === 'resolved';
   successButton.hidden = successPacket === null && !confirmable;
-  successButton.disabled = busy !== null || viewer === null || authorityReloadRequired || suspended ||
-    seconds > 0 || personPacket !== null || replyPacket !== null || successAcknowledged ||
-    (successPacket === null && (!confirmable || !currentView?.messages.at(-1)?.id));
-  successButton.textContent = successPacket === null ? 'Confirm this solved my issue' : 'Retry the same confirmation';
+  successButton.disabled =
+    busy !== null ||
+    viewer === null ||
+    authorityReloadRequired ||
+    suspended ||
+    seconds > 0 ||
+    personPacket !== null ||
+    replyPacket !== null ||
+    successAcknowledged ||
+    (successPacket === null &&
+      (!confirmable || !currentView?.messages.at(-1)?.id));
+  successButton.textContent =
+    successPacket === null
+      ? 'Confirm this solved my issue'
+      : 'Retry the same confirmation';
   for (const button of replyForm.querySelectorAll('button')) {
     button.textContent =
       replyPacket === null ? 'Send reply' : 'Retry previous reply';
@@ -302,7 +320,21 @@ function successKey(subject) {
   );
 }
 function restoreSuccess(next) {
+  if (successPacket !== null && successPacket.subject !== next.subject) {
+    successOwners.set(successPacket.subject, {
+      packet: successPacket,
+      acknowledged: successAcknowledged,
+    });
+    successPacket = null;
+    successAcknowledged = false;
+  }
   if (successPacket !== null) return;
+  const retained = successOwners.get(next.subject);
+  if (retained) {
+    successPacket = retained.packet;
+    successAcknowledged = retained.acknowledged;
+    return;
+  }
   let saved;
   try {
     saved = window.sessionStorage?.getItem(successKey(next.subject));
@@ -310,23 +342,46 @@ function restoreSuccess(next) {
     return;
   }
   if (!saved) return;
-  const packet = JSON.parse(saved);
-  const body = JSON.parse(packet.body);
-  if (
-    packet.subject !== next.subject ||
-    packet.ticketId !== ticketId ||
-    Object.keys(packet).sort().join(',') !== 'body,subject,ticketId' ||
-    Object.keys(body).sort().join(',') !==
-      'commandId,lastSeenVisibleMessageId' ||
-    !/^[0-9a-f-]{36}$/iu.test(body.commandId) ||
-    typeof body.lastSeenVisibleMessageId !== 'string' ||
-    body.lastSeenVisibleMessageId.length < 1 ||
-    body.lastSeenVisibleMessageId.length > 200
-  )
-    throw new Error('invalid_pending_confirmation');
-  successPacket = Object.freeze(packet);
+  try {
+    const packet = JSON.parse(saved);
+    if (
+      !packet ||
+      typeof packet !== 'object' ||
+      Array.isArray(packet) ||
+      typeof packet.body !== 'string'
+    )
+      return;
+    const body = JSON.parse(packet.body);
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      typeof body.commandId !== 'string' ||
+      packet.subject !== next.subject ||
+      packet.ticketId !== ticketId ||
+      Object.keys(packet).sort().join(',') !== 'body,subject,ticketId' ||
+      Object.keys(body).sort().join(',') !==
+        'commandId,lastSeenVisibleMessageId' ||
+      !/^[0-9a-f-]{36}$/iu.test(body.commandId) ||
+      typeof body.lastSeenVisibleMessageId !== 'string' ||
+      body.lastSeenVisibleMessageId.length < 1 ||
+      body.lastSeenVisibleMessageId.length > 200
+    )
+      return;
+    successPacket = Object.freeze(packet);
+    successOwners.set(next.subject, {
+      packet: successPacket,
+      acknowledged: false,
+    });
+  } catch {
+    // Invalid saved data is not a replayable command or authority for this viewer.
+  }
 }
 function retainSuccess(packet) {
+  successOwners.set(packet.subject, {
+    packet,
+    acknowledged: successAcknowledged,
+  });
   try {
     window.sessionStorage?.setItem(
       successKey(packet.subject),
@@ -338,6 +393,7 @@ function retainSuccess(packet) {
 }
 function clearSuccess() {
   if (successPacket !== null) {
+    successOwners.delete(successPacket.subject);
     try {
       window.sessionStorage?.removeItem(successKey(successPacket.subject));
     } catch {
@@ -399,7 +455,8 @@ function failure(error, action, generation) {
     personPacket = null;
   }
   if (
-    error.status === 401 || error.status === 403 ||
+    error.status === 401 ||
+    error.status === 403 ||
     (error.status === 404 && (replyPacket !== null || successPacket !== null))
   ) {
     // A denied ACK may follow a real commit. Retain exact JSON for its owner,
@@ -625,10 +682,15 @@ replyForm.addEventListener('submit', async (event) => {
   if (replyPacket === null) {
     const body = new FormData(replyForm).get('body');
     if (
-      typeof body !== 'string' || body.trim() === '' || body.length > 20_000 ||
+      typeof body !== 'string' ||
+      body.trim() === '' ||
+      body.length > 20_000 ||
       /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(body)
     ) {
-      showStatus('Check the reply. Remove unsupported control characters and stay within the field limit.', true);
+      showStatus(
+        'Check the reply. Remove unsupported control characters and stay within the field limit.',
+        true,
+      );
       return;
     }
     const expectedAccountId = viewer.subject;
@@ -639,7 +701,10 @@ replyForm.addEventListener('submit', async (event) => {
         /^[A-Za-z0-9._~-]{1,128}$/u.test(id),
       )
     ) {
-      showStatus('Could not prepare a retry-safe reply for this account.', true);
+      showStatus(
+        'Could not prepare a retry-safe reply for this account.',
+        true,
+      );
       return;
     }
     replyPacket = Object.freeze({

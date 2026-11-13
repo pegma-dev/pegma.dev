@@ -31,6 +31,7 @@ import {
   type ResolutionLearningOptions,
   type ReviewResolutionLearningProposalCommand,
   type SubmitResolutionEvidenceCommand,
+  type SubmitResolutionEvidenceOptions,
   type WithdrawResolutionLearningSourceCommand,
 } from '@pegma/support-desk-application';
 import type { Clock } from '@pegma/spine';
@@ -69,6 +70,7 @@ export type LearningSuccessfulTestPacket = Packet<
 export type LearningReviewPacket = Packet<ReviewResolutionLearningProposalCommand>;
 export type LearningReviewIntentPacket = Packet<LearningReviewCommand>;
 export type LearningReviewHumanGuard = () => void | Promise<void>;
+export type LearningEvidenceHumanGuard = NonNullable<SubmitResolutionEvidenceOptions['verifyBeforeCommit']>;
 export type LearningInvalidationPacket = Packet<InvalidateResolutionEvidenceCommand>;
 export type LearningWithdrawalPacket = Packet<WithdrawResolutionLearningSourceCommand>;
 
@@ -356,7 +358,9 @@ function createLearningRuntime(
 
   function recoverIntake<Command extends { readonly ticketId: string; readonly clientCommandId: string; readonly expectedRevision: number }>(
     access: AccessContext, operation: 'enroll' | 'evidence', input: Command,
-    invoke: (current: AccessContext, packet: Omit<Command, 'clientCommandId'> & { commandId: string; correlationId: string }) => Promise<ResolutionLearningSourceResult>,
+    invoke: (current: AccessContext, packet: Omit<Command, 'clientCommandId'> & { commandId: string; correlationId: string }, boundary: {
+      readonly signal: AbortSignal; ensure(): void; current(): Promise<AccessContext>;
+    }) => Promise<ResolutionLearningSourceResult>,
     contentFence?: (view: StaffTicketView, packet: Omit<Command, 'clientCommandId'>,
       current: () => Promise<AccessContext>) => Promise<LearningIntakeContentFence | undefined>,
     evidenceOperation: 'verified_fix' | 'successful_test' = 'verified_fix',
@@ -365,7 +369,7 @@ function createLearningRuntime(
       async (current, packet, _signal, boundary): Promise<LearningIntakeRecoveryResult> => {
         const scope = { ticketId: packet.ticketId, commandId: packet.commandId, operation };
         // An exact accepted ACK wins before any mutable ticket observation.
-        try { return { ...scope, outcome: 'accepted', result: await invoke(current, packet) }; }
+        try { return { ...scope, outcome: 'accepted', result: await invoke(current, packet, boundary) }; }
         catch (error) { boundary.ensure(); if (!(error instanceof SupportDeskConflictError)) throw error; }
         const read = options.application.readStaffTicket;
         if (read === undefined) throw new SupportLearningUnavailableError();
@@ -383,7 +387,7 @@ function createLearningRuntime(
         // excludes future application. Public message/status/cycle repairs
         // advance the ticket revision. Retry the exact command AFTER the proof
         // so a raced accepted receipt wins before ownership is released.
-        try { return { ...scope, outcome: 'accepted', result: await invoke(await boundary.current(), packet) }; }
+        try { return { ...scope, outcome: 'accepted', result: await invoke(await boundary.current(), packet, boundary) }; }
         catch (error) { boundary.ensure(); if (!(error instanceof SupportDeskConflictError)) throw error; }
         // This proves that the old revision cannot act in the future. Earlier
         // acceptance may remain historically unknown for retained legacy data.
@@ -449,6 +453,30 @@ function createLearningRuntime(
     });
   }
 
+  function submitSuccessfulEvidence(
+    access: AccessContext,
+    packet: SubmitResolutionEvidenceCommand,
+    boundary: { readonly signal: AbortSignal; ensure(): void; current(): Promise<AccessContext> },
+    verifyHumanBeforeCommit?: LearningEvidenceHumanGuard,
+  ) {
+    return options.application.submitResolutionEvidence(access, packet, {
+      signal: boundary.signal,
+      async verifyBeforeCommit() {
+        boundary.ensure();
+        const assertion =
+          verifyHumanBeforeCommit === undefined
+            ? (await boundary.current(), undefined)
+            : await verifyHumanBeforeCommit();
+        boundary.ensure();
+        return () => {
+          boundary.ensure();
+          assertion?.();
+          return true;
+        };
+      },
+    });
+  }
+
   return Object.freeze({
     enroll: (access: AccessContext, input: LearningEnrollmentPacket) =>
       command(access, supportPermissions.learningEvidenceSubmit, 'enroll', input,
@@ -456,12 +484,14 @@ function createLearningRuntime(
     submitVerifiedFix: (access: AccessContext, input: LearningVerifiedFixPacket) =>
       command(access, supportPermissions.learningEvidenceSubmit, 'verified_fix', input,
         (current, packet) => options.application.submitResolutionEvidence(current, packet)),
-    submitSuccessfulTest: (access: AccessContext, input: LearningSuccessfulTestPacket) =>
+    submitSuccessfulTest: (access: AccessContext, input: LearningSuccessfulTestPacket,
+      verifyHumanBeforeCommit?: LearningEvidenceHumanGuard) =>
       command(access, supportPermissions.learningEvidenceSubmit, 'successful_test', input,
-        (current, packet) => options.application.submitResolutionEvidence(current, packet)),
-    recoverSuccessfulTest: (access: AccessContext, input: LearningSuccessfulTestPacket) =>
+        (current, packet, _signal, boundary) => submitSuccessfulEvidence(current, packet, boundary, verifyHumanBeforeCommit)),
+    recoverSuccessfulTest: (access: AccessContext, input: LearningSuccessfulTestPacket,
+      verifyHumanBeforeCommit?: LearningEvidenceHumanGuard) =>
       recoverIntake(access, 'evidence', input,
-        (current, packet) => options.application.submitResolutionEvidence(current, packet), undefined, 'successful_test'),
+        (current, packet, boundary) => submitSuccessfulEvidence(current, packet, boundary, verifyHumanBeforeCommit), undefined, 'successful_test'),
     recoverEnrollment: (access: AccessContext, input: LearningEnrollmentPacket) =>
       recoverIntake(access, 'enroll', input, (current, packet) => options.application.enrollResolutionLearning(current, packet)),
     recoverVerifiedFix: (access: AccessContext, input: LearningVerifiedFixPacket) =>

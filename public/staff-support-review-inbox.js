@@ -130,7 +130,7 @@
           const row = create('li');
           const button = create(
             'button',
-            item.ticketId + ' Â· ' + item.label,
+            item.ticketId + ' · ' + item.label,
             'ticket',
           );
           button.type = 'button';

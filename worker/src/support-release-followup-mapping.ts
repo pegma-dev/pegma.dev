@@ -31,6 +31,7 @@ import { knowledgeDigest } from './knowledge-evidence';
 import { canonical } from './support-openrouter-model';
 import {
   recordSupportFollowupRelease,
+  supportFollowupReleaseObservationKey,
   supportFollowupReleaseFingerprint,
   supportFollowupReleaseObservations,
 } from './support-release-followup-releases';
@@ -133,6 +134,7 @@ const headSchema = z
     packet: verifySupportFollowupMappingInput,
     binding: bindingSchema,
     releaseEpoch: ordinal.min(1),
+    releaseJournalVersion: z.literal(2).optional(),
     withdrawn: z.boolean(),
   })
   .strict();
@@ -435,6 +437,7 @@ export function createSupportFollowupMappings(
       packet: verified,
       binding,
       releaseEpoch: observation?.epoch ?? old!.releaseEpoch,
+      releaseJournalVersion: 2,
       withdrawn,
     };
     const result: SupportFollowupMappingReceipt = {
@@ -568,10 +571,13 @@ export function createSupportFollowupMappings(
         return null;
       const [release, observed] = await Promise.all([
         releases.get(componentReleaseKey(live.repositoryId)),
-        observations.get({ partition: 'repositories', id: live.repositoryId }),
+        observations.get(
+          supportFollowupReleaseObservationKey(live.repositoryId),
+        ),
       ]);
       const releaseCurrent =
         release &&
+        head.releaseJournalVersion === 2 &&
         observed?.state === 'active' &&
         observed.epoch === head.releaseEpoch &&
         release.releaseId === head.packet.releaseRef &&
@@ -601,10 +607,9 @@ export function createSupportFollowupMappings(
           records.get(headKey),
           options.resolvePrincipal(head.actorId),
           releases.get(componentReleaseKey(live.repositoryId)),
-          observations.get({
-            partition: 'repositories',
-            id: live.repositoryId,
-          }),
+          observations.get(
+            supportFollowupReleaseObservationKey(live.repositoryId),
+          ),
         ]);
       if (
         canonical(closingRelease) !== canonical(release) ||
@@ -795,7 +800,7 @@ export function createSupportFollowupMappings(
       const head = value?.kind === 'mapping' ? value : undefined;
       const [release, observation, mapper] = await Promise.all([
         releases.get(componentReleaseKey(repositoryId)),
-        observations.get({ partition: 'repositories', id: repositoryId }),
+        observations.get(supportFollowupReleaseObservationKey(repositoryId)),
         head === undefined
           ? Promise.resolve(null)
           : options.resolvePrincipal(head.actorId),
@@ -830,6 +835,7 @@ export function createSupportFollowupMappings(
               withdrawn: head.withdrawn,
               current:
                 !head.withdrawn &&
+                head.releaseJournalVersion === 2 &&
                 mapper !== null &&
                 mapper.roles.includes(SUPPORT_ROLE) &&
                 hasPermission(

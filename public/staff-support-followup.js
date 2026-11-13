@@ -7,6 +7,7 @@
     let context = null;
     let work = null;
     let owner = null;
+    let ownerState = null;
     let epoch = 0;
     let busy = false;
     let retryAt = 0;
@@ -103,7 +104,10 @@
           field,
         ),
       ),
-      labelled('Public facts JSON: one to four unique {reference,text} entries', facts),
+      labelled(
+        'Public facts JSON: one to four unique {reference,text} entries',
+        facts,
+      ),
       labelled(
         'I verified these issue, deployment and product facts.',
         verified,
@@ -203,6 +207,7 @@
     add('retest-receipt', 'Associate this report with the retest');
     add('retest-result', 'Record the prepared retest result');
     add('exact-retry', 'Retry the exact previous command');
+    add('discard', 'Discard an unsent or rejected command');
     root.replaceChildren(
       heading,
       status,
@@ -238,8 +243,9 @@
           !ready ||
           busy ||
           now() < retryAt ||
-          (['exact-retry', 'retest-result'].includes(action)
+          (['exact-retry', 'retest-result', 'discard'].includes(action)
             ? !owns ||
+              (action === 'discard' && !canDiscard()) ||
               (action === 'retest-result' && owner.operation !== 'retest')
             : owner !== null) ||
           (action === 'report-read' && work === null) ||
@@ -282,6 +288,35 @@
           },
           Math.min(60_000, retryAt - now()),
         );
+    }
+    function canDiscard() {
+      return (
+        owner !== null &&
+        ownerState !== null &&
+        !ownerState.uncertain &&
+        (!ownerState.sent || ownerState.rejected)
+      );
+    }
+    async function ownedRequest(send, qualify) {
+      const state = ownerState;
+      const previouslyUncertain = state.uncertain;
+      state.sent = true;
+      state.uncertain = true;
+      state.rejected = false;
+      let response;
+      try {
+        response = await send();
+      } catch (error) {
+        // A closed refusal cannot erase a prior unknown acknowledgement.
+        if ([400, 409, 413].includes(error.status) && !previouslyUncertain) {
+          state.uncertain = false;
+          state.rejected = true;
+        }
+        throw error;
+      }
+      const result = await qualify(response);
+      state.uncertain = previouslyUncertain;
+      return result;
     }
     function clearPrivate() {
       work = null;
@@ -571,7 +606,7 @@
       const token = epoch;
       if (
         owner !== null &&
-        (!['exact-retry', 'retest-result'].includes(action) ||
+        (!['exact-retry', 'retest-result', 'discard'].includes(action) ||
           owner.actorSubject !== selected.actorSubject ||
           owner.ticketId !== selected.ticketId)
       )
@@ -581,6 +616,16 @@
       render();
       try {
         let session = await authority(token, selected);
+        if (action === 'discard') {
+          if (!canDiscard()) return;
+          owner = null;
+          ownerState = null;
+          notify();
+          clearPrivate();
+          status.textContent =
+            'The unsent or rejected command was discarded locally. Reload current follow-up state before preparing another command.';
+          return;
+        }
         if (action === 'report-read') {
           if (
             !currentRetestRequests().some(
@@ -902,8 +947,14 @@
                   ),
                   { local: true },
                 );
-              if (new Set(publicFacts.map((fact) => fact.reference)).size !== publicFacts.length)
-                throw Object.assign(new Error('Each public fact needs a unique reference.'), {local:true});
+              if (
+                new Set(publicFacts.map((fact) => fact.reference)).size !==
+                publicFacts.length
+              )
+                throw Object.assign(
+                  new Error('Each public fact needs a unique reference.'),
+                  { local: true },
+                );
               Object.assign(body, {
                 releaseRef: required(
                   mappingFields.releaseRef.value,
@@ -994,6 +1045,7 @@
             body: JSON.stringify(body),
             ...body,
           });
+          ownerState = { sent: false, uncertain: false, rejected: false };
           notify();
         }
         const packet = owner;
@@ -1007,27 +1059,35 @@
               },
               body: packet.body,
             };
-            const response = options.requestWithStatus
-              ? await options.requestWithStatus(
-                  path(selected, packet.operation),
-                  init,
+            return ownedRequest(
+              async () =>
+                options.requestWithStatus
+                  ? options.requestWithStatus(
+                      path(selected, packet.operation),
+                      init,
+                    )
+                  : {
+                      status: 200,
+                      body: await request(
+                        path(selected, packet.operation),
+                        init,
+                      ),
+                    },
+              async (response) => {
+                ensure(token, selected);
+                const closing = await readSession();
+                ensure(token, selected);
+                if (
+                  !sameSession(session, closing) ||
+                  response.body?.csrfToken !== closing.csrfToken
                 )
-              : {
-                  status: 200,
-                  body: await request(path(selected, packet.operation), init),
-                };
-            ensure(token, selected);
-            const closing = await readSession();
-            ensure(token, selected);
-            if (
-              !sameSession(session, closing) ||
-              response.body?.csrfToken !== closing.csrfToken
-            )
-              throw new Error('unconfirmed_preparation_session');
-            return preparationResult(
-              response.status,
-              response.body?.result,
-              packet,
+                  throw new Error('unconfirmed_preparation_session');
+                return preparationResult(
+                  response.status,
+                  response.body?.result,
+                  packet,
+                );
+              },
             );
           };
           let result = await sendPreparation();
@@ -1055,30 +1115,38 @@
             body: JSON.stringify(body),
             ...body,
           });
+          ownerState = { sent: false, uncertain: false, rejected: false };
           notify();
           clearPrivate();
           status.textContent =
             'Report associated. No retest result has been recorded. Choose Record the prepared retest result.';
           return;
         }
-        const value = await request(path(selected, packet.operation), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Pegma-CSRF': session.csrfToken,
+        const value = await ownedRequest(
+          () =>
+            request(path(selected, packet.operation), {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Pegma-CSRF': session.csrfToken,
+              },
+              body: packet.body,
+            }),
+          async (response) => {
+            ensure(token, selected);
+            const closing = await readSession();
+            ensure(token, selected);
+            if (
+              !sameSession(session, closing) ||
+              response?.csrfToken !== closing.csrfToken ||
+              !ack(response, packet)
+            )
+              throw new Error('unconfirmed_exact_command');
+            return response;
           },
-          body: packet.body,
-        });
-        ensure(token, selected);
-        const closing = await readSession();
-        ensure(token, selected);
-        if (
-          !sameSession(session, closing) ||
-          value?.csrfToken !== closing.csrfToken ||
-          !ack(value, packet)
-        )
-          throw new Error('unconfirmed_exact_command');
+        );
         owner = null;
+        ownerState = null;
         notify();
         clearPrivate();
         status.textContent =
@@ -1109,7 +1177,9 @@
         status.textContent =
           owner === null
             ? 'Follow-up is unavailable. Check current access and retry the read.'
-            : 'The original command may have completed. Restore current access, then retry its exact packet.';
+            : canDiscard()
+              ? 'The command was rejected. Discard it locally, then reload current follow-up state.'
+              : 'The original command may have completed. Restore current access, then retry its exact packet.';
         if ([401, 403].includes(error.status)) {
           suspend();
           options.onAccessLost?.({ status: error.status });
@@ -1141,7 +1211,9 @@
           status.textContent =
             owner === null
               ? 'Check the optional release-follow-up controls.'
-              : 'Current ticket loaded. Retry the exact previous command.';
+              : canDiscard()
+                ? 'The original command is unsent or rejected. Discard it locally to reload current follow-up state.'
+                : 'Current ticket loaded. Retry the exact previous command.';
         root.hidden = false;
         render();
       },

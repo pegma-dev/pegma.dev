@@ -309,7 +309,7 @@ export function createSupportFollowupRetests(
     permit(access);
     const actual = ports(signal);
     const key = { ticketId, workId: packet.workId };
-    const [work, ticket] = await Promise.all([
+    const [work] = await Promise.all([
       actual.application.readEngineeringFollowupWork(access, key),
       actual.application.readStaffTicket(access, ticketId),
     ]);
@@ -330,7 +330,6 @@ export function createSupportFollowupRetests(
       !request ||
       context.issueHead.state !== 'closed' ||
       context.deploymentHead.state !== 'deployed' ||
-      ticket.ticket.revision !== packet.expectedTicketRevision ||
       revision !== packet.expectedTicketRevision
     )
       throw new ApiError(409, 'followup_retest_changed');

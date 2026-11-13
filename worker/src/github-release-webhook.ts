@@ -1,5 +1,4 @@
 import { createWebhookLedger, type WebhookLedger } from '@pegma/webhooks';
-import { recordSupportFollowupRelease } from './support-release-followup-releases';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import type { Store } from '@pegma/storage-core';
 import type { Logger } from '@pegma/spine';
@@ -44,14 +43,11 @@ export interface HandleGitHubReleaseWebhookOptions {
   readonly config: GitHubReleaseWebhookConfig;
   readonly now?: string;
   readonly ledger?: WebhookLedger;
-  /** Optional SD05 Source journal; unrelated release processing keeps its old I/O. */
+  /** Compatibility setting; projection epochs also fence changes while OFF. */
   readonly followupTracking?: () => boolean;
 }
 
-function jsonResponse(
-  status: number,
-  body: Record<string, unknown>,
-): Response {
+function jsonResponse(status: number, body: Record<string, unknown>): Response {
   return Response.json(body, {
     status,
     headers: {
@@ -373,8 +369,6 @@ export async function handleGitHubReleaseWebhook(
     if (decision.kind === 'upsert' || decision.kind === 'delete') {
       await invalidateReleaseRepositoryEtag(store, facts.repositoryId);
     }
-    if (options.followupTracking?.() === true)
-      await recordSupportFollowupRelease(store, facts.repositoryId);
     await ledger.markProcessed(deliveryId);
     try {
       await markReleaseWebhookSuccess(store, observedAt);
@@ -383,8 +377,7 @@ export async function handleGitHubReleaseWebhook(
       // marker failure must not re-enter markFailed or flip the delivery.
       logger.log('error', 'github_release_webhook.ops_marker_failed', {
         deliveryId,
-        error:
-          markerError instanceof Error ? markerError.name : 'unknown',
+        error: markerError instanceof Error ? markerError.name : 'unknown',
       });
     }
     logger.log('info', 'github_release_webhook.processed', {

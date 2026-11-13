@@ -14,7 +14,7 @@ import { createSupportReleaseFollowupRuntime } from './support-release-followup'
 import { createSupportReleaseFollowupCheckCleanup } from '@pegma/support-desk-ai/openrouter';
 import { createSupportLearningComposition, type SupportLearningCompositionOptions } from './support-learning-composition';
 import { createSupportLearningBootstrap, type SupportLearningSourceEnvironment } from './support-learning-bootstrap';
-import { createSupportPaidBootstrap, type SupportPaidEnvironment } from './support-paid-bootstrap';
+import { createSupportPaidBootstrap, supportPaidBootstrapReusable, type SupportPaidEnvironment } from './support-paid-bootstrap';
 import { createSupportLearningDriver, type SupportLearningDeferredCheckHint } from './support-learning-driver';
 import { createProductionSupportEngineering, type SupportEngineeringProductionOptions } from './support-engineering-production';
 import { composeSupportEngineeringDriver, composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
@@ -675,6 +675,7 @@ const paidSelections = new WeakMap<
     signature: string;
     promise: Promise<void>;
     bundle: PaidBundle;
+    settled: boolean;
   }
 >();
 async function prepareDefault(env: AppEnv) {
@@ -695,13 +696,15 @@ async function prepareDefault(env: AppEnv) {
     env.PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED,
   ]);
   const previous = paidSelections.get(env);
-  if (previous?.signature === signature) return previous.promise;
+  if (previous?.signature === signature && (!previous.settled || supportPaidBootstrapReusable(previous.bundle)))
+    return previous.promise;
   const entry = {
     raw,
     source,
     signature,
     bundle: undefined as PaidBundle,
     promise: Promise.resolve(),
+    settled: false,
   };
   entry.promise = createSupportPaidBootstrap(env, {
     isSelected: () =>
@@ -715,7 +718,8 @@ async function prepareDefault(env: AppEnv) {
     })
     .catch(() => {
       entry.bundle = undefined;
-    });
+    })
+    .finally(() => { entry.settled = true; });
   paidSelections.set(env, entry);
   return entry.promise;
 }

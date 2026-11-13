@@ -338,7 +338,7 @@
     async function refresh() {
       return operation(async (generation) => {
         hidePrivate();
-        notice('Reading current learning sourceÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦');
+        notice('Reading current learning source…');
         const actor = await viewer(generation);
         let result = null;
         try { result = await call(base(), { method: 'GET' }, generation, actor); }
@@ -354,7 +354,7 @@
         source = next;
         ready = true;
         sourceText.textContent = next === null ? 'No learning source was returned.'
-          : `Source ${next.sourceGeneration} Ãƒâ€šÃ‚Â· resolution cycle ${next.resolutionCycle} Ãƒâ€šÃ‚Â· ${next.state}${next.heldReason ? ' Ãƒâ€šÃ‚Â· ' + next.heldReason : ''}${next.reconciliationPending ? ' Ãƒâ€šÃ‚Â· reconciliation pending' : ''}`;
+          : `Source ${next.sourceGeneration} · resolution cycle ${next.resolutionCycle} · ${next.state}${next.heldReason ? ' · ' + next.heldReason : ''}${next.reconciliationPending ? ' · reconciliation pending' : ''}`;
         privatePanel.hidden = false;
         notice(pending ? 'An earlier action is unresolved. Reads do not acknowledge it; retry the same action explicitly.' : 'Current source read. Each action is checked again by the server.');
       });
@@ -395,7 +395,7 @@
         privatePanel.hidden = false;
         if (kind === 'work') {
           work = next;
-          workText.textContent = `Work ${next.workGeneration} Ãƒâ€šÃ‚Â· ${next.status} Ãƒâ€šÃ‚Â· ${next.stage}${next.hasProposal ? ' Ãƒâ€šÃ‚Â· private proposal available' : ''}`;
+          workText.textContent = `Work ${next.workGeneration} · ${next.status} · ${next.stage}${next.hasProposal ? ' · private proposal available' : ''}`;
         } else {
           // The actual checked revision is inert text. Echo its immutable intent
           // as a binding; the server/SDK recheck authority and new-write proof.

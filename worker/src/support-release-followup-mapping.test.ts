@@ -141,6 +141,58 @@ async function fixture(fault?: 'lost_ack') {
 }
 
 describe('real staff-verified durable release/deployment mapping', () => {
+  it('keeps legacy journal mappings unapproved until explicit current staff verification', async () => {
+    const f = await fixture();
+    const original = await f.mappings.verify(
+      f.context,
+      f.f.identity.ticketId,
+      f.packet,
+    );
+    const records = f.store.collection(supportFollowupMappings);
+    const head = (await records.list(f.f.identity.ticketId)).find(
+      (row) => row.kind === 'mapping',
+    );
+    if (head?.kind !== 'mapping')
+      throw new Error('Actual host mapping required');
+    const { releaseJournalVersion: _version, ...legacy } = head;
+    await records.put(legacy);
+    expect(
+      (
+        await f.mappings.read(
+          f.context,
+          f.f.identity.ticketId,
+          f.packet.repositoryId,
+          f.packet.issueId,
+        )
+      ).mapping?.current,
+    ).toBe(false);
+    expect(await f.observe(original.inputReference)).toMatchObject({
+      outcome: 'held',
+    });
+    const ticket = await f.host.application.readStaffTicket(
+      f.access,
+      f.f.identity.ticketId,
+    );
+    const verified = await f.mappings.verify(f.context, f.f.identity.ticketId, {
+      ...f.packet,
+      commandId: crypto.randomUUID(),
+      expectedTicketRevision: ticket.ticket.revision,
+      expectedMappingGeneration: original.mappingGeneration,
+    });
+    expect(verified.mappingGeneration).toBe(original.mappingGeneration + 1);
+    expect(
+      (
+        await f.mappings.read(
+          f.context,
+          f.f.identity.ticketId,
+          f.packet.repositoryId,
+          f.packet.issueId,
+        )
+      ).mapping?.current,
+    ).toBe(true);
+    expect(f.f.state.modelCalls).toBe(0);
+  });
+
   it('binds an actual accepted association and authenticated-projection facts before SDK observation with models OFF', async () => {
     const f = await fixture();
     const choices = await f.mappings.choices(f.context, f.f.identity.ticketId);

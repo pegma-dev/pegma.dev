@@ -191,7 +191,7 @@ async function hashOnlyReviewPacket(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('unregistered staff learning HTTP with current public host authority', () => {
-  it('owns successful-test browser authority at admission, after body and response without duplicate runtime reads', async () => {
+  it('owns successful-test browser authority at admission, after body, before commit and response without duplicate runtime reads', async () => {
     const f = await fixture(true);
     const ticket = await f.learning.terminal();
     expect((await f.send(f.request('enroll', { commandId: 'BROWSER-TEST-ENROLL',
@@ -201,7 +201,7 @@ describe('unregistered staff learning HTTP with current public host authority', 
       commandId: 'BROWSER-TEST-BOUNDARY', expectedRevision: ticket.revision,
       resolutionCycle: 1, solutionMessageId: 'learning-solution', receipt: 'unavailable-real-test-receipt' }));
     expect(response.status).toBe(200);
-    expect(f.hooks.roleReads).toBe(3);
+    expect(f.hooks.roleReads).toBe(4);
     expect(f.learning.state.modelCalls).toBe(0);
   });
 
@@ -282,7 +282,7 @@ describe('unregistered staff learning HTTP with current public host authority', 
         receipt: 'unavailable-real-test-receipt' } };
     await a.submitSuccessfulTest(actor, packet);
     await b.submitSuccessfulTest(actor, packet);
-    expect(first).toBe(2);
+    expect(first).toBe(3);
     expect(second).toBe(2);
   });
 

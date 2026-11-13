@@ -68,6 +68,73 @@ async function observedRetest() {
   return { ...result, observation };
 }
 describe('actual KB report association for exact release follow-up retests', () => {
+  it.each(['note', 'priority'] as const)(
+    'prepares and records an exact Work-bound retest after an unrelated ticket %s advances its revision',
+    async (change) => {
+      const { f, work, packet } = await prepared();
+      const command = {
+        ticketId: work.ticketId,
+        commandId: crypto.randomUUID(),
+        correlationId: 'fictional-unrelated-ticket-change',
+        expectedRevision: packet.expectedTicketRevision,
+      };
+      const changed =
+        change === 'note'
+          ? await f.host.application.addNote(f.staff, {
+              ...command,
+              messageId: crypto.randomUUID(),
+              body: 'Fictional internal handoff note.',
+            })
+          : await f.host.application.changePriority(f.staff, {
+              ...command,
+              priority: 'urgent',
+            });
+      expect(changed.ticket.revision).toBeGreaterThan(
+        packet.expectedTicketRevision,
+      );
+      const current = await f.host.application.readEngineeringFollowupWork(
+        f.staff,
+        {
+          ticketId: work.ticketId,
+          workId: work.workId,
+        },
+      );
+      expect(current.workGeneration).toBe(packet.expectedWorkGeneration);
+      expect(current.acceptedTicketRevision).toBe(
+        packet.expectedTicketRevision,
+      );
+      const response = await f.api(f.request('retest-receipt', packet));
+      expect(response.status).toBe(200);
+      const ack = engineeringHttpResult(await engineeringHttpObject(response));
+      const submitted = await f.api(
+        f.request('retest', {
+          commandId: crypto.randomUUID(),
+          workId: work.workId,
+          retestRequestId: packet.retestRequestId,
+          receiptReference: ack.receipt,
+        }),
+      );
+      expect(submitted.status).toBe(200);
+      expect(
+        engineeringHttpResult(await engineeringHttpObject(submitted)),
+      ).toMatchObject({
+        outcome: 'recorded',
+        result: 'passed',
+      });
+      expect(
+        (
+          await f.api(
+            f.request('retest-receipt', {
+              ...packet,
+              commandId: crypto.randomUUID(),
+              expectedTicketRevision: changed.ticket.revision,
+            }),
+          )
+        ).status,
+      ).toBe(409);
+    },
+  );
+
   it('rechecks the real report when its operation-local confirmation closes after reset', async () => {
     const { f, packet, observation } = await observedRetest();
     expect(observation.verified.result).toBe('passed');

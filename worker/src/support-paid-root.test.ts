@@ -151,6 +151,60 @@ async function fixture() {
   };
 }
 describe('normal default Worker paid profile selection with actual Memory SDK/auth', () => {
+  it('retries failed receipt-key construction on the next unchanged public selection', async () => {
+    const t = await fixture();
+    const graphs = vi.spyOn(graphModule, 'createSupportLearningComposition');
+    const importKey = vi
+      .spyOn(crypto.subtle, 'importKey')
+      .mockRejectedValueOnce(
+        new Error('Fictional transient local key import failure'),
+      );
+    const path = '/api/support/admin/tickets/' + learningTicketId + '/learning';
+    expect(
+      (
+        await t.call(path + '/enroll', {
+          commandId: 'fictional-recover-key-enroll',
+          expectedRevision: t.ticket.revision,
+        })
+      ).status,
+    ).toBe(200);
+    const unavailable = graphs.mock.results.at(-1)!.value!;
+    expect(unavailable.processingEnabled()).toBe(false);
+    expect((await t.call(path)).status).toBe(200);
+    const recovered = graphs.mock.results.at(-1)!.value!;
+    expect(recovered.processingEnabled()).toBe(true);
+    expect(unavailable.processingEnabled()).toBe(false);
+    const imports = importKey.mock.calls.length;
+    expect((await t.call(path)).status).toBe(200);
+    expect(graphs.mock.results.at(-1)!.value!.processingEnabled()).toBe(true);
+    expect(importKey).toHaveBeenCalledTimes(imports);
+  });
+
+  it('requalifies an inline receipt-key replacement and fences the prior default paid selection', async () => {
+    const t = await fixture();
+    const graphs = vi.spyOn(graphModule, 'createSupportLearningComposition');
+    const path = '/api/support/admin/tickets/' + learningTicketId + '/learning';
+    expect(
+      (
+        await t.call(path + '/enroll', {
+          commandId: 'fictional-replace-key-enroll',
+          expectedRevision: t.ticket.revision,
+        })
+      ).status,
+    ).toBe(200);
+    const previous = graphs.mock.results.at(-1)!.value!;
+    expect(previous.processingEnabled()).toBe(true);
+    Reflect.set(
+      t.env,
+      'SUPPORT_INDEPENDENT_CHECK_RECEIPT_KEY_BASE64',
+      btoa('r'.repeat(32)),
+    );
+    expect(previous.processingEnabled()).toBe(false);
+    expect((await t.call(path)).status).toBe(200);
+    expect(graphs.mock.results.at(-1)!.value!.processingEnabled()).toBe(true);
+    expect(previous.processingEnabled()).toBe(false);
+  });
+
   it('selects Source intake and paired checkers without injected composition, then seeds/consumes the default learning queue', async () => {
     const t = await fixture();
     const calls: unknown[] = [];

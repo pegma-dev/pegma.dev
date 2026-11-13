@@ -322,11 +322,19 @@ export function createSupportLearningHandlers(options: SupportLearningHandlerOpt
             result = await withCurrentAccess<unknown>((access) =>
               options
                 .runtime()
-                [
-                  operation === 'evidence'
-                    ? 'submitSuccessfulTest'
-                    : 'recoverSuccessfulTest'
-                ](access, input),
+                [operation === 'evidence' ? 'submitSuccessfulTest' : 'recoverSuccessfulTest'](
+                  access,
+                  input,
+                  async () => {
+                    await current();
+                    browser.assertCurrent();
+                    return () => {
+                      if (!enabled()) throw new ApiError(503, 'support_learning_disabled');
+                      browser.assertCurrent();
+                      return true;
+                    };
+                  },
+                ),
             );
           } else {
             // Keep the additional authority observation for legacy fix packets.

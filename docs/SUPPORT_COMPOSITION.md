@@ -16,13 +16,16 @@ provider and customer activation retain their acceptance gates. See the
 
 ## Packages
 
-Exact published versions:
+Public selection as of 2026-11-13: Support Desk `0.2.9`, Knowledge Base `0.1.8`
+and Sessions `0.3.0`. [`package.json`](../package.json) and
+[`pnpm-lock.yaml`](../pnpm-lock.yaml) are the source of truth for current direct
+selections and the installed graph.
 
-- `@pegma/support-desk-application@0.2.7`
-- `@pegma/support-desk-contracts@0.2.7`
-- `@pegma/support-desk-core@0.2.7`
-- `@pegma/support-desk-templates@0.2.7`
-- `@pegma/support-desk-ai@0.2.7` (optional coordinator)
+- `@pegma/support-desk-application@0.2.9`
+- `@pegma/support-desk-contracts@0.2.9`
+- `@pegma/support-desk-core@0.2.9`
+- `@pegma/support-desk-templates@0.2.9`
+- `@pegma/support-desk-ai@0.2.9` (optional coordinator)
 - `@pegma/authorization-admin@0.4.0` (role administration service)
 - `@pegma/authorization-core@0.4.0` (AccessContext resolution)
 - `@pegma/authorization-policy@0.4.0` (PolicyDocumentV1 schema validation)
@@ -30,14 +33,18 @@ Exact published versions:
 
 All five Support Desk packages have completed producer publication and
 registry qualification. The optional AI package selects exact KB application
-and contracts `0.1.6`; the host selects all four KB packages at that version.
+and contracts `0.1.8`; the host selects all four KB packages at that version.
 Producer qualification and installation do not complete host or provider
-acceptance. [Verified Support Desk `0.2.7` release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7),
-[verified KB `0.1.6` release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.6).
+acceptance. [Public Support Desk release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.9),
+[public KB release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.8).
+The earlier [Support `0.2.7`](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7)
+and [KB `0.1.6`](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.6)
+producer checkpoints remain historical; they do not qualify the current host.
 
 Peers already present on the host: `@pegma/storage-core@0.4.0`,
-`@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.2.1`,
-`@pegma/rate-limit@0.2.0`, `@pegma/identity@0.1.2`, `@pegma/spine@0.1.1`.
+`@pegma/storage-cloudflare-d1@0.4.7`, `@pegma/sessions@0.3.0`,
+`@pegma/rate-limit@0.2.0`, `@pegma/identity@0.1.2` and `@pegma/spine`
+(declared range and resolution are recorded in the manifest and lockfile).
 These are direct host selections; the lockfile retains each released package's
 own dependencies, including Support Desk's Spine `0.1.2`. No override or forced
 deduplication replaces that graph.
@@ -48,10 +55,10 @@ uses signed source
 [Strict release verification](https://github.com/pegma-dev/support-desk/actions/runs/42907283767/job/130161276758)
 qualifies those historical producer packages. The earlier public `0.2.5` graph
 passed the [normal local and CI validation checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
-That checkpoint does not qualify the current `0.2.7` host graph. Current host
-validation, review and deployment acceptance remain pending. The current
-[Sessions `0.2.1` selection](https://github.com/pegma-dev/sessions/releases/tag/v0.2.1)
-includes the verified producer fix for the earlier `0.2.0` default-clock
+That checkpoint does not qualify the current public graph above. Current host
+validation, review and deployment acceptance remain pending. The earlier
+[Sessions `0.2.1` checkpoint](https://github.com/pegma-dev/sessions/releases/tag/v0.2.1)
+included the verified producer fix for the earlier `0.2.0` default-clock
 concurrency defect under a consistent advancing clock.
 
 ## Storage namespace
@@ -82,9 +89,13 @@ unified host policy's `defaults` (no paid entitlement):
 - `support.ticket.read.own`
 - `support.ticket.reply.own`
 - `support.ticket.request_person.own`
+- `support.ticket.confirm_success.own`
 
-Policy version: `pegma.dev-policy-7` — one `PolicyDocumentV1` for the whole
-host, schema-validated in tests (see `docs/ROLE_ADOPTION_PLAN.md`).
+The current [stored-role policy](../worker/src/support-access.ts) is
+`pegma.dev-policy-8` — one `PolicyDocumentV1` for the whole host,
+schema-validated in tests (see `docs/ROLE_ADOPTION_PLAN.md`). Version 8 adds
+authenticated owner success confirmation; version 7 introduced the three human
+release-follow-up rights. These are authority revisions; the schema remains v1.
 
 ### Staff (stored `Support` role)
 
@@ -113,6 +124,9 @@ The `Support` role maps to:
 - `support.engineering.review`
 - `support.engineering.withdraw`
 - `support.engineering.policy.read`
+- `support.engineering.followup.read`
+- `support.engineering.followup.review`
+- `support.engineering.followup.evidence.submit`
 
 `Admin` and `Knowledge` alone do not grant Support queue authority. Taking over
 changes handling authority; the existing assignment action remains separate.
@@ -162,6 +176,7 @@ Worker routes (same-origin session + CSRF `X-Pegma-CSRF` for mutations):
 | `GET`  | `/api/support/tickets/:id`                | Read own; missing/non-owned → same 404    |
 | `POST` | `/api/support/tickets/:id/replies`        | Reply (rate-limited)                      |
 | `POST` | `/api/support/tickets/:id/request-person` | Owned human request; body `{ commandId }` |
+| `POST` | `/api/support/tickets/:id/confirm-success` | Owned success confirmation; body `{ commandId, lastSeenVisibleMessageId }` |
 
 ### Staff (`/api/support/admin/…`)
 
@@ -191,7 +206,7 @@ Worker routes (same-origin session + CSRF `X-Pegma-CSRF` for mutations):
 
 ### Human controls
 
-The three human-control routes require the original same-origin browser
+The human-control routes require the original same-origin browser
 session; bearer `Authorization` is rejected. Mutations use the current
 `csrfToken` from the account/ticket response in `X-Pegma-CSRF`. The server
 rechecks current Identity, stored Support authority where required, original
@@ -287,16 +302,16 @@ invocation.
 
 ## Optional resolution learning
 
-The current source selects all five published Support Desk `0.2.7` packages
-with the four direct KB `0.1.6` packages. AI `0.2.7` also declares exact KB
-`0.1.6` dependencies. The public forwarding port preserves KB error instances;
+The current source uses the [public package graph above](#packages), including
+the optional AI coordinator's exact direct KB dependencies. The public
+forwarding port preserves KB error instances;
 no KB `0.1.2` alias, translation shim, second Store, override or private SDK
 import supplies this assembly. The earlier Support `0.2.1` / nested KB `0.1.2`
 compatibility assembly and its failed isolated production-layout diagnostic are
 historical, not current graph or host-acceptance evidence.
 
 The staged learning review admission and Queue worker retained in this branch
-use the published, strictly verified Support Desk `0.2.7` APIs. The earlier
+use the published Support Desk APIs in that graph. The earlier
 `0.2.5` host validation checkpoint remains historical. Current host validation,
 review and deployment acceptance remain pending. Runtime availability and
 feature activation retain their existing trusted composition and readiness
@@ -315,8 +330,10 @@ approval nor delivery publishes a guide: ordinary KB evidence, review and
 publication gates still apply.
 
 Policy `pegma.dev-policy-5` introduced four explicit learning permissions to
-`Support`. Current policy `pegma.dev-policy-7` retains those grants and adds
-human engineering and release-follow-up permissions; learning processing and KB staff access remain
+`Support`. The [current host policy](../worker/src/support-access.ts) retains
+those grants alongside human engineering and release-follow-up permissions;
+authenticated owner success confirmation is a separate customer default.
+Learning processing and KB staff access remain
 separate. Private proposal reads and new review commits also require separately
 current KB `draftRead` and
 `provenanceRead`, normally through `Knowledge` or `Admin`. Browser submissions
@@ -369,7 +386,7 @@ request/maintenance batching and activation limits remain documented in
 ## Staged assistant retrieval is separate
 
 AI `0.2.2` introduced explicit `stagedRetrieval:true`, retained by the current
-`0.2.7` selection; omission remains monolithic. The preparation attempt retrieves authorized sources and records a
+public graph above; omission remains monolithic. The preparation attempt retrieves authorized sources and records a
 bounded no-call request without reserving paid usage. Only its durably
 acknowledged finish returns `prepared`. The host must return and schedule a
 genuinely later physical invocation at or after `nextAttemptAt`, never loop or

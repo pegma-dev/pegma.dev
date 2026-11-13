@@ -66,6 +66,9 @@ function fixture() {
   let sessionEnabled = true;
   let ids = 0;
   let loseAck = false;
+  let refused = 0;
+  let failClosingSession = 0;
+  let closingStatus = 0;
   const calls: { path: string; body?: any }[] = [];
   const accepted: any[] = [];
   const mapping = {
@@ -116,11 +119,14 @@ function fixture() {
         mappingGeneration: 1,
         inputReference: 'Opaque:Mapping:1',
       };
+      if (refused)
+        throw Object.assign(new Error('request_failed'), { status: refused });
       accepted.push(body);
       if (loseAck) {
         loseAck = false;
         throw new Error('lost_ack');
       }
+      closingStatus = failClosingSession;
       return wrap(result);
     }
     if (path.includes('/work?'))
@@ -153,12 +159,18 @@ function fixture() {
   const panel = createPanel({
     root,
     request,
-    readSession: async () =>
-      sessionEnabled
+    readSession: async () => {
+      if (closingStatus) {
+        const status = closingStatus;
+        closingStatus = 0;
+        throw Object.assign(new Error('session_read_failed'), { status });
+      }
+      return sessionEnabled
         ? PG
           ? { subject: actor, csrfToken: 'csrf' }
           : { accountId: actor }
-        : null,
+        : null;
+    },
     readCurrentTicket: async () => ({
       ticket: { id: 'Ticket:A', revision: 9 },
       ...(PG ? { csrfToken: 'csrf' } : {}),
@@ -220,6 +232,12 @@ function fixture() {
     lose() {
       loseAck = true;
     },
+    refuse(status: number) {
+      refused = status;
+    },
+    failClosing(status: number) {
+      failClosingSession = status;
+    },
     changeActor() {
       actor = 'Actor:B';
     },
@@ -273,6 +291,79 @@ describe('explicit staff verified mapping UI', () => {
     expect(f.accepted[1]).toEqual(f.accepted[0]);
     expect(f.panel.hasPending()).toBe(false);
     expect(f.settled).toHaveBeenCalledTimes(1);
+  });
+  it.each([400, 409, 413])(
+    'lets the original actor explicitly discard a closed %s refusal and reload before creating a new packet',
+    async (status) => {
+      const f = fixture();
+      await f.load();
+      f.fill();
+      f.refuse(status);
+      await f.panel.perform('verify-mapping');
+      const rejected = f.calls.at(-1)!.body;
+      expect(f.panel.hasPending()).toBe(true);
+      expect(f.accepted).toEqual([]);
+      await f.panel.perform('discard');
+      expect(f.panel.hasPending()).toBe(false);
+      expect(f.root.textContent).toContain('discarded locally');
+      f.refuse(0);
+      await f.load();
+      f.fill();
+      await f.panel.perform('verify-mapping');
+      expect(f.accepted).toHaveLength(1);
+      expect(f.accepted[0].commandId).not.toBe(rejected.commandId);
+      expect(f.settled).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each([400, 409, 413, 503])(
+    'keeps an earlier unknown ACK nondiscardable after a later %s refusal',
+    async (status) => {
+      const f = fixture();
+      await f.load();
+      f.fill();
+      f.lose();
+      await f.panel.perform('verify-mapping');
+      f.refuse(status);
+      await f.panel.perform('exact-retry');
+      await f.panel.perform('discard');
+      expect(f.panel.hasPending()).toBe(true);
+      expect(f.accepted).toHaveLength(1);
+      expect(f.calls.at(-1)!.body).toEqual(f.accepted[0]);
+      f.refuse(0);
+      await f.panel.perform('exact-retry');
+      expect(f.panel.hasPending()).toBe(false);
+      expect(f.accepted[1]).toEqual(f.accepted[0]);
+    },
+  );
+  it.each([400, 409, 413])(
+    'does not mistake a closing session-read %s failure for rejection of the accepted command',
+    async (status) => {
+      const f = fixture();
+      await f.load();
+      f.fill();
+      f.failClosing(status);
+      await f.panel.perform('verify-mapping');
+      expect(f.accepted).toHaveLength(1);
+      await f.panel.perform('discard');
+      expect(f.panel.hasPending()).toBe(true);
+      f.failClosing(0);
+      await f.panel.perform('exact-retry');
+      expect(f.accepted[1]).toEqual(f.accepted[0]);
+      expect(f.panel.hasPending()).toBe(false);
+    },
+  );
+  it('does not let another account discard the original actor’s rejected packet', async () => {
+    const f = fixture();
+    await f.load();
+    f.fill();
+    f.refuse(409);
+    await f.panel.perform('verify-mapping');
+    f.changeActor();
+    f.open();
+    const calls = f.calls.length;
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(true);
+    expect(f.calls).toHaveLength(calls);
   });
   it('keeps original command ownership across suspension and refuses a different account/ticket', async () => {
     const f = fixture();

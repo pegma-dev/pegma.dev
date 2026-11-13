@@ -131,18 +131,204 @@ describe("normal customer success action", () => {
     Object.assign(page.window, { sessionStorage: storage() });
     await page.until(() => !page.node("confirm-success").disabled);
     page.node("confirm-success").fire("click");
-    await page.drain();
+    await page.until(
+      () => calls === 1 && !page.node("confirm-success").disabled,
+    );
     current = {
       ...account,
       account: { ...account.account, subject: "synthetic-other-owner" },
     };
     page.node("ticket-reload").fire("click");
-    await page.drain();
-    expect(page.node("ticket-detail").hidden).toBe(true);
-    expect(page.node("confirm-success").disabled).toBe(true);
-    page.node("confirm-success").fire("click");
-    await page.drain();
+    await page.until(() => !page.node("ticket-detail").hidden);
+    expect(page.node("ticket-detail").hidden).toBe(false);
+    expect(page.node("confirm-success").textContent).not.toContain("Retry");
     expect(calls).toBe(1);
+    current = account;
+    page.node("ticket-reload").fire("click");
+    await page.until(() => !page.node("ticket-detail").hidden);
+    expect(page.node("confirm-success").textContent).toContain("Retry");
+  });
+  it.each([
+    "{",
+    "null",
+    "[]",
+    JSON.stringify({
+      subject: account.account.subject,
+      ticketId: "ticket-example",
+      body: "null",
+    }),
+    JSON.stringify({
+      subject: account.account.subject,
+      ticketId: "ticket-example",
+      body: [
+        JSON.stringify({
+          commandId: "00112233-4455-4677-8899-aabbccddeeff",
+          lastSeenVisibleMessageId: "solution-1",
+        }),
+      ],
+    }),
+    JSON.stringify({
+      subject: account.account.subject,
+      ticketId: "ticket-example",
+      body: JSON.stringify({
+        commandId: ["00112233-4455-4677-8899-aabbccddeeff"],
+        lastSeenVisibleMessageId: "solution-1",
+      }),
+    }),
+    JSON.stringify({
+      subject: account.account.subject,
+      ticketId: "ticket-example",
+      body: "{",
+    }),
+    JSON.stringify({
+      subject: "another-owner",
+      ticketId: "ticket-example",
+      body: JSON.stringify({
+        commandId: "00112233-4455-4677-8899-aabbccddeeff",
+        lastSeenVisibleMessageId: "solution-1",
+      }),
+    }),
+    JSON.stringify({
+      subject: account.account.subject,
+      ticketId: "another-ticket",
+      body: JSON.stringify({
+        commandId: "00112233-4455-4677-8899-aabbccddeeff",
+        lastSeenVisibleMessageId: "solution-1",
+      }),
+    }),
+    JSON.stringify({
+      subject: account.account.subject,
+      ticketId: "ticket-example",
+      body: JSON.stringify({
+        commandId: "bad",
+        lastSeenVisibleMessageId: "solution-1",
+      }),
+    }),
+    JSON.stringify({
+      subject: account.account.subject,
+      ticketId: "ticket-example",
+      body: JSON.stringify({
+        commandId: "00112233-4455-4677-8899-aabbccddeeff",
+        lastSeenVisibleMessageId: "solution-1",
+        extra: true,
+      }),
+    }),
+  ])(
+    "loads authorized ticket reads without replaying invalid saved data: %s",
+    async (saved) => {
+      const retained = storage();
+      const key =
+        "pegma.support.success.v1:" +
+        encodeURIComponent(account.account.subject) +
+        ":ticket-example";
+      retained.setItem(key, saved);
+      const page = supportBrowser("customer", (call) => ({
+        body: call.path === "/api/identity/session" ? account : view(),
+      }));
+      Object.assign(page.window, { sessionStorage: retained });
+      await page.until(() => !page.node("ticket-detail").hidden);
+      expect(page.node("ticket-status").textContent).toBe("Ticket loaded.");
+      expect(page.node("confirm-success").textContent).not.toContain("Retry");
+      expect(page.calls.filter((call) => call.method === "POST")).toEqual([]);
+      expect(retained.getItem(key)).toBe(saved);
+      page.node("ticket-reload").fire("click");
+      await page.until(() => !page.node("ticket-detail").hidden);
+      expect(page.node("ticket-detail").hidden).toBe(false);
+    },
+  );
+  it("preserves the exact pending owner across A to B to A when session storage is unavailable", async () => {
+    let current = account;
+    const sent: BrowserCall[] = [];
+    const page = supportBrowser("customer", (call) => {
+      if (call.path === "/api/identity/session") return { body: current };
+      if (call.path.endsWith("/confirm-success")) {
+        sent.push(call);
+        if (sent.length === 1) throw new Error("Fictional lost ACK");
+      }
+      return { body: { ...view(), csrfToken: current.csrfToken } };
+    });
+    Object.assign(page.window, {
+      sessionStorage: {
+        getItem() {
+          throw new Error("unavailable");
+        },
+        setItem() {
+          throw new Error("unavailable");
+        },
+        removeItem() {
+          throw new Error("unavailable");
+        },
+      },
+    });
+    await page.until(() => !page.node("confirm-success").disabled);
+    page.node("confirm-success").fire("click");
+    await page.until(
+      () => sent.length === 1 && !page.node("confirm-success").disabled,
+    );
+    expect(sent).toHaveLength(1);
+    current = {
+      account: { ...account.account, subject: "other-owner" },
+      csrfToken: "other-csrf",
+    };
+    page.node("ticket-reload").fire("click");
+    await page.until(
+      () =>
+        !page.node("ticket-detail").hidden &&
+        !page.node("confirm-success").disabled,
+    );
+    expect(page.node("ticket-detail").hidden).toBe(false);
+    expect(page.node("confirm-success").textContent).not.toContain("Retry");
+    expect(sent).toHaveLength(1);
+    current = account;
+    page.node("ticket-reload").fire("click");
+    await page.until(
+      () =>
+        !page.node("ticket-detail").hidden &&
+        !page.node("confirm-success").disabled,
+    );
+    expect(page.node("confirm-success").textContent).toContain("Retry");
+    page.node("confirm-success").fire("click");
+    await page.until(
+      () =>
+        page.node("ticket-status").textContent ===
+        "Resolution confirmed. Thank you.",
+    );
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.body).toBe(sent[0]!.body);
+    expect(sent[1]!.headers.get("X-Pegma-CSRF")).toBe(account.csrfToken);
+  });
+  it("replays a valid restored owner's exact JSON bytes without rebuilding its message fence", async () => {
+    const retained = storage();
+    const body =
+      '{ "lastSeenVisibleMessageId": "solution-1", "commandId": "00112233-4455-4677-8899-aabbccddeeff" }';
+    retained.setItem(
+      "pegma.support.success.v1:" +
+        encodeURIComponent(account.account.subject) +
+        ":ticket-example",
+      JSON.stringify({
+        subject: account.account.subject,
+        ticketId: "ticket-example",
+        body,
+      }),
+    );
+    const sent: BrowserCall[] = [];
+    const page = supportBrowser("customer", (call) => {
+      if (call.path === "/api/identity/session") return { body: account };
+      if (call.path.endsWith("/confirm-success")) sent.push(call);
+      return { body: view("closed", "solution-newer") };
+    });
+    Object.assign(page.window, { sessionStorage: retained });
+    await page.until(() => !page.node("confirm-success").disabled);
+    expect(page.node("confirm-success").textContent).toContain("Retry");
+    page.node("confirm-success").fire("click");
+    await page.until(
+      () =>
+        page.node("ticket-status").textContent ===
+        "Resolution confirmed. Thank you.",
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body).toBe(body);
+    expect(retained.values.size).toBe(0);
   });
   it("requires a new explicit action after a stale-message conflict", async () => {
     let latest = "solution-1";
@@ -260,7 +446,9 @@ describe("staff successful test UI packet compatibility", () => {
     button("evidence").fire("click");
     for (let turn = 0; turn < 100; turn++) await Promise.resolve();
     expect(
-      JSON.parse(calls.find((call) => call.path.endsWith("/evidence"))?.body ?? "{}"),
+      JSON.parse(
+        calls.find((call) => call.path.endsWith("/evidence"))?.body ?? "{}",
+      ),
     ).toMatchObject({
       kind: "successful_test",
       solutionMessageId: "solution-1",
@@ -320,7 +508,8 @@ function reportPanel() {
     capability: true as unknown,
     sessionError: 0,
     report: confirmedReport(),
-    onRequest: undefined as ((call: TestReportCall) => Promise<unknown> | unknown) | undefined,
+    onRequest: undefined as
+      ((call: TestReportCall) => Promise<unknown> | unknown) | undefined,
   };
   let nextCommand = 0;
   const sandbox = {
@@ -329,7 +518,10 @@ function reportPanel() {
     crypto: { randomUUID: () => "unused-random-id" },
   };
   runInNewContext(
-    readFileSync(new URL("../public/staff-support-learning.js", import.meta.url), "utf8"),
+    readFileSync(
+      new URL("../public/staff-support-learning.js", import.meta.url),
+      "utf8",
+    ),
     sandbox,
   );
   const factory = (
@@ -401,7 +593,9 @@ function reportPanel() {
     return found;
   };
   const button = (key: string) => {
-    const found = root.all().find((node) => node.dataset.learningAction === key);
+    const found = root
+      .all()
+      .find((node) => node.dataset.learningAction === key);
     if (!found) throw new Error("Missing learning action " + key);
     return found;
   };
@@ -448,7 +642,9 @@ describe("staff report association ownership in the actual learning panel", () =
       expect(page.button("report-read").disabled).toBe(true);
       expect(page.button("report-associate").disabled).toBe(true);
       expect(
-        page.root.all().find((node) => node.dataset.learningField === "test-receipt"),
+        page.root
+          .all()
+          .find((node) => node.dataset.learningField === "test-receipt"),
       ).toBeUndefined();
       page.button("report-read").fire("click");
       await page.settle();
@@ -474,7 +670,9 @@ describe("staff report association ownership in the actual learning panel", () =
     await page.settle();
     expect(page.panel.hasPending()).toBe(true);
     const prepare = page.writes()[1]!;
-    expect(prepare.path).toBe("/api/support/admin/tickets/Ticket-A/learning/test-receipt");
+    expect(prepare.path).toBe(
+      "/api/support/admin/tickets/Ticket-A/learning/test-receipt",
+    );
     expect(JSON.parse(prepare.body!)).toEqual({
       commandId: "Original-Command-1",
       expectedPrincipalId: "staff-a",
@@ -490,7 +688,9 @@ describe("staff report association ownership in the actual learning panel", () =
         receipt: "e1.1.Report-A",
       },
     });
-    expect(page.writes().filter((call) => call.path.endsWith("/evidence"))).toHaveLength(0);
+    expect(
+      page.writes().filter((call) => call.path.endsWith("/evidence")),
+    ).toHaveLength(0);
     page.button("evidence").fire("click");
     await page.settle();
     expect(JSON.parse(page.writes()[2]!.body!)).toEqual({
@@ -509,17 +709,22 @@ describe("staff report association ownership in the actual learning panel", () =
     { status: "rejected" },
     { evidence: { result: "failed" } },
     { confirmation: null },
-  ])("shows an unqualified report without allowing association: %j", async (changed) => {
-    const page = reportPanel();
-    Object.assign(page.state.report, changed);
-    await page.panel.showTicket(page.selected());
-    await page.readReport();
-    expect(page.root.textContent).toContain("existing Knowledge confirmation workflow");
-    expect(page.button("report-associate").disabled).toBe(true);
-    page.button("report-associate").fire("click");
-    await page.settle();
-    expect(page.writes()).toHaveLength(1);
-  });
+  ])(
+    "shows an unqualified report without allowing association: %j",
+    async (changed) => {
+      const page = reportPanel();
+      Object.assign(page.state.report, changed);
+      await page.panel.showTicket(page.selected());
+      await page.readReport();
+      expect(page.root.textContent).toContain(
+        "existing Knowledge confirmation workflow",
+      );
+      expect(page.button("report-associate").disabled).toBe(true);
+      page.button("report-associate").fire("click");
+      await page.settle();
+      expect(page.writes()).toHaveLength(1);
+    },
+  );
 
   it.each([
     { articleId: "Other-Article" },
@@ -528,15 +733,20 @@ describe("staff report association ownership in the actual learning panel", () =
     { receipt: "r".repeat(201) },
     { expectedReportGeneration: 1 },
     { reviewBindingHash: "A".repeat(64) },
-  ])("refuses malformed or differently scoped report pins: %j", async (changed) => {
-    const page = reportPanel();
-    Object.assign(page.state.report, changed);
-    await page.panel.showTicket(page.selected());
-    await page.readReport();
-    expect(page.button("report-associate").disabled).toBe(true);
-    expect(page.panel.hasPending()).toBe(false);
-    expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
-  });
+  ])(
+    "refuses malformed or differently scoped report pins: %j",
+    async (changed) => {
+      const page = reportPanel();
+      Object.assign(page.state.report, changed);
+      await page.panel.showTicket(page.selected());
+      await page.readReport();
+      expect(page.button("report-associate").disabled).toBe(true);
+      expect(page.panel.hasPending()).toBe(false);
+      expect(page.root.textContent).not.toContain(
+        "<img src=x onerror=alert(1)>",
+      );
+    },
+  );
 
   it("replays an unknown prepare using the exact original packet despite changed fields and ticket revision", async () => {
     const page = reportPanel();
@@ -580,8 +790,13 @@ describe("staff report association ownership in the actual learning panel", () =
         loseEvidence = false;
         throw new TypeError("Fictional lost SDK ACK");
       }
-      if (call.path === "/api/staff/knowledge/command" && page.state.capability === false)
-        throw Object.assign(new Error("Unavailable old report"), { status: 404 });
+      if (
+        call.path === "/api/staff/knowledge/command" &&
+        page.state.capability === false
+      )
+        throw Object.assign(new Error("Unavailable old report"), {
+          status: 404,
+        });
     };
     await page.panel.showTicket(page.selected());
     await page.readReport();
@@ -591,53 +806,67 @@ describe("staff report association ownership in the actual learning panel", () =
     await page.panel.showTicket(page.selected("Ticket-A", 8));
     page.button("retry").fire("click");
     await page.settle();
-    const original = page.writes().find((call) => call.path.endsWith("/evidence"))!;
+    const original = page
+      .writes()
+      .find((call) => call.path.endsWith("/evidence"))!;
     expect(original).toBeDefined();
     await page.panel.refresh();
     page.button("retry").fire("click");
     await page.settle();
-    const recovered = page.writes().find((call) => call.path.endsWith("/evidence-recovery"))!;
+    const recovered = page
+      .writes()
+      .find((call) => call.path.endsWith("/evidence-recovery"))!;
     expect(recovered.body).toBe(original.body);
     expect(page.panel.hasPending()).toBe(false);
-    expect(page.calls.filter((call) => call.path === "/api/staff/knowledge/command")).toHaveLength(
-      1,
-    );
-    expect(page.calls.filter((call) => call.path.endsWith("/test-receipt"))).toHaveLength(1);
+    expect(
+      page.calls.filter((call) => call.path === "/api/staff/knowledge/command"),
+    ).toHaveLength(1);
+    expect(
+      page.calls.filter((call) => call.path.endsWith("/test-receipt")),
+    ).toHaveLength(1);
   });
 
-  it.each(["actorId", "ticketId", "commandId", "receipt", "validUntil", "extra"])(
-    "retains the raw prepare owner after an invalid ACK %s",
-    async (key) => {
-      const page = reportPanel();
-      page.state.onRequest = (call) => {
-        if (!call.path.endsWith("/test-receipt")) return;
-        const input = JSON.parse(call.body!);
-        const result: Record<string, unknown> = {
-          actorId: "staff-a",
-          ticketId: "Ticket-A",
-          commandId: input.commandId,
-          receipt: "opaque-support-receipt",
-          validUntil: "2099-01-01T00:00:00.000Z",
-        };
-        result[key] = key === "receipt" ? "r".repeat(201) : "wrong-scope";
-        return { result, csrfToken: "csrf-a" };
+  it.each([
+    "actorId",
+    "ticketId",
+    "commandId",
+    "receipt",
+    "validUntil",
+    "extra",
+  ])("retains the raw prepare owner after an invalid ACK %s", async (key) => {
+    const page = reportPanel();
+    page.state.onRequest = (call) => {
+      if (!call.path.endsWith("/test-receipt")) return;
+      const input = JSON.parse(call.body!);
+      const result: Record<string, unknown> = {
+        actorId: "staff-a",
+        ticketId: "Ticket-A",
+        commandId: input.commandId,
+        receipt: "opaque-support-receipt",
+        validUntil: "2099-01-01T00:00:00.000Z",
       };
-      await page.panel.showTicket(page.selected());
-      await page.readReport();
-      page.button("report-associate").fire("click");
-      await page.settle();
-      expect(page.panel.hasPending()).toBe(true);
-      expect(page.button("evidence").disabled).toBe(true);
-      expect(page.root.textContent).not.toContain("Report associated");
-      expect(page.writes().filter((call) => call.path.endsWith("/evidence"))).toHaveLength(0);
-    },
-  );
+      result[key] = key === "receipt" ? "r".repeat(201) : "wrong-scope";
+      return { result, csrfToken: "csrf-a" };
+    };
+    await page.panel.showTicket(page.selected());
+    await page.readReport();
+    page.button("report-associate").fire("click");
+    await page.settle();
+    expect(page.panel.hasPending()).toBe(true);
+    expect(page.button("evidence").disabled).toBe(true);
+    expect(page.root.textContent).not.toContain("Report associated");
+    expect(
+      page.writes().filter((call) => call.path.endsWith("/evidence")),
+    ).toHaveLength(0);
+  });
 
   it("fences an old report-read callback after navigating to another ticket", async () => {
     const page = reportPanel();
     const barrier = browserGate<unknown>();
     page.state.onRequest = (call) =>
-      call.path === "/api/staff/knowledge/command" ? barrier.promise : undefined;
+      call.path === "/api/staff/knowledge/command"
+        ? barrier.promise
+        : undefined;
     await page.panel.showTicket(page.selected());
     const reading = page.readReport();
     await page.settle();
@@ -712,8 +941,12 @@ describe("staff report association ownership in the actual learning panel", () =
       await page.settle();
       expect(page.panel.hasPending()).toBe(true);
       expect(page.root.textContent).not.toContain("Report associated");
-      expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
-      expect(page.writes().filter((call) => call.path.endsWith("/evidence"))).toHaveLength(0);
+      expect(page.root.textContent).not.toContain(
+        "<img src=x onerror=alert(1)>",
+      );
+      expect(
+        page.writes().filter((call) => call.path.endsWith("/evidence")),
+      ).toHaveLength(0);
     },
   );
   it("requires a new report read after changing its visible coordinates", async () => {
@@ -736,7 +969,9 @@ describe("staff report association ownership in the actual learning panel", () =
     await page.readReport();
     page.state.onRequest = (call) => {
       if (call.path === "/api/staff/knowledge/command")
-        throw Object.assign(new Error("Current Knowledge access denied"), { status: 403 });
+        throw Object.assign(new Error("Current Knowledge access denied"), {
+          status: 403,
+        });
     };
     page.button("report-read").fire("click");
     await page.settle();
@@ -800,11 +1035,14 @@ describe("staff report association ownership in the actual learning panel", () =
   it("disables association without claiming access loss when its capability turns OFF during a report read", async () => {
     const page = reportPanel();
     page.state.onRequest = (call) => {
-      if (call.path === "/api/staff/knowledge/command") page.state.capability = false;
+      if (call.path === "/api/staff/knowledge/command")
+        page.state.capability = false;
     };
     await page.panel.showTicket(page.selected());
     await page.readReport();
-    expect(page.root.textContent).toContain("Test-report association is unavailable.");
+    expect(page.root.textContent).toContain(
+      "Test-report association is unavailable.",
+    );
     expect(page.root.textContent).not.toContain("<img src=x onerror=alert(1)>");
     expect(page.button("report-associate").disabled).toBe(true);
     expect(page.panel.hasPending()).toBe(false);

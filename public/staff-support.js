@@ -152,6 +152,7 @@ function filterQuery() {
 async function refreshQueue() {
   if (suspended) return false;
   const generation = ++queueGeneration;
+  reviewInbox?.clear();
   const handling = new FormData(filterForm).get('handling');
   for (const controller of requests) controller.abort();
   requests.clear();

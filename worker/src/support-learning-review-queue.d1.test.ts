@@ -38,6 +38,7 @@ beforeEach(async () => {
 });
 afterEach(({ task }) => {
   Object.assign(task.meta, { supportLearningStagedReviewD1Budget: structuredClone(profiles) });
+  console.info('support-learning-staged-review-d1-budgets', JSON.stringify(profiles));
   for (const profile of profiles) {
     const detail = JSON.stringify(profile);
     expect(profile.calls, detail).toBeGreaterThan(0);
@@ -129,43 +130,54 @@ async function fixture(options: StagedReviewFixtureOptions = {}) {
         PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED: 'true', SUPPORT_LEARNING_REVIEWS: broker };
     },
   }, options);
-  return { f, run: observed.run };
+  return { f, run: observed.run,
+    async faultRead() { await observed.binding.prepare('SELECT 1').first(); },
+  };
 }
 
-/** Assertion-only session readback is outside the measured invocation. Every
- * protected HTTP fence itself uses the real advancing Identity/Sessions clock. */
+/** Assertion-only readback is outside the measured invocation. Admission
+ * touches once; closing observations use the real clock without touching. */
 async function afterSessionIdle<Value>(
   f: Awaited<ReturnType<typeof fixture>>['f'], run: ReturnType<typeof meter>['run'],
   operation: string, action: () => Promise<Value>,
 ): Promise<Value> {
-  // Published Sessions has no coarser touch interval: now>lastSeenAt writes.
-  // Two seconds crosses that boundary without expiring/renewing source proofs.
+  // Two seconds makes the initial request's activity touch observable without
+  // expiring source proofs. Later observations must preserve that anchor.
   f.learning.advance(2_000);
-  const first = f.sessionObservations.length;
+  const first = f.sessionReadObservations.length;
   const result = await run(operation, action).finally(() => {
-    const reads = f.sessionObservations.slice(first);
+    const reads = f.sessionReadObservations.slice(first);
     const profile = profiles.at(-1);
     if (profile?.operation !== operation) throw new Error('Expected the measured invocation profile');
     Object.assign(profile, { sessionReadObservations: reads.length, idleAdvanceMilliseconds: 2_000,
       strictlyAdvancingSessionReads: reads.filter((read) => read.previousLastSeenAt !== null &&
         Date.parse(read.at) > Date.parse(read.previousLastSeenAt)).length });
   });
-  const reads = f.sessionObservations.slice(first);
+  const reads = f.sessionReadObservations.slice(first);
   expect(reads.length, operation + ' must observe actual session fences').toBeGreaterThan(1);
+  const admissions = reads.filter((read) => read.operation === 'get');
+  const closings = reads.filter((read) => read.operation === 'observe');
+  expect(admissions, operation + ' initial activity touch').toHaveLength(1);
+  expect(reads[0]?.operation, operation).toBe('get');
+  expect(closings.length, operation + ' fresh read-only closing fences').toBeGreaterThan(0);
+  const admission = admissions[0];
+  if (admission === undefined) throw new Error('Expected the actual admission read');
   for (const [index, read] of reads.entries()) {
     expect(read.previousLastSeenAt, operation).not.toBeNull();
     if (read.previousLastSeenAt === null) throw new Error('Expected the actual live session');
     expect(Date.parse(read.at), operation).toBeGreaterThan(Date.parse(read.previousLastSeenAt));
-    if (index > 0) expect(read.previousLastSeenAt, operation + ' persisted previous fence touch').toBe(reads[index - 1]?.at);
+    if (index > 0) {
+      expect(Date.parse(read.at), operation + ' fresh closing clock').toBeGreaterThan(Date.parse(reads[index - 1]!.at));
+      expect(read.previousLastSeenAt, operation + ' unchanged admission touch').toBe(admission.at);
+    }
   }
   const last = reads.at(-1);
   if (last === undefined) throw new Error('Expected the final observed session fence');
-  // Same-time public get cannot advance this anchor. It proves that the final
-  // request fence's best-effort touch actually persisted through Native D1.
-  expect((await f.readSessionAt(last.at))?.lastSeenAt, operation + ' persisted final touch').toBe(last.at);
+  expect((await f.observeSessionAt(last.at))?.lastSeenAt, operation + ' persisted admission touch').toBe(admission.at);
   const profile = profiles.at(-1);
   if (profile?.operation !== operation) throw new Error('Expected the measured invocation profile');
-  Object.assign(profile, { sessionTouches: reads.length, verifiedPersistedTouch: true, idleAdvanceMilliseconds: 2_000 });
+  Object.assign(profile, { sessionTouches: admissions.length, sessionClosingObservations: closings.length,
+    verifiedPersistedTouch: true, verifiedReadOnlyClosingAnchors: true, idleAdvanceMilliseconds: 2_000 });
   return result;
 }
 
@@ -315,12 +327,15 @@ describe('whole staged review Worker invocations on real Native D1', () => {
 
   it('refuses an out-of-qualified-profile custom source wrapper at hard50 without review or KB effects', async () => {
     const observed = new Set<string>(); let delayedReads = 0;
-    const { f, run } = await fixture({
+    let injectQueries: (() => Promise<void>) | undefined;
+    let injectedAttempts = 0; let injectedExecuted = 0;
+    const { f, run, faultRead } = await fixture({
       async beforeSourceRead(ticketId) {
         observed.add(ticketId);
         if (ticketId === 'staged-secondary-ticket') {
           delayedReads += 1;
           await new Promise<void>((resolve) => setTimeout(resolve, 5));
+          await injectQueries?.();
         }
       },
     });
@@ -334,6 +349,16 @@ describe('whole staged review Worker invocations on real Native D1', () => {
     const provenanceBefore = await f.learning.knowledge.getProvenance(f.learning.actors.admin, { articleId: delivered.articleId });
     const publishedBefore = await f.learning.knowledge.getPublishedArticle(f.learning.actors.customer, { articleId: delivered.articleId });
     observed.clear(); delayedReads = 0;
+    // This negative port deliberately adds more physical reads than an entire
+    // invocation may execute. Each SELECT reaches the same original meter;
+    // it cannot be coalesced into a Store batch or bypass the D1 boundary.
+    injectQueries = async () => {
+      for (let query = 0; query < 51; query++) {
+        injectedAttempts += 1;
+        await faultRead();
+        injectedExecuted += 1;
+      }
+    };
     const operation = 'http.unqualified-custom-source.proposal';
     expectedRefusals.add(operation);
     let invocationSourceReads: { readonly delayed: number; readonly distinct: number } | undefined;
@@ -341,7 +366,10 @@ describe('whole staged review Worker invocations on real Native D1', () => {
       // This additional asynchronous wrapper is absent from the known real
       // SDK graph under test. It is a fail-closed diagnostic, not a successful
       // arbitrary-port budget claim. Do not admit or deliver a review afterward.
-      const response = await run(operation, () => f.invoke('/proposal?sourceGeneration=' + delivered.source.sourceGeneration));
+      const response = await run(operation, async () => {
+        try { return await f.invoke('/proposal?sourceGeneration=' + delivered.source.sourceGeneration); }
+        finally { injectQueries = undefined; }
+      });
       invocationSourceReads = { delayed: delayedReads, distinct: observed.size };
       expect(response.status).toBe(503);
       expect(await responseObject(response)).toEqual({ error: 'support_learning_unavailable' });
@@ -355,6 +383,8 @@ describe('whole staged review Worker invocations on real Native D1', () => {
       expect(refused.blocked).toBe(refused.calls - refused.executed);
       expect([...observed].sort()).toEqual(['learning-ticket', delivered.secondaryTicketId].sort());
       expect(delayedReads).toBeGreaterThan(0);
+      expect(injectedAttempts).toBeGreaterThan(0);
+      expect(injectedExecuted).toBeLessThan(injectedAttempts);
       expect(f.messages).toHaveLength(0);
       // Complete public Support rows cover review bindings, receipts, Audit
       // and durable attempts, rather than guessing private record encoders.
@@ -373,6 +403,8 @@ describe('whole staged review Worker invocations on real Native D1', () => {
         profileClassification: 'out_of_qualified_profile_custom_source_wrapper',
         sourceReadDelayMilliseconds: 5, delayedSourceReads: invocationSourceReads?.delayed ?? delayedReads,
         distinctObservedSources: invocationSourceReads?.distinct ?? observed.size,
+        faultInjectedPhysicalReadsPlannedPerSource: 51,
+        faultInjectedPhysicalReadsAttempted: injectedAttempts, faultInjectedPhysicalReadsExecuted: injectedExecuted,
       });
     }
   });

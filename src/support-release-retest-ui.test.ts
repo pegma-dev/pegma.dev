@@ -83,6 +83,7 @@ function fixture() {
     losePreparation: false,
     loseResult: false,
     http: 200,
+    resultHTTP: 200,
     pendingCount: 0,
     malformed: false,
     afterPreparation: undefined as (() => void) | undefined,
@@ -166,6 +167,10 @@ function fixture() {
     if (path.endsWith('/retest')) {
       const packet = JSON.parse(bytes!);
       resultPackets.push(packet);
+      if (state.resultHTTP !== 200)
+        throw Object.assign(new Error('request_failed'), {
+          status: state.resultHTTP,
+        });
       if (state.loseResult) {
         state.loseResult = false;
         throw new Error('lost_result_ack');
@@ -286,6 +291,56 @@ function channels(root: Node) {
     .join('\n');
 }
 describe('current confirmed-report retest association and exact recovery', () => {
+  it('explicitly discards an associated but unsent result without submitting any result', async () => {
+    const f = fixture();
+    await f.load();
+    await f.prepare();
+    expect(f.panel.hasPending()).toBe(true);
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(false);
+    expect(f.resultPackets).toEqual([]);
+    expect(f.work.retestResults).toEqual([]);
+    expect(f.settled).not.toHaveBeenCalled();
+    await f.load();
+    await f.prepare();
+    expect(f.prepCalls()).toHaveLength(2);
+    expect(JSON.parse(f.prepCalls()[0]!.bytes!).commandId).not.toBe(
+      JSON.parse(f.prepCalls()[1]!.bytes!).commandId,
+    );
+  });
+  it('recovers locally from an expired result receipt’s first closed conflict and prepares a fresh result', async () => {
+    const f = fixture();
+    await f.load();
+    await f.prepare();
+    f.state.resultHTTP = 409;
+    await f.panel.perform('retest-result');
+    expect(f.work.retestResults).toEqual([]);
+    expect(f.panel.hasPending()).toBe(true);
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(false);
+    f.state.resultHTTP = 200;
+    await f.load();
+    await f.prepare();
+    await f.panel.perform('retest-result');
+    expect(f.work.retestResults).toHaveLength(1);
+    expect(f.resultPackets).toHaveLength(2);
+    expect(f.resultPackets[1].commandId).not.toBe(f.resultPackets[0].commandId);
+    expect(f.settled).toHaveBeenCalledTimes(1);
+  });
+  it('preserves an uncertain result despite a later expired-receipt conflict and explicit discard action', async () => {
+    const f = fixture();
+    await f.load();
+    await f.prepare();
+    f.state.loseResult = true;
+    await f.panel.perform('retest-result');
+    f.state.resultHTTP = 409;
+    await f.panel.perform('exact-retry');
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(true);
+    expect(f.resultPackets[1]).toEqual(f.resultPackets[0]);
+    expect(f.prepCalls()).toHaveLength(1);
+    expect(f.settled).not.toHaveBeenCalled();
+  });
   it('uses delivered handoff choices, fresh ticket revision and the exact current staff-read report tuple', async () => {
     const f = fixture();
     await f.load();
@@ -415,6 +470,19 @@ describe('current confirmed-report retest association and exact recovery', () =>
     expect(f.prepCalls()).toHaveLength(2);
     expect(f.prepCalls()[1]!.bytes).toBe(f.prepCalls()[0]!.bytes);
   });
+  it('cannot discard an unknown preparation after a later closed conflict', async () => {
+    const f = fixture();
+    await f.load();
+    f.state.losePreparation = true;
+    await f.prepare();
+    f.state.http = 409;
+    await f.panel.perform('exact-retry');
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(true);
+    expect(f.prepCalls()).toHaveLength(2);
+    expect(f.prepCalls()[1]!.bytes).toBe(f.prepCalls()[0]!.bytes);
+    expect(f.resultPackets).toEqual([]);
+  });
   it('retains the exact result command after lost ACK without rereading or re-associating the report', async () => {
     const f = fixture();
     await f.load();
@@ -508,6 +576,9 @@ describe('current confirmed-report retest association and exact recovery', () =>
       10,
     );
     expect(f.resultPackets).toEqual([]);
+    expect(f.panel.hasPending()).toBe(true);
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(false);
   });
   it('rejects a malformed pending ACK instead of inventing receipt or success authority', async () => {
     const f = fixture();
@@ -517,6 +588,8 @@ describe('current confirmed-report retest association and exact recovery', () =>
     await f.prepare();
     expect(f.prepCalls()).toHaveLength(1);
     expect(f.resultPackets).toEqual([]);
+    expect(f.panel.hasPending()).toBe(true);
+    await f.panel.perform('discard');
     expect(f.panel.hasPending()).toBe(true);
   });
   it('drops a late preparation result after suspension and preserves its original packet for recovery', async () => {
