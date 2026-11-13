@@ -1,4 +1,5 @@
 import { createMemoryStore, type Store } from '@pegma/storage-core';
+import { serializeAccessContext } from '@pegma/authorization-core';
 import { createSupportReleaseFollowupFixture } from './support-release-followup-fixtures';
 import { createSupportRuntime } from './support-desk';
 import { createKnowledgeRuntime } from './knowledge-runtime';
@@ -73,10 +74,25 @@ export async function createSupportFollowupHostFixture(
     knowledge: () => knowledge.application,
     reports: () => knowledge.evidence,
     stagedRetestPreparation: false,
-    readGovernance: async (collectionId) =>
-      knowledge.application.getGovernanceConfiguration(await access('admin'), {
+    readGovernance: async (collectionId) => {
+      const current = await access('admin');
+      const value = await knowledge.application.getGovernanceConfiguration(current, {
         collectionId,
-      }),
+      });
+      const validationPolicy = await knowledge.application.getValidationPolicy(current, {
+        policyId: value.configuration.validationPolicy.id,
+      });
+      return { ...value, validationPolicy,
+        async confirmAuthority(signal: AbortSignal) {
+          const fresh = await access('admin');
+          if (signal.aborted || serializeAccessContext(fresh) !== serializeAccessContext(current)) return false;
+          return (): true => {
+            if (signal.aborted || environment.PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED !== 'true') throw new Error('Current governance authority unavailable');
+            return true;
+          };
+        },
+      };
+    },
   });
   if (!source?.configuration || !source.mappings || !source.retests)
     throw new Error('Actual source factory unavailable');
@@ -260,6 +276,7 @@ export async function createSupportFollowupHostFixture(
   async function report(
     result: 'passed' | 'failed' = 'passed',
     confirmed = true,
+    runnerId = peer.principalId,
   ) {
     const draft = await knowledge.application.getDraft(peer, { articleId });
     const requirements = await knowledge.application.getValidationRequirements(
@@ -280,7 +297,7 @@ export async function createSupportFollowupHostFixture(
       steps: ['Export the fictional workspace.'],
       result,
       executedAt: f.clock.now(),
-      runnerId: peer.principalId,
+      runnerId,
       artifacts: [{ id: 'fictional-local-test-output', hash: 'a'.repeat(64) }],
     };
     const ledger = await knowledge.evidence.ledger(peer, { articleId });

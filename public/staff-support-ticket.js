@@ -81,7 +81,7 @@ function beginOperation() {
   // Retain unknown intent, but retire every old panel context before an
   // ordinary mutation or current-ticket reload can await anything.
   followup?.suspend();
-  if (followupRoot !== null) followupRoot.hidden = !followup?.hasPending();
+  if (followupRoot !== null) followupRoot.hidden = true;
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
   engineeringPolicyRecovery = null;
@@ -108,7 +108,7 @@ function clearHandoff() {
 }
 function hideAll() {
   followup?.suspend();
-  if (followupRoot !== null) followupRoot.hidden = !followup?.hasPending();
+  if (followupRoot !== null) followupRoot.hidden = true;
   learning?.suspend();
   if (learningRoot !== null) learningRoot.hidden = true;
   engineeringPolicyRecovery = null;
@@ -345,6 +345,7 @@ function validateView(view) {
   )
     throw Object.assign(new Error('invalid_response'), { status: 502 });
   if ((view.engineeringEnabled !== undefined && typeof view.engineeringEnabled !== 'boolean') ||
+    (view.releaseFollowupEnabled !== undefined && typeof view.releaseFollowupEnabled !== 'boolean') ||
     (view.engineeringReviewEnabled !== undefined && typeof view.engineeringReviewEnabled !== 'boolean') ||
     (view.learningReviewRecoveryEnabled !== undefined && typeof view.learningReviewRecoveryEnabled !== 'boolean') ||
     (view.learningEnabled !== undefined && typeof view.learningEnabled !== 'boolean') ||
@@ -920,8 +921,16 @@ async function engineeringRequest(run) {
 }
 async function syncExtensions(view) {
   const generation = readGeneration;
-  if (followup !== null && viewer !== null && isCurrent(generation))
-    followup.showTicket({ ticketId: view.ticket.id, actorSubject: viewer.subject });
+  if (followup !== null) {
+    if (viewer !== null && isCurrent(generation) && currentView === view && view.releaseFollowupEnabled === true)
+      followup.showTicket({ ticketId: view.ticket.id, actorSubject: viewer.subject });
+    else {
+      // Keep any unknown packet in its owner closure while deployment admission
+      // is absent. A later current enabled view can recover that same packet.
+      followup.suspend();
+      if (followupRoot !== null) followupRoot.hidden = true;
+    }
+  }
   await syncLearning(view);
   if (!isCurrent(generation) || currentView !== view || engineering === null) return;
   if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || learningOccupied() || view.engineeringEnabled !== true) {
@@ -996,7 +1005,7 @@ if (followupRoot !== null && typeof globalThis.PegmaSupportFollowup?.createPanel
   function followupAdmission() {
     if (busy !== null || ordinaryPacket !== null || takeoverPacket !== null || ordinaryAcknowledged ||
       learningOccupied() || engineeringPending() || engineeringBusy || engineeringRequests > 0 ||
-      suspended || authorityReloadRequired || viewer === null || currentView === null || !onThisTicket())
+      suspended || authorityReloadRequired || viewer === null || currentView?.releaseFollowupEnabled !== true || !onThisTicket())
       throw Object.assign(new Error('followup_suspended'), { stale: true });
   }
   async function followupRequest(run) {
@@ -1006,14 +1015,23 @@ if (followupRoot !== null && typeof globalThis.PegmaSupportFollowup?.createPanel
   followup = globalThis.PegmaSupportFollowup.createPanel({ root: followupRoot,
     canRequest: () => busy === null && ordinaryPacket === null && takeoverPacket === null && !ordinaryAcknowledged &&
       !learningOccupied() && !engineeringPending() && !engineeringBusy && engineeringRequests === 0 &&
-      !suspended && !authorityReloadRequired && viewer !== null && currentView !== null && onThisTicket(),
+      !suspended && !authorityReloadRequired && viewer !== null && currentView?.releaseFollowupEnabled === true && onThisTicket(),
     request: (path, init) => followupRequest(() => api(path, init)),
     requestWithStatus: (path, init) =>
       followupRequest(() => api(path, init, true)),
     readSession: () => followupRequest(() => readViewer(readGeneration)),
     readCurrentTicket: (id) => followupRequest(async () => {
       if (id !== ticketId) throw Object.assign(new Error('wrong_ticket'), { stale: true });
-      const value = await api('/api/support/admin/tickets/' + encodeURIComponent(id)); validateView(value); return value;
+      const generation = readGeneration;
+      const value = await api('/api/support/admin/tickets/' + encodeURIComponent(id)); guard(generation); validateView(value);
+      if (value.releaseFollowupEnabled !== true) {
+        // Retire cached admission without replacing the ticket facts the staff
+        // member has actually seen. Unknown command ownership remains intact.
+        currentView = { ...currentView, releaseFollowupEnabled: false };
+        followup.suspend(); followupRoot.hidden = true; updateControls();
+        throw Object.assign(new Error('followup_suspended'), { stale: true });
+      }
+      return value;
     }),
     onPendingChange: () => updateControls(),
     onBusyChange: (value) => { followupBusy = value === true; updateControls(); },

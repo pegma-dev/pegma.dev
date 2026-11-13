@@ -629,6 +629,7 @@ describe('actual PG ticket status-preserving preparation transport', () => {
       },
       messages: [],
       csrfToken: 'csrf',
+      releaseFollowupEnabled: true,
     };
     const page = supportBrowser(
       'staff',
@@ -652,7 +653,7 @@ describe('actual PG ticket status-preserving preparation transport', () => {
         },
       },
     );
-    await page.until(() => !page.node('staff-ticket-detail').hidden);
+    await page.until(() => !page.node('staff-ticket-detail').hidden && options?.canRequest() === true);
     await page.drain();
     expect(typeof options.requestWithStatus).toBe('function');
     const body = JSON.stringify({ commandId: 'Command:Exact' });

@@ -362,10 +362,11 @@ function restoreSuccess(next) {
       Object.keys(packet).sort().join(',') !== 'body,subject,ticketId' ||
       Object.keys(body).sort().join(',') !==
         'commandId,lastSeenVisibleMessageId' ||
-      !/^[0-9a-f-]{36}$/iu.test(body.commandId) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(body.commandId) ||
       typeof body.lastSeenVisibleMessageId !== 'string' ||
       body.lastSeenVisibleMessageId.length < 1 ||
-      body.lastSeenVisibleMessageId.length > 200
+      body.lastSeenVisibleMessageId.length > 200 ||
+      /[\u0000-\u001F\u007F-\u009F]/u.test(body.lastSeenVisibleMessageId)
     )
       return;
     successPacket = Object.freeze(packet);

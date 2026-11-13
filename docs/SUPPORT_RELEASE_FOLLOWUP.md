@@ -37,6 +37,12 @@ Read and queueRead. It has no human account, stored Role grant or review/send
 authority. The existing scoped governance reader is reused without new grants.
 Work hints contain no saved browser credentials or AccessContext.
 
+The staff ticket detail supplies the optional `releaseFollowupEnabled` hint.
+The page shows the panel only when this hint is `true`; omitted or false means
+OFF. This is a display hint, not authority for a follow-up route. Suspending the
+panel retains any unknown command for recovery by its original account after a
+current enabled ticket read.
+
 HTTP controls reuse Identity, Sessions, audited roles and the existing
 engineering read/control quotas. They require the original current cookie
 session and actor. Mutations require dynamic X-Pegma-CSRF, same-origin headers
@@ -87,10 +93,12 @@ or replay the retained packet. Keep the original tab open until confirmation.
 ## Current release and deployment evidence
 
 The normal signed GitHub release webhook and existing reconciliation feed
-maintain a small release epoch journal while the default SD05 Source flag is ON.
-Unchanged refreshes keep their epoch; withdrawal, replacement and republication
-advance it. Identical display facts after republication cannot revive an old
-mapping. OFF preserves the old projection I/O.
+maintain a small release epoch journal even while the SD05 Source flag is OFF.
+Projection writers read the epoch observation and conditionally transact it
+with the projection. Unchanged refreshes keep their epoch; withdrawal,
+replacement and republication advance it. Identical display facts after
+republication cannot revive an old mapping. This journal I/O remains required
+while OFF; disabling follow-up routes and processing does not remove its fence.
 
 The mapping picker reads at most 16 actual accepted SDK issue associations and
 their genuine Source product. Staff explicitly verifies the issue state,
@@ -100,6 +108,16 @@ mapping, exact command receipt and Audit atomically. The reference is meaningful
 only with that durable record, current repository policy and the SDK's accepted
 association/product checks. It is not a signed-marker claim. Withdrawal and
 rollback retain historical receipts and hold new work.
+
+An explicit staff verification is valid for one hour. Mapping reads expose its
+`verificationValidUntil` deadline and report `current: false` after expiry.
+Operation attestations last at most five minutes and never extend beyond that
+original deadline. Reading or replaying an accepted verification command does
+not renew it; staff must submit a new verification command against the current
+mapping generation. The default verifier does not poll GitHub or deployment
+systems for reopen or rollback changes. Staff must record those changes or
+withdraw the mapping within this bounded verification window. Current release
+epoch, repository policy and Source withdrawal checks still apply immediately.
 
 New mapping routes share the existing namespace and quotas:
 
@@ -116,6 +134,19 @@ inputReference, plus the normal CSRF envelope. Observing that reference remains
 a separate SDK command.
 
 ## Retest report association
+
+Default retest association requires `PEGMA_KNOWLEDGE_ENABLED=true` and a valid
+`SUPPORT_LEARNING_SOURCE_CONFIGURATION_JSON` with its optional `testEvidence`
+block configured. That block contains a positive safe integer
+`retentionMilliseconds`; the report article's collection must also appear in
+the configuration's `collectionIds`. The existing intrinsic governance reader
+uses this scope to read the current validation policy. Follow-up Source and
+Knowledge must remain enabled and the selected configuration must remain
+current. This governance read does not require learning intake or paid/model
+processing to be ON, and it grants no human review or publication permission.
+Missing or unavailable scoped governance returns HTTP 503
+`followup_retest_unavailable`; HTTP 409 `followup_retest_changed` identifies an
+actual report or Work conflict.
 
 A local agent submits the existing KB test report; an authorized staff member
 must confirm it through the existing KB controls. Follow-up association neither
@@ -136,6 +167,22 @@ Work intent, not a test result or pass. Retry the same original packet in a
 separate invocation. The HTTP 200 result adds the purpose-bound opaque receipt
 and validUntil instead of pending. Unknown ACKs retain the same actor, command
 and packet; they never cause another association under a new identity.
+
+A staged preparation intent expires after five minutes. An expired intent or
+an exact command retained only as a tombstone returns HTTP 410
+`followup_retest_expired`. Receipt and intent payloads become eligible for
+redaction after 24 hours; associated Audit rows become eligible for deletion at
+that age. The existing bounded nonpaid maintenance sweep performs this work
+when it reaches each row, rather than purging at an exact time. Redaction keeps
+the ticket/key and command/input hashes as exact-command tombstones. Legacy
+rows are also swept.
+
+Each ticket admits at most 64 new preparation commands over its lifetime.
+Cleanup does not recycle admissions. This counter does not retroactively count
+legacy history, so older records can exist in addition to those admissions.
+A new command at the limit returns HTTP 429 `followup_retest_capacity`; an
+already admitted command can still complete its requested second phase before
+its intent expires.
 
 `POST retest` takes commandId, workId, retestRequestId and receiptReference.
 The real SDK owns current Source/association/release/Work checks and the late
@@ -216,8 +263,10 @@ scope and deployed fix mapping. A release tag, closed issue or green CI job alon
 is insufficient. The existing signed [release feed](GITHUB_RELEASE_WEBHOOK_PLAN.md)
 supplies hints and public facts, not deployment applicability.
 
-Reopened issues, rollback heads, withdrawn sources and stale proof hold new
-updates. Accepted receipts recover before mutable proof reads. Reassessment can
+Recorded reopened issues and rollback heads, withdrawn sources and expired
+verification hold new updates. External issue or deployment changes require the
+explicit mapping update described above. Accepted receipts recover before
+mutable proof reads. Reassessment can
 edit a retained candidate or bundle; it cannot create a first draft for
 draftless work. Unknown paid outcomes stay reserved by the purpose-isolated
 [durable usage adapter](../worker/src/support-release-followup-usage.ts).

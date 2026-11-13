@@ -10,6 +10,7 @@ import { identityLinkKeyFromVerifiedIdentityClaims } from "@pegma/authorization-
 import { describe, expect, it, vi } from "vitest";
 import {
   humanControlFixture,
+  humanLatch,
   type HumanActor,
 } from "./support-human-control-fixtures";
 import { createSupportApi, publicTicketView } from "./support-api";
@@ -24,6 +25,9 @@ import { IDENTITY_ISSUER } from "./identity-api";
 async function fixture(learning = true, verifier = true) {
   const f = await humanControlFixture(createMemoryStore());
   const clock = f.runtime.clock;
+  const state = {
+    productHook: undefined as (() => Promise<void>) | undefined,
+  };
   const issued = new Map<
     string,
     {
@@ -56,6 +60,7 @@ async function fixture(learning = true, verifier = true) {
       enabled: learning,
       productContext: {
         async resolve(context) {
+          await state.productHook?.();
           return {
             productId: "fictional-success-product",
             version: "1.0.0",
@@ -206,6 +211,7 @@ async function fixture(learning = true, verifier = true) {
   }
   return {
     f,
+    state,
     application,
     runtime,
     api,
@@ -225,6 +231,52 @@ async function fixture(learning = true, verifier = true) {
 }
 
 describe("normal public success evidence HTTP", () => {
+  it.each([
+    ["read", "session"],
+    ["read", "identity"],
+    ["read", "credentials"],
+    ["read", "cancel"],
+    ["product", "session"],
+    ["product", "identity"],
+    ["product", "credentials"],
+    ["product", "cancel"],
+  ] as const)(
+    "prevents customer success after %s await loses %s authority",
+    async (phase, change) => {
+      const t = await fixture();
+      const before = await t.rows();
+      const controller = new AbortController();
+      const incoming = new Request(
+        t.request(t.confirmPath, "owner", t.confirmation),
+        { signal: controller.signal },
+      );
+      const entered = humanLatch();
+      const resume = humanLatch();
+      const read = phase === "read" ? t.f.block("read") : undefined;
+      if (phase === "product") {
+        t.state.productHook = async () => {
+          t.state.productHook = undefined;
+          entered.release();
+          await resume.ready;
+        };
+      }
+      const pending = t.api(incoming);
+      if (read) await read.waitFor(pending);
+      else await entered.ready;
+      try {
+        if (change === "session") await t.f.revokeSession("owner");
+        if (change === "identity") await t.f.removeIdentity("owner");
+        if (change === "credentials")
+          incoming.headers.set("X-Pegma-CSRF", "changed-during-sdk-proof");
+        if (change === "cancel") controller.abort();
+      } finally {
+        read?.release();
+        resume.release();
+      }
+      expect((await pending).ok).toBe(false);
+      expect(await t.rows()).toEqual(before);
+    },
+  );
   it.each([false, true])(
     "accepts and replays owner confirmation with learning %s using safe customer DTOs",
     async (learning) => {

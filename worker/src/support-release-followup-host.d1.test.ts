@@ -29,9 +29,91 @@ import {
   engineeringHttpResult,
 } from './support-engineering-http-fixtures';
 
-afterEach(() => {
+const readerAttribution = vi.hoisted(() => ({
+  active: undefined as NativeAttribution | undefined,
+}));
+interface NativeAttribution {
+  labels: { label: string; executedBefore?: number; stack?: string }[];
+  executions: { method: string; statements: number; maximumParameters: number; stack?: string }[];
+}
+/** Forward genuine native statements unchanged. Capture method/count/stack only,
+ * never SQL, bind values, keys, row values, request bodies or provider data. */
+function attributedBacking(backing: D1Database, attribution: NativeAttribution): D1Database {
+  const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+  const bindings = new WeakMap<D1PreparedStatement, number>();
+  function executed(method: string, statements: number, maximumParameters: number) {
+    if (attribution.executions.length < 50) attribution.executions.push({ method, statements, maximumParameters, stack: new Error('Actual native execution caller').stack });
+  }
+  function statement(original: D1PreparedStatement, parameters = 0): D1PreparedStatement {
+    const proxy = new Proxy(original, { get(target, method, receiver) {
+      if (method === 'bind') return (...values: unknown[]) => statement(target.bind(...values), values.length);
+      const value = Reflect.get(target, method, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        if (['first', 'all', 'run', 'raw'].includes(String(method))) executed(String(method), 1, parameters);
+        return Reflect.apply(value, target, args);
+      };
+    } });
+    originals.set(proxy, original); bindings.set(proxy, parameters);
+    return proxy;
+  }
+  return new Proxy(backing, { get(target, method, receiver) {
+    if (method === 'prepare') return (query: string) => statement(target.prepare(query));
+    if (method === 'batch') return (statements: D1PreparedStatement[]) => {
+      executed('batch', statements.length, Math.max(0, ...statements.map((value) => bindings.get(value) ?? 0)));
+      return target.batch(statements.map((value) => {
+        const original = originals.get(value);
+        if (!original) throw new Error('Expected actual attributed native statement');
+        return original;
+      }));
+    };
+    const value = Reflect.get(target, method, receiver);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+}
+vi.mock('./support-release-followup-retests', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./support-release-followup-retests')>();
+  return { ...actual,
+    createSupportFollowupRetests(options: Parameters<typeof actual.createSupportFollowupRetests>[0]) {
+      const origin = new Error('Actual retest factory origin').stack;
+      const read = options.readGovernance;
+      return actual.createSupportFollowupRetests({ ...options,
+        readGovernance(...args) {
+          const active = readerAttribution.active;
+          const label = (value: string, stack?: string) => {
+            if (active && active.labels.length < 100) active.labels.push({ label: value, executedBefore: active.executions.length, ...(stack ? { stack } : {}) });
+          };
+          label('actual-reader-enter', origin);
+          const pending = read(...args);
+          // Observe the same promise without adding a data read/await wave.
+          void pending.then((value) => {
+            const capability = value?.confirmAuthority;
+            label(typeof capability === 'function' ? 'actual-capability-present' : 'actual-capability-absent');
+            if (!value || typeof capability !== 'function' || Object.isFrozen(value)) return;
+            Reflect.set(value, 'confirmAuthority', (...current: Parameters<typeof capability>) => {
+              label('actual-confirm-authority-invoked', new Error('Actual authority caller').stack);
+              return capability(...current);
+            });
+          }, () => { label('actual-reader-rejected'); });
+          return pending;
+        },
+      });
+    },
+  };
+});
+
+const nativeBudgets: {
+  operation: string;
+  status: number | string;
+  budget: ReturnType<ReturnType<typeof createSupportAssistantStageDatabase>['snapshot']>;
+  readerAttribution?: NativeAttribution;
+}[] = [];
+
+afterEach(({ task }) => {
+  Object.assign(task.meta, { followupNativeBudgets: structuredClone(nativeBudgets) });
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  readerAttribution.active = undefined;
 });
 
 beforeAll(async () => {
@@ -40,6 +122,7 @@ beforeAll(async () => {
     .get({ partition: 'followup-schema', id: 'probe' });
 });
 beforeEach(async () => {
+  nativeBudgets.length = 0;
   await env.IDENTITY_DB.prepare('DELETE FROM RECORDS').run();
   await env.IDENTITY_DB.prepare('DELETE FROM PEGMA_STORAGE_D1_TX_GUARD').run();
 });
@@ -87,7 +170,9 @@ async function fixture() {
     request: Request,
     sourceConfiguration: string | null = configuration,
   ) {
-    const meter = createSupportAssistantStageDatabase(env.IDENTITY_DB);
+    const attribution: NativeAttribution = { labels: [], executions: [] };
+    readerAttribution.active = attribution;
+    const meter = createSupportAssistantStageDatabase(attributedBacking(env.IDENTITY_DB, attribution));
     const worker = createWorker();
     const environment = {
       ...env,
@@ -113,6 +198,7 @@ async function fixture() {
       await waitOnExecutionContext(context);
       drained = true;
       const budget = meter.snapshot();
+      nativeBudgets.push({ operation, status: response.status, budget, readerAttribution: attribution });
       console.info(
         'support-followup-host-d1',
         JSON.stringify({ operation, status: response.status, budget }),
@@ -127,6 +213,7 @@ async function fixture() {
       return response;
     } finally {
       if (!drained) await waitOnExecutionContext(context);
+      readerAttribution.active = undefined;
     }
   }
   return { ...f, work, report, packet, invoke };
@@ -303,6 +390,7 @@ describe('default SD05 shared adapters on Native D1', () => {
           f.staff,
           key,
         );
+        nativeBudgets.push({ operation: 'default.queue.' + tick, status: work.status, budget });
         console.info(
           'support-followup-host-d1',
           JSON.stringify({
@@ -333,7 +421,9 @@ describe('default SD05 shared adapters on Native D1', () => {
       packet: unknown,
       paidConfiguration = true,
     ) {
-      const meter = createSupportAssistantStageDatabase(env.IDENTITY_DB);
+      const attribution: NativeAttribution = { labels: [], executions: [] };
+      readerAttribution.active = attribution;
+      const meter = createSupportAssistantStageDatabase(attributedBacking(env.IDENTITY_DB, attribution));
       const worker = createWorker();
       const environment = {
         ...env,
@@ -374,6 +464,7 @@ describe('default SD05 shared adapters on Native D1', () => {
             budget,
           }),
         );
+        nativeBudgets.push({ operation: 'default.paid.' + operation, status: response.status, budget, readerAttribution: attribution });
         expect(budget.physicalQueries).toBeLessThanOrEqual(50);
         expect(budget.maximumParameters).toBeLessThanOrEqual(100);
         expect(budget.blockedQueries).toBe(0);
@@ -381,6 +472,7 @@ describe('default SD05 shared adapters on Native D1', () => {
         return response;
       } finally {
         if (!drained) await waitOnExecutionContext(context);
+        readerAttribution.active = undefined;
       }
     }
     let work = await f.host.application.readEngineeringFollowupWork(

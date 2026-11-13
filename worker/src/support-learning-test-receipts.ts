@@ -6,11 +6,12 @@ import {
 import type { Clock } from "@pegma/spine";
 import { defineCollection, type Store } from "@pegma/storage-core";
 import { knowledgeDigest as evidenceDigest } from "@pegma/knowledge-base-core";
-import { knowledgePermissions } from "@pegma/knowledge-base-contracts";
+import { knowledgePermissions, type ValidationPolicyReference } from "@pegma/knowledge-base-contracts";
 import type {
   GovernanceConfigurationDto,
   KnowledgeBaseApplication,
   KnowledgeEvidenceReports,
+  ValidationPolicyDto,
 } from "@pegma/knowledge-base-application";
 import {
   KnowledgeEvidenceReportsError,
@@ -77,6 +78,58 @@ type ProductBinding = Pick<
   "productId" | "version" | "buildId" | "binding" | "contextVersion"
 >;
 
+/** Private host read under existing validation-management authority. Never a DTO
+ * returned to the associating actor, customer, or agent. */
+export type SupportTestEvidenceGovernance = GovernanceConfigurationDto & {
+  readonly validationPolicy: ValidationPolicyDto;
+  /** Optional invocation-local authority close for genuine paired KB reads.
+   * Never hash, persist, or expose this callback. */
+  readonly confirmAuthority?: (
+    signal: AbortSignal,
+  ) => Promise<false | (() => true)>;
+};
+
+/** Explicit data projection excludes all operation-local capabilities. */
+export function supportTestEvidenceGovernanceSnapshot(
+  value: SupportTestEvidenceGovernance | null,
+) {
+  if (value === null) return null;
+  const { collectionId, generation, configuration, validationPolicy } = value;
+  return { collectionId, generation, configuration, validationPolicy };
+}
+
+/** A trusted paired-context reference schedules independent fresh public reads;
+ * it grants no authority and must match both freshly returned policy references. */
+export async function readSupportTestEvidenceGovernance(
+  application: Pick<KnowledgeBaseApplication, "getGovernanceConfiguration" | "getValidationPolicy">,
+  access: AccessContext,
+  collectionId: string,
+  policyHint?: ValidationPolicyReference,
+): Promise<SupportTestEvidenceGovernance> {
+  const governanceRead = application.getGovernanceConfiguration(access, { collectionId });
+  const [governance, validationPolicy] = policyHint === undefined
+    ? await (async () => {
+      const governance = await governanceRead;
+      const validationPolicy = await application.getValidationPolicy(access, {
+        policyId: governance.configuration.validationPolicy.id,
+      });
+      return [governance, validationPolicy] as const;
+    })()
+    : await Promise.all([
+      governanceRead,
+      application.getValidationPolicy(access, { policyId: policyHint.id }),
+    ]);
+  const reference = governance.configuration.validationPolicy;
+  if (
+    reference.id !== validationPolicy.policy.id ||
+    reference.version !== validationPolicy.policy.version ||
+    (policyHint !== undefined &&
+      (reference.id !== policyHint.id || reference.version !== policyHint.version))
+  )
+    refuse("changed");
+  return { ...governance, validationPolicy };
+}
+
 export interface LearningTestReceiptOptions {
   readonly store: Store;
   readonly clock: Clock;
@@ -94,7 +147,8 @@ export interface LearningTestReceiptOptions {
   readonly readGovernance: (
     collectionId: string,
     signal: AbortSignal,
-  ) => Promise<GovernanceConfigurationDto | null>;
+    policyHint?: ValidationPolicyReference,
+  ) => Promise<SupportTestEvidenceGovernance | null>;
   readonly retentionMilliseconds: number;
   readonly operationMilliseconds?: number;
 }
@@ -565,6 +619,7 @@ export function createSupportLearningTestReceipts(
     const policy = await options.readGovernance(draft.collectionId, signal);
     check();
     if (policy === null) refuse("unavailable");
+    if (policy.validationPolicy === undefined) refuse("unavailable");
     const configuration = policy.configuration;
     const submission = view.evidence;
     const confirmation = view.confirmation;
@@ -587,9 +642,19 @@ export function createSupportLearningTestReceipts(
       (rule) =>
         rule.id === submission.checkId && rule.testKind === submission.testKind,
     );
+    const validation = policy.validationPolicy.policy;
+    const trustedRule = validation.requirements.find(
+      (rule) => rule.id === submission.checkId && rule.kind === draft.kind &&
+        rule.testKind === submission.testKind,
+    );
     if (
       submission.result !== "passed" ||
       checkRule === undefined ||
+      validation.id !== configuration.validationPolicy.id ||
+      validation.version !== configuration.validationPolicy.version ||
+      trustedRule === undefined ||
+      trustedRule.maxAgeMilliseconds !== checkRule.maxAgeMilliseconds ||
+      !trustedRule.trustedRunnerIds.includes(submission.runnerId) ||
       !configuration.trustedAttesterIds.includes(confirmation.reviewerId) ||
       submission.articleId !== draft.articleId ||
       submission.articleRevision !== draft.number ||
@@ -648,64 +713,73 @@ export function createSupportLearningTestReceipts(
             configuration,
           }
         : undefined;
-    if (observations !== undefined && reportObservation !== undefined) {
-      const [confirmed, latestPolicy] = await Promise.all([
-        reportBoundary(() =>
-          observations.confirm(
-            access,
-            reportObservation.observation,
-            ownerVerification,
+    // Keep this single-use capability inside the operation until all Support,
+    // product and actor awaits have finished. Never persist it with a receipt.
+    let consumed = false;
+    async function confirm(closingSignal = signal, closingCheck = check) {
+      closingCheck();
+      if (consumed) refuse("changed");
+      consumed = true;
+      if (observations !== undefined && reportObservation !== undefined) {
+        const [confirmed, latestPolicy] = await Promise.all([
+          reportBoundary(() =>
+            observations.confirm(
+              access,
+              reportObservation.observation,
+              ownerVerification,
+            ),
           ),
-        ),
-        options.readGovernance(draft.collectionId, signal),
-      ]);
-      if (
-        ports().reports.observations !== observations ||
-        confirmed.receipt !== view.receipt ||
-        (ownerVerification !== undefined &&
-          (confirmed.attestation === null ||
-            (await knowledgeDigest(confirmed.attestation)) !==
-              (await knowledgeDigest(attestation)))) ||
-        (await knowledgeDigest(latestPolicy)) !==
-          (await knowledgeDigest(policy))
-      )
-        refuse("changed");
-    } else {
-      if (ownerVerification !== undefined) {
-        const verified =
-          await actual.reports.verifier.verify(ownerVerification);
+          options.readGovernance(draft.collectionId, closingSignal),
+        ]);
         if (
-          verified === null ||
-          (await knowledgeDigest(verified)) !==
-            (await knowledgeDigest(attestation))
+          ports().reports.observations !== observations ||
+          confirmed.receipt !== view.receipt ||
+          (ownerVerification !== undefined &&
+            (confirmed.attestation === null ||
+              (await knowledgeDigest(confirmed.attestation)) !==
+                (await knowledgeDigest(attestation)))) ||
+          (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(latestPolicy))) !==
+            (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(policy)))
+        )
+          refuse("changed");
+      } else {
+        if (ownerVerification !== undefined) {
+          const verified =
+            await actual.reports.verifier.verify(ownerVerification);
+          if (
+            verified === null ||
+            (await knowledgeDigest(verified)) !==
+              (await knowledgeDigest(attestation))
+          )
+            refuse("changed");
+        }
+        // Legacy ports retain the complete public report and KB closing reads.
+        if (observed === undefined) refuse("unavailable");
+        await actual.knowledge.confirmAuthoringContext(
+          access,
+          observed.observation,
+        );
+        const [final, latestPolicy, latestReviewer] = await Promise.all([
+          actual.reports.read(access, key),
+          options.readGovernance(draft.collectionId, closingSignal),
+          options.resolvePrincipal(confirmation.reviewerId, closingSignal),
+        ]);
+        if (
+          latestReviewer === null ||
+          reviewer === undefined ||
+          reviewer === null ||
+          authority(latestReviewer) !== authority(reviewer) ||
+          (await knowledgeDigest(final)) !== (await knowledgeDigest(view)) ||
+          (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(latestPolicy))) !==
+            (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(policy)))
         )
           refuse("changed");
       }
-      // Legacy ports retain the complete public report and KB closing reads.
-      if (observed === undefined) refuse("unavailable");
-      await actual.knowledge.confirmAuthoringContext(
-        access,
-        observed.observation,
-      );
-      const [final, latestPolicy, latestReviewer] = await Promise.all([
-        actual.reports.read(access, key),
-        options.readGovernance(draft.collectionId, signal),
-        options.resolvePrincipal(confirmation.reviewerId, signal),
-      ]);
-      if (
-        latestReviewer === null ||
-        reviewer === undefined ||
-        reviewer === null ||
-        authority(latestReviewer) !== authority(reviewer) ||
-        (await knowledgeDigest(final)) !== (await knowledgeDigest(view)) ||
-        (await knowledgeDigest(latestPolicy)) !==
-          (await knowledgeDigest(policy))
-      )
-        refuse("changed");
+      closingCheck();
+      ports();
     }
-    check();
-    ports();
     return {
+      confirm,
       fingerprint: await knowledgeDigest({
         articleId: key.articleId,
         ledgerEpoch: key.ledgerEpoch,
@@ -717,7 +791,7 @@ export function createSupportLearningTestReceipts(
         governanceHash: view.governanceHash,
         draft: await knowledgeDigest(context.draft),
         requirements: await knowledgeDigest(requirements),
-        governance: await knowledgeDigest(policy),
+        governance: await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(policy)),
         confirmation,
       }),
       executionId: `kbtest:${await knowledgeDigest({ key, receipt: view.receipt, submission: view.submissionHash })}`,
@@ -850,8 +924,10 @@ export function createSupportLearningTestReceipts(
         };
         validateRow(value);
         await current();
+        await qualified.confirm();
         check();
         ports();
+        if (validUntil <= now()) refuse("changed");
         const written =
           saved === null
             ? (await records.insertIfAbsent(value)).inserted
@@ -868,11 +944,12 @@ export function createSupportLearningTestReceipts(
     });
   }
 
-  const verify: ResolutionTestReceiptPort["verify"] = async (
-    token,
-    context,
-    parent,
-  ) => {
+  async function openVerification(
+    token: string,
+    context: Parameters<ResolutionTestReceiptPort["verify"]>[1],
+    parent: AbortSignal,
+    deferred: boolean,
+  ) {
     try {
       return await operation(parent, async (signal, check) => {
         if (!/^kbtest1\.[a-f0-9-]{36}$/u.test(token)) return null;
@@ -934,7 +1011,18 @@ export function createSupportLearningTestReceipts(
         await current();
         check();
         ports();
-        return {
+        const validUntil = Math.min(
+          instant(reference.validUntil),
+          qualified.expiry,
+          instant(closing.product.validUntil),
+        );
+        const assertCurrent = (): true => {
+          ports();
+          if (validUntil <= now()) refuse("changed");
+          return true;
+        };
+        assertCurrent();
+        const verified = {
           executionId: reference.executionId,
           runnerId: reference.runnerId,
           testId: reference.testId,
@@ -942,15 +1030,47 @@ export function createSupportLearningTestReceipts(
           executedAt: reference.executedAt,
           receiptId: token,
           verifiedAt: reference.verifiedAt,
-          validUntil: new Date(
-            Math.min(instant(reference.validUntil), qualified.expiry),
-          ).toISOString(),
+          validUntil: new Date(validUntil).toISOString(),
         };
+        const confirm = (parentSignal: AbortSignal) =>
+          operation(parentSignal, async (closingSignal, closingCheck) => {
+            await qualified.confirm(closingSignal, closingCheck);
+            assertCurrent();
+            return assertCurrent;
+          });
+        if (!deferred) await confirm(signal);
+        return Object.freeze({ verified, confirm });
       });
     } catch {
       return null;
     }
-  };
+  }
+
+  const verify: ResolutionTestReceiptPort["verify"] = async (...args) =>
+    (await openVerification(...args, false))?.verified ?? null;
+
+  /** Each submission owns its pending observation; no registry or global cache.
+   * CAS retries replace/consume only this invocation's handle. A receipt-first
+   * replay does not call verify, so no new KB proof is demanded for recovery. */
+  function forSubmission() {
+    let pending: Awaited<ReturnType<typeof openVerification>> | undefined;
+    const verifier: ResolutionTestReceiptPort = {
+      async verify(...args) {
+        pending = undefined;
+        const observed = await openVerification(...args, true);
+        pending = observed;
+        return observed?.verified ?? null;
+      },
+    };
+    return Object.freeze({
+      verifier,
+      async confirm(signal: AbortSignal) {
+        const observed = pending;
+        pending = undefined;
+        return observed?.confirm(signal);
+      },
+    });
+  }
 
   function cleanup(input: LearningTestReceiptCleanupInput) {
     return cleanupSupportLearningTestReceipts(
@@ -959,5 +1079,5 @@ export function createSupportLearningTestReceipts(
     );
   }
 
-  return Object.freeze({ prepare, verify, cleanup });
+  return Object.freeze({ prepare, verify, forSubmission, cleanup });
 }

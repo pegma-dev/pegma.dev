@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createMemoryStore } from '@pegma/storage-core';
 import { createSupportFollowupHostFixture } from './support-release-followup-host-fixtures';
 import {
   createSupportReleaseFollowupDriver,
@@ -40,6 +41,46 @@ async function fixture() {
   return { ...f, key, state, driver };
 }
 describe('bounded production release-follow-up cursor', () => {
+  it.each(['read', 'runtime'] as const)('settles parent cancellation promptly during a non-cooperative %s await and ignores its late completion', async (stage) => {
+    vi.useFakeTimers();
+    try {
+      const store = createMemoryStore();
+      let started!: () => void;
+      const entered = new Promise<void>((resolve) => { started = resolve; });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let writes = 0;
+      let scans = 0;
+      const measured: Store = { collection(definition) {
+        const records = store.collection(definition);
+        return { ...records,
+          async getVersioned(key) { if (stage === 'read') { started(); await held; } return records.getVersioned(key); },
+          async insertIfAbsent(value) { writes++; return records.insertIfAbsent(value); },
+          async putIfUnchanged(value, version) { writes++; return records.putIfUnchanged(value, version); },
+        };
+      } };
+      const controller = new AbortController();
+      const driver = createSupportReleaseFollowupDriver({ store: measured, clock: { now: () => new Date().toISOString() }, enabled: () => true,
+        runtime: () => ({
+          async scanProcessing() { scans++; started(); await held; return { associations: [], candidates: [], reviewCandidates: [], attentionSources: [], physicalRows: 0, pages: 1 as const, nextCursor: null }; },
+          async process() { throw new Error('No work should be processed'); },
+        }),
+      });
+      const tick = driver.runTick({ signal: controller.signal });
+      await entered;
+      controller.abort();
+      let result: Awaited<typeof tick> | undefined;
+      void tick.then((value) => { result = value; });
+      // Flush microtasks only: no 25-second deadline has elapsed.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toEqual({ outcome: 'unavailable', checkpointSaved: false });
+      expect(vi.getTimerCount()).toBe(0);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writes).toBe(0);
+      expect(scans).toBe(stage === 'runtime' ? 1 : 0);
+    } finally { vi.useRealTimers(); }
+  });
   it('uses only existing fifteen-minute slots and refuses invalid schedule hints', () => {
     expect(
       supportReleaseFollowupWakeDue(Date.parse('2026-11-12T12:00:00.000Z')),

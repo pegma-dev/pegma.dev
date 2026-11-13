@@ -13,6 +13,7 @@ import {
 import { SUPPORT_TERMINAL_RETENTION_MS } from './support-desk';
 import { selectMaintenanceLimiters } from './maintenance-limiters';
 import { cleanupSupportLearningTestReceipts } from './support-learning-test-receipts';
+import { cleanupSupportFollowupRetestPage } from './support-release-followup-retests';
 
 export interface SupportMaintenanceRuntime {
   readonly store: Store;
@@ -121,6 +122,9 @@ export async function runSupportMaintenance(
         ...(cursor === undefined ? {} : { cursor }),
       });
       save('testReceiptCursor', result.nextCursor);
+      // Four bounded host retest rows, with a separate durable bookmark. No
+      // configuration, actor, App, KB, model, or follow-up activation is needed.
+      await cleanupSupportFollowupRetestPage(runtime);
     },
   };
 

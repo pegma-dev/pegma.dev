@@ -464,8 +464,9 @@ Built in the open by RetireGolden, LLC.
 ## Optional engineering human composition
 
 The [engineering assembly](SUPPORT_ENGINEERING.md) introduced its grants in policy
-version 6. Current policy version 7 retains them and adds the separate
-[release-follow-up controls](SUPPORT_RELEASE_FOLLOWUP.md).
+version 6. Version 7 added the separate
+[release-follow-up controls](SUPPORT_RELEASE_FOLLOWUP.md). Current policy
+version 8 retains both sets of grants and adds owner success confirmation.
 Support receives the five named human engineering permissions. Admin adds
 repository-policy read and manage permissions. Policy operations require
 current Admin and Support queue authority together.

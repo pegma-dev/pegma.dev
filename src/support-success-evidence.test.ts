@@ -229,6 +229,8 @@ describe("normal customer success action", () => {
       await page.until(() => !page.node("ticket-detail").hidden);
       expect(page.node("ticket-status").textContent).toBe("Ticket loaded.");
       expect(page.node("confirm-success").textContent).not.toContain("Retry");
+      expect(page.node("request-person").disabled).toBe(false);
+      expect(page.node("reply-form").querySelector("button")!.disabled).toBe(false);
       expect(page.calls.filter((call) => call.method === "POST")).toEqual([]);
       expect(retained.getItem(key)).toBe(saved);
       page.node("ticket-reload").fire("click");
@@ -236,6 +238,60 @@ describe("normal customer success action", () => {
       expect(page.node("ticket-detail").hidden).toBe(false);
     },
   );
+  it.each([
+    { commandId: "-".repeat(36), lastSeenVisibleMessageId: "solution-1" },
+    { commandId: "a".repeat(36), lastSeenVisibleMessageId: "solution-1" },
+    { commandId: "00112233-4455-1677-8899-aabbccddeeff", lastSeenVisibleMessageId: "solution-1" },
+    { commandId: "00112233-4455-4677-7899-aabbccddeeff", lastSeenVisibleMessageId: "solution-1" },
+    ...["", "s".repeat(201), "solution\u0000", "solution\t", "solution\n", "solution\r", "solution\u007f", "solution\u0085", "solution\u009f"].map((lastSeenVisibleMessageId) => ({
+      commandId: "00112233-4455-4677-8899-aabbccddeeff",
+      lastSeenVisibleMessageId,
+    })),
+  ])("ignores server-invalid saved confirmation before it can block controls: %j", async (invalid) => {
+    const retained = storage();
+    const key = "pegma.support.success.v1:" + encodeURIComponent(account.account.subject) + ":ticket-example";
+    const saved = JSON.stringify({ subject: account.account.subject, ticketId: "ticket-example", body: JSON.stringify(invalid) });
+    retained.setItem(key, saved);
+    const sent: BrowserCall[] = [];
+    const page = supportBrowser("customer", (call) => {
+      if (call.path === "/api/identity/session") return { body: account };
+      if (call.path.endsWith("/confirm-success")) sent.push(call);
+      return { body: view() };
+    });
+    Object.assign(page.window, { sessionStorage: retained });
+    for (let read = 0; read < 2; read++) {
+      await page.until(() => !page.node("ticket-detail").hidden);
+      expect(page.node("confirm-success").textContent).not.toContain("Retry");
+      expect(page.node("request-person").disabled).toBe(false);
+      expect(page.node("reply-form").querySelector("button")!.disabled).toBe(false);
+      expect(retained.getItem(key)).toBe(saved);
+      if (read === 0) page.node("ticket-reload").fire("click");
+    }
+    page.node("confirm-success").fire("click");
+    await page.until(() => page.node("ticket-status").textContent === "Resolution confirmed. Thank you.");
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(sent[0]!.body!)).toMatchObject({ lastSeenVisibleMessageId: "solution-1" });
+    expect(JSON.parse(sent[0]!.body!).commandId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
+    expect(sent[0]!.body).not.toBe(JSON.stringify(invalid));
+  });
+  it.each([" ", "s".repeat(200), "solution-\u00e9-\ud83d\ude80"])("preserves valid bounded message IDs and uppercase UUID bytes: %s", async (messageId) => {
+    const retained = storage();
+    const body = '{ "lastSeenVisibleMessageId": ' + JSON.stringify(messageId) + ', "commandId": "00112233-4455-4677-AB99-AABBCCDDEEFF" }';
+    retained.setItem("pegma.support.success.v1:" + encodeURIComponent(account.account.subject) + ":ticket-example", JSON.stringify({ subject: account.account.subject, ticketId: "ticket-example", body }));
+    const sent: BrowserCall[] = [];
+    const page = supportBrowser("customer", (call) => {
+      if (call.path === "/api/identity/session") return { body: account };
+      if (call.path.endsWith("/confirm-success")) sent.push(call);
+      return { body: view("closed", "newer-message") };
+    });
+    Object.assign(page.window, { sessionStorage: retained });
+    await page.until(() => !page.node("confirm-success").disabled);
+    expect(page.node("confirm-success").textContent).toContain("Retry");
+    page.node("confirm-success").fire("click");
+    await page.until(() => page.node("ticket-status").textContent === "Resolution confirmed. Thank you.");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body).toBe(body);
+  });
   it("preserves the exact pending owner across A to B to A when session storage is unavailable", async () => {
     let current = account;
     const sent: BrowserCall[] = [];

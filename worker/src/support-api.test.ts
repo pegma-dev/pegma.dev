@@ -1,5 +1,5 @@
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
-import { createMemoryStore } from '@pegma/storage-core';
+import { createMemoryStore, type Store } from '@pegma/storage-core';
 import { createSessionStore } from '@pegma/sessions';
 import { fixedClock, type Logger, type PrincipalId } from '@pegma/spine';
 import {
@@ -162,6 +162,10 @@ function fixture(options: {
   readonly omitRoleStore?: boolean;
   /** Override the role store the API sees (e.g. a failing one). */
   readonly roleStoreOverride?: Parameters<typeof createSupportApi>[0]['roleStore'];
+  readonly followup?: {
+    readonly enabled: () => boolean;
+    readonly composed?: boolean;
+  };
 } = {}) {
   const store = createMemoryStore();
   const sessions = createSessionStore(store, { logger });
@@ -191,6 +195,24 @@ function fixture(options: {
       ? undefined
       : (options.roleStoreOverride ?? runtime.roleStore),
     bootstrapPrincipals: new Set(options.bootstrapPrincipals ?? []),
+    ...(options.followup === undefined ? {} : {
+      releaseFollowupEnabled: options.followup.enabled,
+      ...(options.followup.composed === false ? {} : {
+        releaseFollowup: {
+          identity,
+          sessions,
+          identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+          logger,
+          roleStore: runtime.roleStore,
+          enabled: options.followup.enabled,
+          readLimiter: runtime.engineeringReadLimiter,
+          mutationLimiter: runtime.engineeringMutationLimiter,
+          runtime() {
+            throw new Error('A staff capability read must not construct follow-up work');
+          },
+        },
+      }),
+    }),
   });
   return {
     store,
@@ -622,6 +644,74 @@ describe('application ownership boundary', () => {
 });
 
 describe('staff support API', () => {
+  it('constructs request-local public SDK evidence applications without persistent work or subscriptions', () => {
+    const backing = createMemoryStore();
+    let operations = 0;
+    const store: Store = {
+      collection(definition) {
+        const target = backing.collection(definition);
+        return new Proxy(target, {
+          get(object, field, receiver) {
+            const value: unknown = Reflect.get(object, field, receiver);
+            if (typeof value !== 'function') return value;
+            return (...args: unknown[]) => {
+              operations += 1;
+              return Reflect.apply(value, object, args);
+            };
+          },
+        });
+      },
+    };
+    const sessions = createSessionStore(store, { clock, logger });
+    const identity = identityFor(new Map());
+    const runtime = createSupportRuntime({
+      store, sessions, identity, clock, logger,
+      identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
+      resolutionLearning: { enabled: true },
+    });
+    const verifier = { verify: vi.fn(async () => null) };
+    for (let count = 0; count < 4; count++) {
+      const application = runtime.createResolutionEvidenceApplication(verifier);
+      expect(application).not.toBe(runtime.application);
+      expect(typeof application.submitResolutionEvidence).toBe('function');
+    }
+    expect(runtime.store).toBe(store);
+    expect(runtime.clock).toBe(clock);
+    expect(runtime.sessions).toBe(sessions);
+    expect(runtime.identity).toBe(identity);
+    expect(operations).toBe(0);
+    expect(verifier.verify).not.toHaveBeenCalled();
+  });
+  it.each(['omitted', 'off', 'on', 'failed', 'uncomposed'] as const)(
+    'reports the current %s deployment follow-up capability without creating work',
+    async (mode) => {
+      let enabled = mode === 'on' || mode === 'uncomposed';
+      const t = fixture({
+        ...(mode === 'omitted' ? {} : {
+          followup: {
+            enabled() {
+              if (mode === 'failed') throw new Error('Synthetic failed capability');
+              return enabled;
+            },
+            composed: mode !== 'uncomposed',
+          },
+        }),
+      });
+      await grantSupport(t.roleStore, principalStaff);
+      const customer = await createCustomerTicket(t.api, t.sessions, principalA, 'a');
+      const staff = await sessionCookie(t.sessions, principalStaff, 's'.repeat(43));
+      const path = '/api/support/admin/tickets/' + customer.ticketId;
+      const response = await t.api(get(path, staff.cookie));
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { releaseFollowupEnabled?: boolean }).releaseFollowupEnabled)
+        .toBe(mode === 'omitted' ? undefined : mode === 'on');
+      if (mode === 'on') {
+        enabled = false;
+        expect(((await (await t.api(get(path, staff.cookie))).json()) as { releaseFollowupEnabled?: boolean }).releaseFollowupEnabled)
+          .toBe(false);
+      }
+    },
+  );
   it('returns 401 for unauthenticated staff routes', async () => {
     const { api } = fixture();
     const queue = await api(get('/api/support/admin/queue'));

@@ -1,7 +1,8 @@
 import { hasPermission, serializeAccessContext, type AccessContext } from '@pegma/authorization-core';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import { createAgentPrincipalResolver } from './agent-authority';
-import { createSupportLearningTestReceipts } from './support-learning-test-receipts';
+import { createSupportLearningTestReceipts, readSupportTestEvidenceGovernance, LearningTestReceiptError } from './support-learning-test-receipts';
+import { ApiError } from './api-auth';
 import { SUPPORT_ANSWERING_DISCLOSURE_VERSION, composeSupportAnswering, supportAnsweringTurns, supportAnsweringEnabled, supportAnsweringAdmissionEnabled, type SupportAnsweringComposition } from './support-assistant-composition';
 import { createProductionSupportAnswering, type SupportAssistantProductionEnvironment } from './support-assistant-production';
 import { runSupportAssistantTimer } from './support-assistant-timer';
@@ -268,16 +269,19 @@ function createSupportHandler(
       resolvePrincipal: (id) => createAgentPrincipalResolver(supportRuntime)(id),
       knowledge: () => knowledgeHost?.knowledge().application,
       reports: () => knowledgeHost?.knowledge().evidence,
-      async readGovernance(collectionId, signal) {
-        const resolver =
+      async readGovernance(collectionId, signal, policyHint) {
+        const selectedResolver = () =>
           followupSelection !== undefined &&
           Object.hasOwn(followupSelection, 'governanceAccess')
             ? followupSelection.governanceAccess
             : learning?.testEvidence?.governanceAccess;
+        const resolver = selectedResolver();
+        const sourceConfiguration = env.SUPPORT_LEARNING_SOURCE_CONFIGURATION_JSON;
         if (
           !resolver ||
           signal.aborted ||
-          !supportReleaseFollowupSourceEnabled(env)
+          !supportReleaseFollowupSourceEnabled(env) ||
+          !knowledgeRetrievalEnabled(env)
         )
           return null;
         const before = await resolver.resolve(collectionId, signal);
@@ -292,21 +296,45 @@ function createSupportHandler(
         ]);
         const application = knowledgeHost?.knowledge().application;
         if (!application) return null;
-        const result = await application.getGovernanceConfiguration(
-          before.access,
-          { collectionId },
-        );
-        const after = await resolver.resolve(collectionId, signal);
-        return after &&
-          !signal.aborted &&
+        const current = (active: AbortSignal) =>
+          !active.aborted &&
           supportReleaseFollowupSourceEnabled(env) &&
-          authority ===
-            JSON.stringify([
+          knowledgeRetrievalEnabled(env) &&
+          env.SUPPORT_LEARNING_SOURCE_CONFIGURATION_JSON === sourceConfiguration &&
+          selectedResolver() === resolver &&
+          knowledgeHost?.knowledge().application === application;
+        const confirmAuthority = async (
+          active: AbortSignal,
+        ): Promise<false | (() => true)> => {
+          if (!current(active)) return false;
+          const after = await resolver.resolve(collectionId, active);
+          if (
+            !after ||
+            !current(active) ||
+            !hasPermission(after.access, knowledgePermissions.validationManage) ||
+            authority !== JSON.stringify([
               after.authorityVersion,
               serializeAccessContext(after.access),
             ])
-          ? result
-          : null;
+          )
+            return false;
+          // This synchronous tail checks captured host configuration only. The
+          // awaited resolver above owns current external privileged authority.
+          return (): true => {
+            if (!current(active)) throw new TypeError('Test evidence authority changed');
+            return true;
+          };
+        };
+        const result = await readSupportTestEvidenceGovernance(
+          application, before.access, collectionId, policyHint,
+        ).catch((error: unknown) => {
+          if (error instanceof LearningTestReceiptError && error.code === 'changed')
+            throw new ApiError(409, 'followup_retest_changed');
+          throw error;
+        });
+        return (await confirmAuthority(signal)) === false
+          ? null
+          : { ...result, confirmAuthority };
       },
     });
     followupConfigured = supportReleaseFollowupEnabled(releaseFollowup);
@@ -388,6 +416,10 @@ function createSupportHandler(
               before.access,
               { collectionId },
             );
+            const validationPolicy = await application.getValidationPolicy(
+              before.access,
+              { policyId: value.configuration.validationPolicy.id },
+            );
             const after = await selected.governanceAccess.resolve(
               collectionId,
               signal,
@@ -399,7 +431,7 @@ function createSupportHandler(
               authority !== sameAuthority(after)
             )
               return null;
-            return value;
+            return { ...value, validationPolicy };
           },
         });
       }
@@ -534,7 +566,21 @@ function createSupportHandler(
     replyLimiter: supportRuntime.replyLimiter,
     logger,
     onCustomerMessageAccepted: answeringRuntime?.hintAccepted,
-    ...(learningRuntime === undefined ? {} : { learningRuntime }),
+    releaseFollowupEnabled: () => followupConfigured && supportReleaseFollowupEnabled(releaseFollowup),
+    ...(learningRuntime === undefined ? {} : {
+      learningRuntime: {
+        ...learningRuntime,
+        ...(!testReceiptAttached || testReceiptPreparation === undefined ? {} : {
+          successfulTestScope() {
+            const scope = testReceiptPreparation!.forSubmission();
+            return {
+              application: supportRuntime.createResolutionEvidenceApplication(scope.verifier),
+              confirm: scope.confirm,
+            };
+          },
+        }),
+      },
+    }),
     ...(!testReceiptAttached || testReceiptPreparation === undefined ? {} : {
       learningTestReceiptPreparation: testReceiptPreparation,
       learningTestReceiptEnabled: testReceiptEnabled,

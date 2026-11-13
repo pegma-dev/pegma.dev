@@ -23,6 +23,7 @@ import {
   cleanupLaneAt,
 } from './maintenance-schedule';
 import { readSupportCursor } from './support-cursors';
+import { supportFollowupRetestReceipts } from './support-release-followup-retests';
 
 interface Budget {
   operation: string;
@@ -57,6 +58,29 @@ const rawRows = defineCollection<RawRow>({
     }),
   },
 });
+
+const followupRows = defineCollection<RawRow>({
+  name: supportFollowupRetestReceipts.name,
+  key: (value) => ({ partition: value.partition, id: value.id }),
+  codec: {
+    encode: (value) => ({ kind: 'intent', ticketId: value.partition, id: value.id, payload: value.payload }),
+    decode: (value) => ({ partition: String(value.ticketId), id: String(value.id), payload: String(value.payload) }),
+  },
+});
+// Cleanup-only abandoned intents, never qualifying a report or Work.
+function followupIntent(index: number): RawRow {
+  const ticketId = 'cleanup-only-followup-ticket';
+  const id = 'receipt:' + index.toString(16).padStart(64, '0');
+  return { partition: ticketId, id, payload: JSON.stringify({
+    kind: 'intent', ticketId, id, actorId: 'cleanup-only-actor',
+    commandHash: index.toString(16).padStart(64, '0'), inputHash: 'a'.repeat(64),
+    packet: { commandId: '12345678-1234-4123-8123-123456789012', expectedPrincipalId: 'cleanup-only-actor', workId: 'cleanup-only-work', expectedWorkGeneration: 1, expectedTicketRevision: 1, retestRequestId: 'cleanup-only-request', report: { articleId: 'cleanup-only-article', ledgerEpoch: 1, reportId: 'cleanup-only-report', expectedReportGeneration: 1, reviewBindingHash: 'b'.repeat(64), receipt: 'cleanup-only-kb-receipt' } },
+    binding: { ticketId, workId: 'cleanup-only-work', workBindingHash: 'cleanup-only-binding', requestId: 'cleanup-only-request', requestHash: 'cleanup-only-hash', bundleHash: 'cleanup-only-bundle', productBinding: 'cleanup-only-product' },
+    workFingerprint: 'cleanup-only-work-fingerprint', workGeneration: 1,
+    reportContext: { product: { productId: 'cleanup-only-product', version: 'legacy', buildId: 'legacy' }, validationRequirementIds: [] },
+    retainUntil: new Date(NOW - 1).toISOString(),
+  }) };
+}
 
 // Legacy cleanup-only coordinates. No report is submitted or verified, and
 // these rows never serve as Support evidence or a passing workflow fixture.
@@ -279,6 +303,7 @@ describe('registered test-receipt cleanup over genuine D1', () => {
               : [reference(index, NOW + 60_000)];
         await rows.put(row(index, references));
       }
+      for (let index = 1; index <= 16; index++) await setup.collection(followupRows).put(followupIntent(index));
       const measured = meter(env.IDENTITY_DB);
       const environment = {
         ...env,
@@ -326,6 +351,11 @@ describe('registered test-receipt cleanup over genuine D1', () => {
             await readSupportCursor(setup, 'testReceiptCursor'),
           ).toBeUndefined();
       }
+      const redacted = await setup.collection(supportFollowupRetestReceipts).list('cleanup-only-followup-ticket');
+      expect(redacted).toHaveLength(16);
+      expect(redacted.every((value) => value.kind === 'tombstone')).toBe(true);
+      expect(JSON.stringify(redacted)).not.toContain('cleanup-only-actor');
+      expect(JSON.stringify(redacted)).not.toContain('cleanup-only-kb-receipt');
       const survivors = await rows.scan({ limit: 32 });
       expect(survivors.records).toHaveLength(16);
       for (const entry of survivors.records) {

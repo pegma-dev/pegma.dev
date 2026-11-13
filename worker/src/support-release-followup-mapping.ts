@@ -52,6 +52,10 @@ const command = z
   .regex(
     /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu,
   );
+// A staff disclosure is not a live GitHub/deployment observer. Only a new
+// explicit verify command renews this original, bounded verification window.
+export const SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS = 3600000;
+const ATTESTATION_MS = 300000;
 const coordinates = {
   commandId: command,
   expectedPrincipalId: scalar,
@@ -263,6 +267,15 @@ export function createSupportFollowupMappings(
   const observations = options.store.collection(
     supportFollowupReleaseObservations,
   );
+  function verificationCurrent(head: Head) {
+    const verified = Date.parse(head.verifiedAt);
+    const now = Date.parse(options.clock.now());
+    return (
+      Number.isFinite(now) &&
+      now >= verified &&
+      now < verified + SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS
+    );
+  }
   async function key(ticketId: string, repositoryId: string, issueId: string) {
     return {
       partition: ticketId,
@@ -530,6 +543,7 @@ export function createSupportFollowupMappings(
   ): Promise<VerifiedEngineeringFollowupContext | null> {
     try {
       enabled(signal);
+      if (!verificationCurrent(head)) return null;
       const access = await options.resolvePrincipal(head.actorId);
       if (
         !access ||
@@ -618,6 +632,7 @@ export function createSupportFollowupMappings(
         return null;
       enabled(signal);
       if (
+        !verificationCurrent(head) ||
         !currentActor ||
         canonical(currentActor) !== canonical(access) ||
         fresh?.kind !== 'mapping' ||
@@ -671,12 +686,18 @@ export function createSupportFollowupMappings(
         },
         publicFacts:
           deploymentState === 'deployed' ? head.packet.publicFacts : [],
-        // This is a current durable-facts read, not model/retest qualification.
+        // Reading retained staff facts never renews the original disclosure.
         attestation: {
           verifierReceiptId: head.inputReference,
           verifierVersion: 'pg-staff-release-mapping-v1',
           verifiedAt: at,
-          validUntil: new Date(Date.parse(at) + 300000).toISOString(),
+          validUntil: new Date(
+            Math.min(
+              Date.parse(at) + ATTESTATION_MS,
+              Date.parse(head.verifiedAt) +
+                SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS,
+            ),
+          ).toISOString(),
         },
       };
     } catch {
@@ -823,6 +844,10 @@ export function createSupportFollowupMappings(
               inputReference: head.inputReference,
               verifiedBy: head.actorId,
               verifiedAt: head.verifiedAt,
+              verificationValidUntil: new Date(
+                Date.parse(head.verifiedAt) +
+                  SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS,
+              ).toISOString(),
               issueState: head.packet.issueState,
               deploymentState: head.packet.deploymentState,
               fixedProduct: head.packet.fixedProduct,
@@ -835,6 +860,7 @@ export function createSupportFollowupMappings(
               withdrawn: head.withdrawn,
               current:
                 !head.withdrawn &&
+                verificationCurrent(head) &&
                 head.releaseJournalVersion === 2 &&
                 mapper !== null &&
                 mapper.roles.includes(SUPPORT_ROLE) &&

@@ -9,8 +9,9 @@ import {
   createSupportDeskApplication,
   type ResolutionProductContextPort,
   type ResolutionTrustContext,
+  type ResolutionTestReceiptPort,
 } from "@pegma/support-desk-application";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { identityLinkKeyFromVerifiedIdentityClaims } from "@pegma/authorization-identity";
 import { createIdentityRuntime } from "./identity-runtime";
 import { createSupportRuntime } from "./support-desk";
@@ -21,6 +22,7 @@ import {
   SUPPORT_ROLE,
 } from "./support-access";
 import { IDENTITY_ISSUER, SESSION_COOKIE } from "./identity-api";
+import { humanLatch } from "./support-human-control-fixtures";
 import {
   createSupportLearningFixture,
   learningTicketId,
@@ -28,6 +30,7 @@ import {
 import { KNOWLEDGE_EVIDENCE_CONFIRM_PERMISSION } from "./support-access";
 import {
   createSupportLearningTestReceipts,
+  readSupportTestEvidenceGovernance,
   LearningTestReceiptError,
   type LearningTestReceiptOptions,
   type PrepareLearningTestReceipt,
@@ -40,6 +43,7 @@ async function fixture(
     readonly sameOwner?: boolean;
     readonly delegated?: boolean;
     readonly observations?: boolean;
+    readonly runnerId?: string;
     readonly articleId?: string;
     readonly result?: EvidenceSubmission["result"];
     readonly status?: "pending" | "confirmed" | "rejected";
@@ -107,15 +111,23 @@ async function fixture(
       const governance = await f.knowledge.getGovernanceConfiguration(access, {
         collectionId,
       });
-      return governance;
+      const validationPolicy = await f.knowledge.getValidationPolicy(access, {
+        policyId: governance.configuration.validationPolicy.id,
+      });
+      return { ...governance, validationPolicy };
     },
   };
   const bridge = createSupportLearningTestReceipts(configuration);
-  application = createSupportDeskApplication({
+  const applicationFor = (testReceipts: ResolutionTestReceiptPort) => createSupportDeskApplication({
     store,
     clock: f.clock,
-    resolutionLearning: { enabled: true, productContext, testReceipts: bridge },
+    resolutionLearning: { enabled: true, productContext, testReceipts },
   });
+  application = applicationFor(bridge);
+  const successfulTestScope = () => {
+    const scope = bridge.forSubmission();
+    return { application: applicationFor(scope.verifier), confirm: scope.confirm };
+  };
   const terminal = await f.terminal();
   await application.enrollResolutionLearning(f.actors.staff, {
     ticketId: learningTicketId,
@@ -245,7 +257,7 @@ async function fixture(
     steps: ["Export a fictional workspace."],
     result: options.result ?? "passed",
     executedAt: f.clock.now(),
-    runnerId: f.actors.runner.principalId,
+    runnerId: options.runnerId ?? f.actors.runner.principalId,
     artifacts: [{ id: "fictional-output", hash: "a".repeat(64) }],
   };
   const ledger = await f.reports.ledger(reporter, { articleId });
@@ -355,6 +367,8 @@ async function fixture(
     store,
     bridge,
     application,
+    applicationFor,
+    successfulTestScope,
     productContext,
     configuration,
     reports,
@@ -379,9 +393,265 @@ async function fixture(
 }
 
 describe("staff-approved KB report associations", () => {
-  it.each(["evidence", "evidence-recovery"] as const)(
-    "prevents the actual %s evidence transaction when the original browser is revoked during current KB proof verification",
-    async (operation) => {
+  it.each([false, true])(
+    "uses fresh public policy reads with scheduling hint=%s and a complete no-hint fallback",
+    async (hinted) => {
+      const f = await fixture({ observations: true });
+      const access = f.f.actors.admin;
+      const governance = await f.f.knowledge.getGovernanceConfiguration(access, {
+        collectionId: f.collectionId,
+      });
+      const entered = humanLatch();
+      const resume = humanLatch();
+      const policyRead = vi.fn((...args: Parameters<typeof f.f.knowledge.getValidationPolicy>) =>
+        f.f.knowledge.getValidationPolicy(...args));
+      const pending = readSupportTestEvidenceGovernance({
+        async getGovernanceConfiguration(...args) {
+          entered.release();
+          await resume.ready;
+          return f.f.knowledge.getGovernanceConfiguration(...args);
+        },
+        getValidationPolicy: policyRead,
+      }, access, f.collectionId, hinted ? governance.configuration.validationPolicy : undefined);
+      await entered.ready;
+      try {
+        // The hint schedules the independent real policy read while the real
+        // governance read is unresolved. No hint preserves dependent ordering.
+        expect(policyRead).toHaveBeenCalledTimes(hinted ? 1 : 0);
+      } finally {
+        resume.release();
+      }
+      const result = await pending;
+      expect(result.configuration).toEqual(governance.configuration);
+      expect(result.validationPolicy.policy).toMatchObject(governance.configuration.validationPolicy);
+      expect(policyRead).toHaveBeenCalledOnce();
+      expect(result).not.toHaveProperty("policyHint");
+    },
+  );
+
+  it.each(["version", "identity"] as const)(
+    "refuses a stale paired policy %s hint against both fresh public reads",
+    async (change) => {
+      const f = await fixture({ observations: true });
+      const access = f.f.actors.admin;
+      const governance = await f.f.knowledge.getGovernanceConfiguration(access, {
+        collectionId: f.collectionId,
+      });
+      const hint = governance.configuration.validationPolicy;
+      const current = await f.f.knowledge.getValidationPolicy(access, { policyId: hint.id });
+      if (change === "version") {
+        await f.f.knowledge.putValidationPolicy(access, {
+          ...f.f.command("advance-hinted-policy", current.generation),
+          policy: { ...current.policy, version: current.policy.version + 1 },
+        });
+        await f.f.knowledge.putGovernanceConfiguration(access, {
+          ...f.f.command("advance-hinted-governance", governance.generation),
+          collectionId: f.collectionId,
+          configuration: {
+            ...governance.configuration,
+            validationPolicy: { id: hint.id, version: hint.version + 1 },
+          },
+        });
+      } else {
+        const other = { ...current.policy, id: "fictional-other-policy" };
+        await f.f.knowledge.putValidationPolicy(access, {
+          ...f.f.command("different-hinted-policy"), policy: other,
+        });
+        await f.f.knowledge.putGovernanceConfiguration(access, {
+          ...f.f.command("different-hinted-governance", governance.generation),
+          collectionId: f.collectionId,
+          configuration: {
+            ...governance.configuration,
+            validationPolicy: { id: other.id, version: other.version },
+          },
+        });
+      }
+      await expect(readSupportTestEvidenceGovernance(
+        f.f.knowledge, access, f.collectionId, hint,
+      )).rejects.toMatchObject({ code: "changed" });
+    },
+  );
+
+  it("never treats a paired policy hint as validation-management authority", async () => {
+    const f = await fixture({ observations: true });
+    const governance = await f.f.knowledge.getGovernanceConfiguration(f.f.actors.admin, {
+      collectionId: f.collectionId,
+    });
+    await expect(readSupportTestEvidenceGovernance(
+      f.f.knowledge, f.f.actors.staff, f.collectionId,
+      governance.configuration.validationPolicy,
+    )).rejects.toThrow();
+  });
+  it("recovers an accepted scoped SDK receipt before opening any new KB observation", async () => {
+    const f = await fixture({ observations: true });
+    const input = await f.input();
+    const prepared = await f.bridge.prepare(f.staff(), input);
+    const packet = {
+      ticketId: input.ticketId,
+      commandId: "scoped-evidence-recovery",
+      correlationId: "scoped-evidence-recovery",
+      expectedRevision: input.expectedRevision,
+      resolutionCycle: input.resolutionCycle,
+      evidence: {
+        kind: "successful_test" as const,
+        solutionMessageId: input.solutionMessageId,
+        receipt: prepared.receipt,
+      },
+    };
+    const first = f.successfulTestScope();
+    const accepted = await first.application.submitResolutionEvidence(
+      f.f.actors.staff, packet, {
+        verifyBeforeCommit: () => first.confirm(new AbortController().signal),
+      },
+    );
+    expect(accepted.state).toBe("eligible");
+    const report = await f.f.reports.read(f.f.actors.staff, f.reportKey);
+    await f.f.reports.decide(f.f.actors.staff, {
+      ...f.reportKey,
+      commandId: "withdraw-after-scoped-acceptance",
+      expectedReportGeneration: report.reportGeneration,
+      reviewBindingHash: report.reviewBindingHash,
+    }, "pending");
+    const before = await f.f.rows();
+    const replay = f.bridge.forSubmission();
+    const verify = vi.fn(replay.verifier.verify);
+    const guard = vi.fn(() => replay.confirm(new AbortController().signal));
+    expect(await f.applicationFor({ verify }).submitResolutionEvidence(
+      f.f.actors.staff, packet, { verifyBeforeCommit: guard },
+    )).toEqual(accepted);
+    expect(verify).not.toHaveBeenCalled();
+    expect(guard).not.toHaveBeenCalled();
+    expect(await f.f.rows()).toEqual(before);
+  });
+  it.each([false, true])(
+    "refuses a confirmed report from an untrusted runner with paired observations=%s before KB acceptance",
+    async (observations) => {
+      const f = await fixture({
+        observations,
+        runnerId: "fictional-untrusted-runner",
+      });
+      expect(await f.reports.read(f.f.actors.staff, f.reportKey))
+        .toMatchObject({ status: "confirmed" });
+      expect((await f.f.knowledge.getEvidence(f.f.actors.staff, {
+        articleId: f.articleId,
+      })).evidence).toHaveLength(0);
+      const input = await f.input();
+      await expect(f.bridge.prepare(f.staff(), input))
+        .rejects.toMatchObject({ code: "changed" });
+      expect(await f.bridge.cleanup({ limit: 32 })).toMatchObject({ scanned: 0 });
+      // Only the private configured reader can obtain the full policy. The
+      // associating staff actor gains no validation-management grant.
+      await expect(f.f.knowledge.getValidationPolicy(f.f.actors.staff, {
+        policyId: "synthetic-learning-validation",
+      })).rejects.toThrow();
+    },
+  );
+  it.each([
+    ["prepare", "product", "pending"],
+    ["prepare", "product", "rejected"],
+    ["prepare", "product", "revoked"],
+    ["verify", "product", "pending"],
+    ["verify", "product", "rejected"],
+    ["verify", "product", "revoked"],
+    ["verify", "authority", "pending"],
+    ["verify", "authority", "rejected"],
+    ["verify", "authority", "revoked"],
+  ] as const)(
+    "closes the actual KB observation after %s final %s await with %s report",
+    async (stage, phase, change) => {
+      const f = await fixture({ observations: true });
+      if (change === "revoked") await f.acceptKB();
+      const input = await f.input();
+      const prepared = stage === "verify"
+        ? await f.bridge.prepare(f.staff(), input)
+        : undefined;
+      const entered = humanLatch();
+      const resume = humanLatch();
+      let products = 0;
+      let actors = 0;
+      const bridge = createSupportLearningTestReceipts({
+        ...f.configuration,
+        productContext: {
+          async resolve(context, signal) {
+            const product = await f.productContext.resolve(context, signal);
+            products += 1;
+            if (phase === "product" && products === 2) {
+              entered.release();
+              await resume.ready;
+            }
+            return product;
+          },
+        },
+        async resolvePrincipal(id, signal) {
+          actors += 1;
+          if (phase === "authority" && actors === 2) {
+            entered.release();
+            await resume.ready;
+          }
+          return f.configuration.resolvePrincipal(id, signal);
+        },
+      });
+      const pending = prepared === undefined
+        ? bridge.prepare(f.staff(), input)
+        : bridge.verify(
+          prepared.receipt,
+          await f.trust(input),
+          new AbortController().signal,
+        );
+      await entered.ready;
+      try {
+        if (change === "revoked") {
+          const evidence = await f.f.knowledge.getEvidence(f.f.actors.staff, {
+            articleId: f.articleId,
+          });
+          const accepted = evidence.evidence[0];
+          if (accepted === undefined) throw new Error("Actual KB evidence missing");
+          await f.f.knowledge.revokeEvidence(f.f.actors.admin, {
+            ...f.f.command("revoke-during-closing-product", evidence.generation),
+            articleId: f.articleId,
+            articleRevision: accepted.articleRevision,
+            evidenceId: accepted.id,
+            evidenceVersion: accepted.version,
+            evidenceHash: accepted.hash,
+            reason: "Fictional closing-proof revocation",
+          });
+        } else {
+          let report = await f.f.reports.read(f.f.actors.staff, f.reportKey);
+          if (change === "rejected") {
+            // The real public report API requires reset before a new decision.
+            await f.f.reports.decide(f.f.actors.staff, {
+              ...f.reportKey,
+              commandId: "reset-before-closing-rejection",
+              expectedReportGeneration: report.reportGeneration,
+              reviewBindingHash: report.reviewBindingHash,
+            }, "pending");
+            report = await f.f.reports.read(f.f.actors.staff, f.reportKey);
+          }
+          await f.f.reports.decide(f.f.actors.staff, {
+            ...f.reportKey,
+            commandId: "change-during-closing-proof",
+            expectedReportGeneration: report.reportGeneration,
+            reviewBindingHash: report.reviewBindingHash,
+          }, change);
+        }
+      } finally {
+        resume.release();
+      }
+      if (stage === "verify") expect(await pending).toBeNull();
+      else {
+        await expect(pending).rejects.toBeInstanceOf(LearningTestReceiptError);
+        expect(await bridge.cleanup({ limit: 32 })).toMatchObject({ scanned: 0 });
+      }
+    },
+  );
+  it.each([
+    ["evidence", "proof"],
+    ["evidence-recovery", "proof"],
+    ["evidence", "host-tail"],
+    ["evidence-recovery", "host-tail"],
+  ] as const)(
+    "prevents the actual %s evidence transaction after %s revocation",
+    async (operation, phase) => {
       const f = await fixture({ observations: true });
       const input = await f.input();
       const receipt = await f.bridge.prepare(f.staff(), input);
@@ -431,11 +701,42 @@ describe("staff-approved KB report associations", () => {
           csrfToken: csrf,
         }),
       });
+      let proofReturned = false;
+      let tailRevoked = false;
+      const successfulTestScope = () => {
+        const scope = f.bridge.forSubmission();
+        return {
+          application: f.applicationFor({
+            async verify(...args) {
+              const result = await scope.verifier.verify(...args);
+              proofReturned = true;
+              return result;
+            },
+          }),
+          confirm: scope.confirm,
+        };
+      };
       const handler = createSupportLearningBrowserHandlers({
         ...host,
         roleStore: host.roleStore,
         identity: identity.identity,
-        sessions: identity.sessions,
+        sessions: {
+          ...identity.sessions,
+          async observe(id) {
+            const observed = await identity.sessions.observe(id);
+            if (phase === "host-tail" && proofReturned && !tailRevoked) {
+              tailRevoked = true;
+              const report = await f.f.reports.read(f.f.actors.staff, f.reportKey);
+              await f.f.reports.decide(f.f.actors.staff, {
+                ...f.reportKey,
+                commandId: "revoke-in-final-host-guard",
+                expectedReportGeneration: report.reportGeneration,
+                reviewBindingHash: report.reviewBindingHash,
+              }, "pending");
+            }
+            return observed;
+          },
+        },
         logger: { log() {} },
         limiter: host.replyLimiter,
         identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
@@ -445,11 +746,12 @@ describe("staff-approved KB report associations", () => {
           knowledge: f.f.knowledge,
           sources: f.f.sources,
           clock: f.f.clock,
+          successfulTestScope,
         },
       });
       let proofs = 0;
       f.state.policyHook = async () => {
-        if (++proofs === 1) await identity.sessions.destroy(sid);
+        if (++proofs === 1 && phase === "proof") await identity.sessions.destroy(sid);
       };
       const before = await f.f.rows();
       const response = await handler(
@@ -480,7 +782,11 @@ describe("staff-approved KB report associations", () => {
         ),
       );
       expect(proofs, await response?.clone().text()).toBeGreaterThan(0);
-      expect(response?.status).toBe(401);
+      expect(response?.status).toBe(phase === "proof" ? 401 : 409);
+      if (phase === "host-tail") {
+        expect(proofReturned).toBe(true);
+        expect(tailRevoked).toBe(true);
+      }
       expect(await f.f.rows()).toEqual(before);
       expect(f.f.state.modelCalls).toBe(0);
     },

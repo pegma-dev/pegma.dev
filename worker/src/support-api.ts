@@ -155,6 +155,8 @@ interface SupportApiOptions {
   readonly learningEnabled?: () => boolean;
   readonly learningTestReceiptPreparation?: SupportLearningHandlerOptions['testReceiptPreparation'];
   readonly learningTestReceiptEnabled?: () => boolean;
+  /** Current deployment capability; absent or failed composition is disabled. */
+  readonly releaseFollowupEnabled?: () => boolean;
   /** Additive trusted staged-review capability; it never enables learning itself. */
   readonly learningStagedReviewsEnabled?: () => boolean;
   readonly engineering?: SupportEngineeringRouterOptions;
@@ -794,6 +796,15 @@ export function createSupportApi(
   options: SupportApiOptions,
 ): (request: Request) => Promise<Response> {
   const followupHandler = createSupportReleaseFollowupHandlers(options.releaseFollowup);
+  const followupReady = (): boolean => {
+    if (options.releaseFollowup === undefined) return false;
+    try {
+      return options.releaseFollowupEnabled?.() === true &&
+        options.releaseFollowup.enabled() === true;
+    } catch {
+      return false;
+    }
+  };
   const engineeringRouter = createSupportEngineeringRouter(options.engineering);
   const engineeringReady = (): boolean => {
     if (options.engineering?.configuration === undefined) return false;
@@ -927,6 +938,15 @@ export function createSupportApi(
             commandId,
             correlationId: mintSupportId(),
             lastSeenVisibleMessageId,
+          }, {
+            signal: request.signal,
+            async verifyBeforeCommit() {
+              await browser.current();
+              return () => {
+                browser.assertCurrent();
+                return true;
+              };
+            },
           })
           .catch((error: unknown) => {
             if (error instanceof TicketWorkflowError)
@@ -1102,7 +1122,8 @@ export function createSupportApi(
         const ticketId = adminMatch[1]!;
         if (
           typeof options.learningEnabled === 'function' ||
-          options.engineering !== undefined
+          options.engineering !== undefined ||
+          options.releaseFollowupEnabled !== undefined
         ) {
           // This optional hint comes from current real stored Support authority,
           // active Identity and the same live session, never browser role fields.
@@ -1125,6 +1146,10 @@ export function createSupportApi(
             return json({
               ...staffTicketView(view),
               csrfToken: final.authenticated.csrfToken,
+              ...(options.releaseFollowupEnabled === undefined ? {} : {
+                releaseFollowupEnabled: followupReady() &&
+                  hasPermission(final.access, supportPermissions.engineeringFollowupRead),
+              }),
               ...(options.engineering === undefined
                 ? {}
                 : {

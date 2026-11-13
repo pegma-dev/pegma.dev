@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createSupportReleaseFollowupFixture } from './support-release-followup-fixtures';
 import { createSupportRuntime } from './support-desk';
 import { createAgentPrincipalResolver } from './agent-authority';
@@ -14,6 +14,8 @@ import {
 import { recordSupportFollowupRelease } from './support-release-followup-releases';
 import { supportReleaseFollowupApplicationOptions } from './support-release-followup-ports';
 import type { Store } from '@pegma/storage-core';
+
+const SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS = 3600000;
 
 async function fixture(fault?: 'lost_ack') {
   const f = await createSupportReleaseFollowupFixture();
@@ -141,6 +143,68 @@ async function fixture(fault?: 'lost_ack') {
 }
 
 describe('real staff-verified durable release/deployment mapping', () => {
+  it('permits minute-staged reads inside one hour without renewing the original staff verification', async () => {
+    const f = await fixture();
+    let now = Date.parse(f.f.clock.now());
+    const started = now;
+    const clock = vi.spyOn(f.f.clock, 'now').mockImplementation(() => new Date(now).toISOString());
+    const verify = vi.spyOn(f.mappings.releaseEvidence, 'verifyInput');
+    try {
+      const ack = await f.mappings.verify(f.context, f.f.identity.ticketId, f.packet);
+      expect((await f.observe(ack.inputReference)).outcome).toBe('queued');
+      const proof = verify.mock.calls[0]![1];
+      for (const minute of [1, 5, 15, 30, 59]) {
+        now = started + minute * 60000;
+        const observed = await f.mappings.releaseEvidence.verifyInput(ack.inputReference, proof, f.context.signal);
+        expect(observed).not.toBeNull();
+        expect(Date.parse(observed!.attestation.validUntil)).toBeLessThanOrEqual(started + SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS);
+        expect(Date.parse(observed!.attestation.validUntil)).toBeLessThanOrEqual(now + 300000);
+      }
+      now = started + SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS;
+      expect(await f.mappings.releaseEvidence.verifyInput(ack.inputReference, proof, f.context.signal)).toBeNull();
+      expect((await f.mappings.read(f.context, f.f.identity.ticketId, f.packet.repositoryId, f.packet.issueId)).mapping).toMatchObject({ current: false, verificationValidUntil: new Date(now).toISOString() });
+      // Recovering an already accepted command is not an instruction to renew.
+      expect(await f.mappings.verify(f.context, f.f.identity.ticketId, f.packet)).toEqual(ack);
+      expect(await f.mappings.releaseEvidence.verifyInput(ack.inputReference, proof, f.context.signal)).toBeNull();
+      const ticket = await f.host.application.readStaffTicket(f.access, f.f.identity.ticketId);
+      const renewed = await f.mappings.verify(f.context, f.f.identity.ticketId, {
+        ...f.packet, commandId: crypto.randomUUID(), expectedMappingGeneration: ack.mappingGeneration,
+        expectedTicketRevision: ticket.ticket.revision,
+      });
+      expect(renewed.mappingGeneration).toBe(ack.mappingGeneration + 1);
+      expect(await f.mappings.releaseEvidence.verifyInput(ack.inputReference, proof, f.context.signal)).toBeNull();
+      expect(await f.mappings.releaseEvidence.verifyInput(renewed.inputReference, proof, f.context.signal)).not.toBeNull();
+      expect((await f.mappings.read(f.context, f.f.identity.ticketId, f.packet.repositoryId, f.packet.issueId)).mapping?.current).toBe(true);
+      expect(f.f.state.modelCalls).toBe(0);
+    } finally {
+      verify.mockRestore(); clock.mockRestore();
+    }
+  });
+
+  it('refuses original verification expiry during the closing asynchronous proof reads', async () => {
+    const f = await fixture();
+    let now = Date.parse(f.f.clock.now());
+    const started = now;
+    const clock = vi.spyOn(f.f.clock, 'now').mockImplementation(() => new Date(now).toISOString());
+    const verify = vi.spyOn(f.mappings.releaseEvidence, 'verifyInput');
+    const original = crypto.subtle.digest.bind(crypto.subtle);
+    let expire = false;
+    const digest = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (algorithm, data) => {
+      const result = await original(algorithm, data);
+      if (expire) now = started + SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS;
+      return result;
+    });
+    try {
+      const ack = await f.mappings.verify(f.context, f.f.identity.ticketId, f.packet);
+      await f.observe(ack.inputReference);
+      const proof = verify.mock.calls[0]![1];
+      now = started + SUPPORT_FOLLOWUP_MAPPING_VERIFICATION_MS - 1;
+      expire = true;
+      expect(await f.mappings.releaseEvidence.verifyInput(ack.inputReference, proof, f.context.signal)).toBeNull();
+    } finally {
+      digest.mockRestore(); verify.mockRestore(); clock.mockRestore();
+    }
+  });
   it('keeps legacy journal mappings unapproved until explicit current staff verification', async () => {
     const f = await fixture();
     const original = await f.mappings.verify(

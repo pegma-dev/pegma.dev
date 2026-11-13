@@ -14,12 +14,12 @@ import {
   defineCollection,
   type Store,
   type StoredRecord,
+  type TransactionAction,
 } from '@pegma/storage-core';
 import type { Clock } from '@pegma/spine';
 import { knowledgeDigest as evidenceDigest } from '@pegma/knowledge-base-core';
 import { knowledgePermissions } from '@pegma/knowledge-base-contracts';
 import type {
-  GovernanceConfigurationDto,
   KnowledgeBaseApplication,
   KnowledgeEvidenceReports,
 } from '@pegma/knowledge-base-application';
@@ -41,6 +41,10 @@ import { SUPPORT_ROLE } from './support-access';
 import { canonical } from './support-openrouter-model';
 import { knowledgeDigest } from './knowledge-evidence';
 import type { SupportReleaseFollowupContext } from './support-release-followup';
+import {
+  supportTestEvidenceGovernanceSnapshot,
+  type SupportTestEvidenceGovernance,
+} from './support-learning-test-receipts';
 
 const scalar = z
   .string()
@@ -74,6 +78,11 @@ export type PrepareSupportFollowupRetestInput = z.infer<
   typeof prepareSupportFollowupRetestInput
 >;
 type Binding = EngineeringFollowupRetestBinding;
+export const SUPPORT_FOLLOWUP_RETEST_INTENT_MS = 300000;
+export const SUPPORT_FOLLOWUP_RETEST_RETENTION_MS = 86400000;
+// Never recycle command history: forgetting an exact command could start a new
+// association after an unknown ACK. This is a lifetime ceiling per ticket.
+export const SUPPORT_FOLLOWUP_RETEST_CAPACITY = 64;
 const binding = z
   .object({
     ticketId: scalar,
@@ -93,6 +102,13 @@ const reportContext = z
     validationRequirementIds: z.array(scalar).max(32),
   })
   .strict();
+// Resource coordinates only. They schedule fresh reads; they contain no
+// authority, policy content, opaque observation handle, or qualification.
+const readHint = z.object({
+  collectionId: scalar,
+  validationPolicy: z.object({ id: scalar, version: positive }).strict(),
+}).strict();
+type ReadHint = z.infer<typeof readHint>;
 const saved = z
   .object({
     kind: z.literal('receipt'),
@@ -111,6 +127,8 @@ const saved = z
     runnerId: scalar,
     verifiedAt: z.string().datetime({ precision: 3 }),
     validUntil: z.string().datetime({ precision: 3 }),
+    retainUntil: z.string().datetime({ precision: 3 }).optional(),
+    readHint: readHint.optional(),
   })
   .strict();
 type Saved = z.infer<typeof saved>;
@@ -127,12 +145,31 @@ const intent = z
     workFingerprint: scalar,
     reportContext,
     workGeneration: positive,
+    preparedAt: z.string().datetime({ precision: 3 }).optional(),
+    validUntil: z.string().datetime({ precision: 3 }).optional(),
+    retainUntil: z.string().datetime({ precision: 3 }).optional(),
   })
   .strict();
 type Intent = z.infer<typeof intent>;
+const tombstone = z.object({
+  kind: z.literal('tombstone'),
+  ticketId: scalar,
+  id: scalar,
+  commandHash: scalar,
+  inputHash: scalar,
+}).strict();
+const capacity = z.object({
+  kind: z.literal('capacity'),
+  ticketId: scalar,
+  id: z.literal('capacity'),
+  admitted: z.number().int().min(1).max(SUPPORT_FOLLOWUP_RETEST_CAPACITY),
+}).strict();
+const dataRow = z.discriminatedUnion('kind', [saved, intent, tombstone, capacity]);
 type Row =
   | Saved
   | Intent
+  | z.infer<typeof tombstone>
+  | z.infer<typeof capacity>
   | {
       readonly kind: 'audit';
       readonly ticketId: string;
@@ -151,8 +188,7 @@ export const supportFollowupRetestReceipts = defineCollection<Row>({
           id: value.id,
           ...encodeAuditEvent(value.event),
         };
-      const checked =
-        value.kind === 'intent' ? intent.parse(value) : saved.parse(value);
+      const checked = dataRow.parse(value);
       const payload = JSON.stringify(checked);
       if (new TextEncoder().encode(payload).length > 16000)
         throw new TypeError('Retest receipt exceeded');
@@ -183,10 +219,7 @@ export const supportFollowupRetestReceipts = defineCollection<Row>({
         new TextEncoder().encode(row.payload).length > 16000
       )
         throw new TypeError('Invalid retest receipt');
-      const value =
-        row.kind === 'intent'
-          ? intent.parse(JSON.parse(row.payload))
-          : saved.parse(JSON.parse(row.payload));
+      const value = dataRow.parse(JSON.parse(row.payload));
       if (
         value.kind !== row.kind ||
         value.ticketId !== row.ticketId ||
@@ -207,6 +240,74 @@ const audit = defineAudit<Row>({
   }),
   toEvent: (row) => (row.kind === 'audit' ? row.event : null),
 });
+
+/** Bounded nonpaid redaction. The durable hashes refuse expired exact commands;
+ * they cannot recreate receipts, authorize Work, or disclose report/actor data. */
+export async function cleanupSupportFollowupRetests(
+  options: { readonly store: Store; readonly clock: Clock },
+  input: { readonly limit: number; readonly cursor?: string },
+) {
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 8)
+    throw new TypeError('Invalid retest cleanup limit');
+  const now = Date.parse(options.clock.now());
+  if (!Number.isFinite(now)) throw new TypeError('Invalid retest cleanup clock');
+  const records = options.store.collection(supportFollowupRetestReceipts);
+  const page = await records.scan(input);
+  let changed = 0;
+  for (const entry of page.records) {
+    const value = entry.value;
+    if (value.ticketId !== entry.key.partition || value.id !== entry.key.id)
+      throw new TypeError('Invalid retest cleanup identity');
+    if (value.kind === 'capacity' || value.kind === 'tombstone') continue;
+    if (value.kind === 'audit') {
+      if (Date.parse(value.event.occurredAt) + SUPPORT_FOLLOWUP_RETEST_RETENTION_MS > now)
+        continue;
+      if (await records.deleteIfUnchanged(entry.key, entry.version)) changed++;
+      continue;
+    }
+    const until = value.retainUntil === undefined
+      ? value.kind === 'receipt'
+        ? Date.parse(value.verifiedAt) + SUPPORT_FOLLOWUP_RETEST_RETENTION_MS
+        : 0 // Legacy undated intents have no renewable retention authority.
+      : Date.parse(value.retainUntil);
+    if (until > now) continue;
+    if (await records.putIfUnchanged({
+      kind: 'tombstone', ticketId: value.ticketId, id: value.id,
+      commandHash: value.commandHash, inputHash: value.inputHash,
+    }, entry.version)) changed++;
+  }
+  return { scanned: page.records.length, changed, nextCursor: page.nextCursor };
+}
+
+const cleanupKey = { partition: 'followup-retests', id: 'cleanup' } as const;
+const cleanupCursor = z.object({ cursor: z.string().min(1).max(8192).nullable() }).strict();
+const cleanupCursors = defineCollection<z.infer<typeof cleanupCursor>>({
+  name: 'pegma.support-followup-retest-cleanup.v1',
+  key: () => cleanupKey,
+  codec: {
+    encode: (value) => cleanupCursor.parse(value),
+    decode: (value) => cleanupCursor.parse(value),
+  },
+});
+
+/** An independent bookmark shares the existing nonpaid receipt-cleanup wake;
+ * it never shares an opaque scan cursor with another collection. */
+export async function cleanupSupportFollowupRetestPage(
+  options: { readonly store: Store; readonly clock: Clock },
+) {
+  const cursors = options.store.collection(cleanupCursors);
+  const prior = await cursors.getVersioned(cleanupKey);
+  const result = await cleanupSupportFollowupRetests(options, {
+    limit: 4,
+    ...(prior?.value.cursor == null ? {} : { cursor: prior.value.cursor }),
+  });
+  if ((prior?.value.cursor ?? null) !== result.nextCursor) {
+    const value = { cursor: result.nextCursor };
+    if (prior === null) await cursors.insertIfAbsent(value);
+    else await cursors.putIfUnchanged(value, prior.version);
+  }
+  return result;
+}
 export interface SupportFollowupRetestOptions {
   /** Workers capture a body-free Work intent in a separate invocation. */
   readonly stagedPreparation?: boolean;
@@ -228,7 +329,9 @@ export interface SupportFollowupRetestOptions {
   readonly readGovernance: (
     collectionId: string,
     signal: AbortSignal,
-  ) => Promise<GovernanceConfigurationDto | null>;
+    /** Scheduling hint from the actual paired KB context, never caller input. */
+    policyHint?: { readonly id: string; readonly version: number },
+  ) => Promise<SupportTestEvidenceGovernance | null>;
 }
 
 /** Purpose-bound association of a real, staff-confirmed KB test report. This
@@ -374,8 +477,8 @@ export function createSupportFollowupRetests(
       request: { validationRequirementIds: readonly string[] };
     },
     signal: AbortSignal,
-    qualifyGovernance = true,
     deferConfirmation = false,
+    hint?: ReadHint,
   ) {
     const actual = ports(signal);
     const key = {
@@ -383,20 +486,40 @@ export function createSupportFollowupRetests(
       ledgerEpoch: packet.report.ledgerEpoch,
       reportId: packet.report.reportId,
     };
-    const observed = await reportRead(() =>
-      actual.observations.observe(access, key),
-    );
+    const opened = hint === undefined ? undefined : await Promise.allSettled([
+      reportRead(() => actual.observations.observe(access, key)),
+      options.readGovernance(hint.collectionId, signal, structuredClone(hint.validationPolicy)),
+    ] as const);
+    function fulfilled<Value>(value: PromiseSettledResult<Value>): Value {
+      if (value.status === 'rejected') throw value.reason;
+      return value.value;
+    }
+    // Both independent reads settle before any refusal. A retained hint never
+    // substitutes for the actual paired context or fresh privileged reader.
+    const observed = opened === undefined
+      ? await reportRead(() => actual.observations.observe(access, key))
+      : fulfilled(opened[0]);
     const { view, context } = observed;
     const confirmation = view.confirmation;
     const submission = view.evidence;
     const draft = context.draft.revision;
     const requirements = context.requirements;
-    const policy = qualifyGovernance
-      ? await options.readGovernance(draft.collectionId, signal)
-      : undefined;
+    if (hint && (draft.collectionId !== hint.collectionId ||
+      canonical(requirements.validationPolicy) !== canonical(hint.validationPolicy)))
+      throw new ApiError(409, 'followup_retest_changed');
+    const policy = opened === undefined
+      ? await options.readGovernance(
+          draft.collectionId, signal, structuredClone(requirements.validationPolicy),
+        )
+      : fulfilled(opened[1]);
+    // Missing scoped governance is an unavailable prerequisite, not evidence
+    // that an otherwise unchanged report or Work suffered a conflict.
+    if (!policy?.validationPolicy)
+      throw new ApiError(503, 'followup_retest_unavailable');
+    const policySnapshot = supportTestEvidenceGovernanceSnapshot(policy);
+    const confirmAuthority = policy.confirmAuthority;
     if (
       !confirmation ||
-      (qualifyGovernance && !policy) ||
       view.status !== 'confirmed' ||
       view.receipt !== packet.report.receipt ||
       view.reportGeneration !== packet.report.expectedReportGeneration ||
@@ -411,15 +534,27 @@ export function createSupportFollowupRetests(
         value.id === submission.checkId &&
         value.testKind === submission.testKind,
     );
-    const configuration = policy?.configuration;
+    const configuration = policy.configuration;
+    // The ordinary author DTO deliberately omits trusted identities. Only the
+    // server-scoped governance reader supplies this private current policy.
+    const validation = policy.validationPolicy.policy;
+    const trustedRule = validation.requirements.find((value) =>
+      value.id === submission.checkId && value.kind === draft.kind &&
+      value.testKind === submission.testKind,
+    );
     const now = Date.parse(options.clock.now());
     const executed = Date.parse(submission.executedAt);
     const confirmed = Date.parse(confirmation.confirmedAt);
     if (
       !rule ||
+      !trustedRule ||
+      policy.collectionId !== draft.collectionId ||
+      validation.id !== requirements.validationPolicy.id ||
+      validation.version !== requirements.validationPolicy.version ||
+      trustedRule.maxAgeMilliseconds !== rule.maxAgeMilliseconds ||
+      !trustedRule.trustedRunnerIds.includes(submission.runnerId) ||
       !['passed', 'failed'].includes(submission.result) ||
-      (configuration !== undefined &&
-        !configuration.trustedAttesterIds.includes(confirmation.reviewerId)) ||
+      !configuration.trustedAttesterIds.includes(confirmation.reviewerId) ||
       submission.articleId !== draft.articleId ||
       submission.articleRevision !== draft.number ||
       submission.contentHash !== draft.contentHash ||
@@ -428,14 +563,10 @@ export function createSupportFollowupRetests(
         canonical(requirements.validationPolicy) ||
       canonical(draft.validationPolicy) !==
         canonical(requirements.validationPolicy) ||
-      (configuration !== undefined &&
-        canonical(configuration.validationPolicy) !==
-          canonical(requirements.validationPolicy)) ||
-      (policy != null &&
-        policy.generation !== requirements.governanceGeneration) ||
-      (configuration !== undefined &&
-        configuration.expectedStagingBuildId !==
-          requirements.expectedStagingBuildId) ||
+      canonical(configuration.validationPolicy) !==
+        canonical(requirements.validationPolicy) ||
+      policy.generation !== requirements.governanceGeneration ||
+      configuration.expectedStagingBuildId !== requirements.expectedStagingBuildId ||
       submission.stagingBuildId !== requirements.expectedStagingBuildId ||
       submission.applicability.productId !== work.product.productId ||
       submission.applicability.productVersion !== work.product.version ||
@@ -475,6 +606,25 @@ export function createSupportFollowupRetests(
       if (consumed) throw new ApiError(409, 'followup_retest_changed');
       consumed = true;
       ports(currentSignal);
+      let assertAuthority: (() => true) | undefined;
+      if (typeof confirmAuthority === 'function') {
+        // The paired KB handle closes article, collection and FULL policy
+        // resource versions. Refresh the separate privileged-reader authority
+        // without loading the same immutable data a second time.
+        const assertion = await confirmAuthority(currentSignal);
+        if (typeof assertion !== 'function')
+          throw new ApiError(503, 'followup_retest_unavailable');
+        assertAuthority = assertion;
+      } else if (
+        canonical(supportTestEvidenceGovernanceSnapshot(
+          await options.readGovernance(
+            draft.collectionId, currentSignal, structuredClone(requirements.validationPolicy),
+          ),
+        )) !== canonical(policySnapshot)
+      ) {
+        // Structural/custom readers retain the full fresh data fallback.
+        throw new ApiError(409, 'followup_retest_changed');
+      }
       const checked = await reportRead(() =>
         actual.observations.confirm(access, observed.observation),
       );
@@ -482,11 +632,17 @@ export function createSupportFollowupRetests(
       // actor/reviewer authority. Keep its handle inside this one operation.
       if (checked.receipt !== view.receipt)
         throw new ApiError(409, 'followup_retest_changed');
+      if (assertAuthority && assertAuthority() !== true)
+        throw new ApiError(503, 'followup_retest_unavailable');
       ports(currentSignal);
     }
     if (!deferConfirmation) await confirm(signal);
     return {
       confirm,
+      readHint: {
+        collectionId: draft.collectionId,
+        validationPolicy: structuredClone(requirements.validationPolicy),
+      },
       fingerprint: await knowledgeDigest({
         key,
         reportHash: view.reportHash,
@@ -496,6 +652,7 @@ export function createSupportFollowupRetests(
         confirmation,
         draft: context.draft,
         requirements,
+        policyHash: await knowledgeDigest(policySnapshot),
       }),
       result: submission.result as 'passed' | 'failed',
       executionId:
@@ -560,11 +717,14 @@ export function createSupportFollowupRetests(
       const value = stored.value;
       if (
         value.kind === 'audit' ||
+        value.kind === 'capacity' ||
         value.inputHash !== inputHash ||
-        value.actorId !== access.principalId ||
+        ('actorId' in value && value.actorId !== access.principalId) ||
         value.commandHash !== commandHash
       )
         throw new ApiError(409, 'conflict');
+      if (value.kind === 'tombstone')
+        throw new ApiError(410, 'followup_retest_expired');
       return { value, version: stored.version };
     }
     const previous = await known();
@@ -574,11 +734,27 @@ export function createSupportFollowupRetests(
     }
     const captured =
       previous?.value.kind === 'intent' ? previous.value : undefined;
+    if (captured && (!captured.validUntil || Date.parse(captured.validUntil) <= Date.parse(options.clock.now())))
+      throw new ApiError(410, 'followup_retest_expired');
+    let admission: TransactionAction<Row> | undefined;
+    if (previous === undefined) {
+      const priorCapacity = await records.getVersioned({ partition: ticketId, id: 'capacity' });
+      if (priorCapacity && priorCapacity.value.kind !== 'capacity')
+        throw new TypeError('Invalid retest capacity');
+      const admitted = priorCapacity?.value.kind === 'capacity' ? priorCapacity.value.admitted : 0;
+      if (admitted >= SUPPORT_FOLLOWUP_RETEST_CAPACITY)
+        throw new ApiError(429, 'followup_retest_capacity');
+      const value = { kind: 'capacity' as const, ticketId, id: 'capacity' as const, admitted: admitted + 1 };
+      admission = priorCapacity === null
+        ? { action: 'insert', value }
+        : { action: 'putIfUnchanged', value, version: priorCapacity.version };
+    }
     if (options.stagedPreparation === true && captured === undefined) {
       const work = await workFacts(access, ticketId, packet, context.signal);
       if (work.workGeneration !== packet.expectedWorkGeneration)
         throw new ApiError(409, 'followup_retest_changed');
       await current();
+      const preparedAt = options.clock.now();
       const value: Intent = {
         kind: 'intent',
         ticketId,
@@ -594,11 +770,15 @@ export function createSupportFollowupRetests(
           product: work.product,
           validationRequirementIds: [...work.request.validationRequirementIds],
         },
+        preparedAt,
+        validUntil: new Date(Date.parse(preparedAt) + SUPPORT_FOLLOWUP_RETEST_INTENT_MS).toISOString(),
+        retainUntil: new Date(Date.parse(preparedAt) + SUPPORT_FOLLOWUP_RETEST_RETENTION_MS).toISOString(),
       };
       let inserted = false;
       try {
         inserted = (
           await records.transact(ticketId, [
+            ...(admission === undefined ? [] : [admission]),
             { action: 'insert', value },
             audit.action({
               id: 'followup-retest-intent:' + commandHash,
@@ -657,6 +837,8 @@ export function createSupportFollowupRetests(
     const at = options.clock.now();
     if (Date.parse(at) >= report.expiry)
       throw new ApiError(409, 'followup_retest_changed');
+    if (captured?.validUntil && Date.parse(at) >= Date.parse(captured.validUntil))
+      throw new ApiError(410, 'followup_retest_expired');
     const value: Saved = {
       kind: 'receipt',
       ticketId,
@@ -677,11 +859,14 @@ export function createSupportFollowupRetests(
       runnerId: report.runnerId,
       verifiedAt: at,
       validUntil: new Date(report.expiry).toISOString(),
+      retainUntil: new Date(Date.parse(at) + SUPPORT_FOLLOWUP_RETEST_RETENTION_MS).toISOString(),
+      readHint: report.readHint,
     };
     let accepted = false;
     try {
       accepted = (
         await records.transact(ticketId, [
+          ...(admission === undefined ? [] : [admission]),
           previous === undefined
             ? { action: 'insert', value }
             : { action: 'putIfUnchanged', value, version: previous.version },
@@ -744,8 +929,8 @@ export function createSupportFollowupRetests(
           },
         },
         signal,
-        false,
         deferred,
+        value.readHint,
       );
       ports(signal);
       if (

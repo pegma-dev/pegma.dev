@@ -112,6 +112,11 @@ export interface SupportLearningRuntimeOptions {
   readonly sources: SupportDeskLearningOptions['sources'];
   readonly clock: Clock;
   readonly staffAccess: SupportLearningStaffAccess;
+  /** One private receipt observation per SDK attempt, closed after the human guard. */
+  readonly successfulTestScope?: () => {
+    readonly application: Pick<ResolutionLearningApplication, 'submitResolutionEvidence'>;
+    readonly confirm: (signal: AbortSignal) => Promise<(() => true) | undefined>;
+  };
   /** Server-only staff boundary, including authority, SDK work and final ACK. */
   readonly staffOperationMilliseconds?: number;
   readonly processingEnabled?: () => boolean;
@@ -459,7 +464,8 @@ function createLearningRuntime(
     boundary: { readonly signal: AbortSignal; ensure(): void; current(): Promise<AccessContext> },
     verifyHumanBeforeCommit?: LearningEvidenceHumanGuard,
   ) {
-    return options.application.submitResolutionEvidence(access, packet, {
+    const scope = options.successfulTestScope?.();
+    return (scope?.application ?? options.application).submitResolutionEvidence(access, packet, {
       signal: boundary.signal,
       async verifyBeforeCommit() {
         boundary.ensure();
@@ -468,9 +474,14 @@ function createLearningRuntime(
             ? (await boundary.current(), undefined)
             : await verifyHumanBeforeCommit();
         boundary.ensure();
+        // The SDK has completed proof/planning and the original browser's last
+        // async authority check. Close the request-local KB observation now.
+        const receiptAssertion = await scope?.confirm(boundary.signal);
+        boundary.ensure();
         return () => {
           boundary.ensure();
           assertion?.();
+          receiptAssertion?.();
           return true;
         };
       },

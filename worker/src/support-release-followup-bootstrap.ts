@@ -29,7 +29,9 @@ export interface SupportReleaseFollowupEnvironment extends SupportLearningSource
 }
 
 /** Reuses the existing intrinsic read ceiling and explicit Source collection
- * scope. SD05 staff retests do not depend on learning intake or model flags. */
+ * scope. Retest association requires valid Source testEvidence configuration
+ * and the article collection in collectionIds, independently of intake/model
+ * flags. Missing scoped governance is reported as retest unavailable (503). */
 export function createSupportFollowupGovernanceAccess(
   env: SupportReleaseFollowupEnvironment,
 ) {

@@ -143,7 +143,16 @@ export function createSupportReleaseFollowupDriver(
     ): Promise<SupportReleaseFollowupDriverResult> {
       const started = performance.now();
       const controller = new AbortController();
-      const abort = () => controller.abort();
+      let rejectDeadline: (error: Error) => void = () => {};
+      const deadline = new Promise<never>((_, reject) => {
+        rejectDeadline = reject;
+      });
+      // Parent cancellation must settle a non-cooperative Store/runtime await.
+      void deadline.catch(() => {});
+      const abort = () => {
+        controller.abort();
+        rejectDeadline(new Error('Follow-up tick stopped'));
+      };
       run.signal?.addEventListener('abort', abort, { once: true });
       if (run.signal?.aborted) abort();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -166,16 +175,14 @@ export function createSupportReleaseFollowupDriver(
         run.signal?.removeEventListener('abort', abort);
         return { outcome: 'disabled', checkpointSaved: false };
       }
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          abort();
-          reject(new Error('Follow-up tick expired'));
-        }, 25000);
-      });
+      timer = setTimeout(abort, 25000);
       const within = async <Value>(work: () => Promise<Value>) => {
         if (!current()) throw new Error('Follow-up tick unavailable');
         const value = await Promise.race([
-          Promise.resolve().then(work),
+          Promise.resolve().then(() => {
+            if (!current()) throw new Error('Follow-up tick unavailable');
+            return work();
+          }),
           deadline,
         ]);
         if (!current()) throw new Error('Follow-up tick unavailable');
