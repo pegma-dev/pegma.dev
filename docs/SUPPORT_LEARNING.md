@@ -17,9 +17,9 @@ activation evidence.
 
 ## Packages and authority
 
-The host selects all five published Support Desk packages at **0.2.9** and its
+The host selects all five published Support Desk packages at **0.2.10** and its
 four direct Knowledge Base packages at **0.1.8**. The qualified
-[Support 0.2.9 release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.9)
+[Support 0.2.10 release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.10)
 also uses exact KB **0.1.8** public contracts. The
 [public forwarding port](../worker/src/support-learning-ports.ts) preserves the
 actual KB error instances; the obsolete KB 0.1.2 constructor alias and translation
@@ -31,7 +31,7 @@ Historically, Support **0.2.1** used nested KB **0.1.2** while this host selecte
 direct KB **0.1.5**. The exact `@pegma/knowledge-base-ai-compat` registry alias and
 recognized-error translation belonged to that earlier assembly. Its failed
 isolated production-layout diagnostic remains historical evidence; neither its
-ordinary fixture passes nor that failure qualifies the current 0.2.9 graph.
+ordinary fixture passes nor that failure qualifies the current 0.2.10 graph.
 
 The current [host policy](../worker/src/support-access.ts), `pegma.dev-policy-8`,
 grants four human learning permissions through the actual stored, audited
@@ -329,7 +329,7 @@ cases, with zero errors in its Astro, Worker and recipe check. These historical
 counts overlap the assembly baseline. They predate the earlier 0.2.2 adoption and
 full-intent/commit-guard changes and do not qualify the current host source.
 The earlier public `0.2.5` [adoption checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint)
-passed 1,125 tests locally and in CI. It does not qualify the current `0.2.9`
+passed 1,125 tests locally and in CI. It does not qualify the current `0.2.10`
 graph. Current host validation, review and deployment acceptance remain pending.
 
 Relevant executable sources are the
