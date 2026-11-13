@@ -44,7 +44,7 @@ const EVAL_NPM: Record<string, string | null> = {
   '@pegma/support-desk-application': '0.2.9',
   '@pegma/support-desk-templates': '0.1.1',
   '@pegma/webhooks': '0.1.1',
-  '@pegma/sessions': '0.2.1',
+  '@pegma/sessions': '0.3.0',
   '@pegma/mail': '0.1.1',
   '@pegma/billing-core': '0.1.1',
   '@pegma/billing-stripe': '0.1.1',
