@@ -159,11 +159,7 @@ export async function createProductionSupportAnswering(
   try {
     if (environment.PEGMA_SUPPORT_ASSISTANT_ENABLED !== 'true') return recovery;
     const raw = environment.PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON;
-    if (
-      typeof raw !== 'string' ||
-      raw.length > 65_536 ||
-      raw.length === 0
-    )
+    if (typeof raw !== 'string' || raw.length > 65_536 || raw.length === 0)
       return recovery;
     const data = object(JSON.parse(raw), [
       'version',
@@ -234,6 +230,12 @@ export async function createProductionSupportAnswering(
           provider: PROVIDER,
           endpointTag: ENDPOINT_TAG,
           outputTokenParameter: 'max_tokens' as const,
+        }),
+        Object.freeze({
+          model: MODEL,
+          provider: PROVIDER,
+          endpointTag: ENDPOINT_TAG,
+          outputTokenParameter: 'max_completion_tokens' as const,
         }),
       ],
       readRoute: () =>
