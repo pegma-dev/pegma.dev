@@ -297,6 +297,11 @@
         (!ownerState.sent || ownerState.rejected)
       );
     }
+    function terminalPreparationRefusal(error) {
+      return owner?.operation === 'retest-receipt' &&
+        ((error.status === 410 && error.code === 'followup_retest_expired') ||
+          (error.status === 429 && error.code === 'followup_retest_capacity'));
+    }
     async function ownedRequest(send, qualify) {
       const state = ownerState;
       const previouslyUncertain = state.uncertain;
@@ -308,7 +313,7 @@
         response = await send();
       } catch (error) {
         // A closed refusal cannot erase a prior unknown acknowledgement.
-        if ([400, 409, 413].includes(error.status) && !previouslyUncertain) {
+        if (([400, 409, 413].includes(error.status) || terminalPreparationRefusal(error)) && !previouslyUncertain) {
           state.uncertain = false;
           state.rejected = true;
         }
@@ -1172,7 +1177,7 @@
           return;
         }
         clearPrivate();
-        if (error.status === 429)
+        if (error.status === 429 && !(terminalPreparationRefusal(error) && canDiscard()))
           retryAt = Math.max(retryAt, error.retryAt ?? now() + 30_000);
         status.textContent =
           owner === null

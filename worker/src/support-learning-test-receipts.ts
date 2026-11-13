@@ -721,25 +721,27 @@ export function createSupportLearningTestReceipts(
       if (consumed) refuse("changed");
       consumed = true;
       if (observations !== undefined && reportObservation !== undefined) {
-        const [confirmed, latestPolicy] = await Promise.all([
-          reportBoundary(() =>
-            observations.confirm(
-              access,
-              reportObservation.observation,
-              ownerVerification,
-            ),
-          ),
-          options.readGovernance(draft.collectionId, closingSignal),
-        ]);
+        const latestPolicy = await options.readGovernance(draft.collectionId, closingSignal);
+        closingCheck();
+        if (
+          (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(latestPolicy))) !==
+            (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(policy)))
+        )
+          refuse("changed");
+        // Governance reads must finish before consuming the exact KB handle.
+        // A report change during those reads is then caught by this close.
+        const confirmed = await reportBoundary(() => observations.confirm(
+          access, reportObservation.observation, ownerVerification,
+        ));
         if (
           ports().reports.observations !== observations ||
           confirmed.receipt !== view.receipt ||
           (ownerVerification !== undefined &&
             (confirmed.attestation === null ||
-              (await knowledgeDigest(confirmed.attestation)) !==
-                (await knowledgeDigest(attestation)))) ||
-          (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(latestPolicy))) !==
-            (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(policy)))
+              Object.keys(confirmed.attestation).sort().join(",") !== "id,verifiedAt,verifiedBy" ||
+              confirmed.attestation.id !== attestation.id ||
+              confirmed.attestation.verifiedBy !== attestation.verifiedBy ||
+              confirmed.attestation.verifiedAt !== attestation.verifiedAt))
         )
           refuse("changed");
       } else {
@@ -753,14 +755,9 @@ export function createSupportLearningTestReceipts(
           )
             refuse("changed");
         }
-        // Legacy ports retain the complete public report and KB closing reads.
-        if (observed === undefined) refuse("unavailable");
-        await actual.knowledge.confirmAuthoringContext(
-          access,
-          observed.observation,
-        );
-        const [final, latestPolicy, latestReviewer] = await Promise.all([
-          actual.reports.read(access, key),
+        // Legacy ports also finish governance/reviewer waits before closing
+        // their KB observation and reading the final current report.
+        const [latestPolicy, latestReviewer] = await Promise.all([
           options.readGovernance(draft.collectionId, closingSignal),
           options.resolvePrincipal(confirmation.reviewerId, closingSignal),
         ]);
@@ -769,10 +766,14 @@ export function createSupportLearningTestReceipts(
           reviewer === undefined ||
           reviewer === null ||
           authority(latestReviewer) !== authority(reviewer) ||
-          (await knowledgeDigest(final)) !== (await knowledgeDigest(view)) ||
           (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(latestPolicy))) !==
             (await knowledgeDigest(supportTestEvidenceGovernanceSnapshot(policy)))
         )
+          refuse("changed");
+        if (observed === undefined) refuse("unavailable");
+        await actual.knowledge.confirmAuthoringContext(access, observed.observation);
+        const final = await actual.reports.read(access, key);
+        if ((await knowledgeDigest(final)) !== (await knowledgeDigest(view)))
           refuse("changed");
       }
       closingCheck();

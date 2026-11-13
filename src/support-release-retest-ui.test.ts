@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { supportBrowser, disposeSupportBrowsers } from './test-support-browser';
+import { BrowserNode, supportBrowser, disposeSupportBrowsers } from './test-support-browser';
 const PG = true;
 const context: any = { Date, setTimeout, clearTimeout, URLSearchParams };
 runInNewContext(
@@ -83,7 +83,10 @@ function fixture() {
     losePreparation: false,
     loseResult: false,
     http: 200,
+    errorCode: undefined as string | undefined,
     resultHTTP: 200,
+    resultErrorCode: undefined as string | undefined,
+    now: Date.now(),
     pendingCount: 0,
     malformed: false,
     afterPreparation: undefined as (() => void) | undefined,
@@ -170,6 +173,7 @@ function fixture() {
       if (state.resultHTTP !== 200)
         throw Object.assign(new Error('request_failed'), {
           status: state.resultHTTP,
+          code: state.resultErrorCode,
         });
       if (state.loseResult) {
         state.loseResult = false;
@@ -211,7 +215,7 @@ function fixture() {
       throw new Error('lost_preparation_ack');
     }
     if (status !== 200 && status !== 202)
-      throw Object.assign(new Error('request_failed'), { status });
+      throw Object.assign(new Error('request_failed'), { status, code: state.errorCode });
     const result = {
       actorId: 'Actor:A',
       ticketId: 'Ticket:A',
@@ -244,10 +248,13 @@ function fixture() {
       '15df8c75-33ac-4e45-a144-' + String(++state.ids).padStart(12, '0'),
     onSettled: settled,
     onAccessLost: accessLost,
+    now: () => state.now,
   });
   cleanups.push(() => panel.suspend());
   const field = (key: string) =>
     all(root).find((n) => n.dataset.followupField === key)!;
+  const button = (key: string) =>
+    all(root).find((n) => n.dataset.followupAction === key)!;
   const open = (ticketId = 'Ticket:A') =>
     panel.showTicket({
       ticketId,
@@ -271,6 +278,7 @@ function fixture() {
     panel,
     root,
     field,
+    button,
     state,
     work,
     report,
@@ -291,6 +299,83 @@ function channels(root: Node) {
     .join('\n');
 }
 describe('current confirmed-report retest association and exact recovery', () => {
+  it('allows explicit discard after a known pending preparation expires, without recording a result', async () => {
+    const f = fixture(); await f.load();
+    f.state.pendingCount = 1;
+    f.state.afterPreparation = () => { f.state.http = 410; f.state.errorCode = 'followup_retest_expired'; };
+    await f.prepare();
+    expect(f.prepCalls()).toHaveLength(2);
+    expect(f.prepCalls()[1]!.bytes).toBe(f.prepCalls()[0]!.bytes);
+    expect(f.panel.hasPending()).toBe(true);
+    expect(f.button('discard').disabled).toBe(false);
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(false);
+    expect(f.resultPackets).toEqual([]);
+    expect(f.settled).not.toHaveBeenCalled();
+  });
+  it('allows immediate explicit discard after a first lifetime-capacity refusal without a quota cooldown', async () => {
+    const f = fixture(); await f.load();
+    f.state.http = 429; f.state.errorCode = 'followup_retest_capacity';
+    await f.prepare();
+    expect(f.prepCalls()).toHaveLength(1);
+    expect(f.panel.hasPending()).toBe(true);
+    expect(f.button('discard').disabled).toBe(false);
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(false);
+    expect(f.resultPackets).toEqual([]);
+    expect(f.settled).not.toHaveBeenCalled();
+  });
+  it.each([
+    [410, undefined], [410, 'followup_retest_capacity'],
+    [429, undefined], [429, 'rate_limited'], [429, 'followup_retest_expired'],
+  ])('keeps an unproven preparation refusal uncertain: %s %s', async (http, code) => {
+    const f = fixture(); await f.load();
+    f.state.http = http as number; f.state.errorCode = code as string | undefined;
+    await f.prepare();
+    const original = f.prepCalls()[0]!.bytes;
+    if (http === 429) {
+      expect(f.button('exact-retry').disabled).toBe(true);
+      await f.panel.perform('exact-retry');
+      expect(f.prepCalls()).toHaveLength(1);
+    }
+    f.state.now += 30_001; f.open();
+    expect(f.button('discard').disabled).toBe(true);
+    await f.panel.perform('discard');
+    expect(f.panel.hasPending()).toBe(true);
+    f.state.http = 200; f.state.errorCode = undefined;
+    await f.panel.perform('exact-retry');
+    expect(f.prepCalls()).toHaveLength(2);
+    expect(f.prepCalls()[1]!.bytes).toBe(original);
+    expect(f.resultPackets).toEqual([]);
+  });
+  it.each([[410, 'followup_retest_expired'], [429, 'followup_retest_capacity']])(
+    'retains an earlier lost preparation ACK despite a later terminal refusal: %s', async (http, code) => {
+      const f = fixture(); await f.load();
+      f.state.losePreparation = true; await f.prepare();
+      const original = f.prepCalls()[0]!.bytes;
+      f.state.http = http as number; f.state.errorCode = code as string;
+      await f.panel.perform('exact-retry');
+      f.state.now += 30_001; f.open();
+      expect(f.button('discard').disabled).toBe(true);
+      await f.panel.perform('discard');
+      expect(f.panel.hasPending()).toBe(true);
+      expect(f.prepCalls()).toHaveLength(2);
+      expect(f.prepCalls()[1]!.bytes).toBe(original);
+      expect(f.resultPackets).toEqual([]);
+    },
+  );
+  it.each([[410, 'followup_retest_expired'], [429, 'followup_retest_capacity']])(
+    'does not treat a result-send refusal as terminal preparation proof: %s', async (http, code) => {
+      const f = fixture(); await f.load(); await f.prepare();
+      f.state.resultHTTP = http as number; f.state.resultErrorCode = code as string;
+      await f.panel.perform('retest-result');
+      f.state.now += 30_001; f.open();
+      expect(f.button('discard').disabled).toBe(true);
+      await f.panel.perform('discard');
+      expect(f.panel.hasPending()).toBe(true);
+      expect(f.resultPackets).toHaveLength(1);
+    },
+  );
   it('explicitly discards an associated but unsent result without submitting any result', async () => {
     const f = fixture();
     await f.load();
@@ -610,6 +695,31 @@ describe('current confirmed-report retest association and exact recovery', () =>
 });
 
 describe('actual PG ticket status-preserving preparation transport', () => {
+  it.each([
+    [410, 'followup_retest_expired'], [429, 'followup_retest_capacity'],
+    [429, 'rate_limited'], [410, { unexpected: true }],
+  ])('retains bounded terminal error metadata without confusing transient refusals: %s %j', async (status, error) => {
+    let options: any;
+    const view = { ticket: { id: 'ticket-example', revision: 1, handling: { state: 'human-active', generation: 0 } },
+      messages: [], csrfToken: 'csrf', releaseFollowupEnabled: true };
+    const page = supportBrowser('staff', (call) => ({
+      status: call.path.endsWith('/retest-receipt') ? status as number : 200,
+      body: call.path === '/api/identity/session' ? { account: { subject: 'Actor:A' }, csrfToken: 'csrf' }
+        : call.path.endsWith('/handoff') ? { handoff: [], csrfToken: 'csrf' }
+          : call.path.endsWith('/retest-receipt') ? { error } : view,
+    }), { PegmaSupportFollowup: { createPanel(received: any) {
+      options = received; return { showTicket() {}, suspend() {}, hasPending: () => false };
+    } } });
+    await page.until(() => !page.node('staff-ticket-detail').hidden && options?.canRequest() === true);
+    const body = JSON.stringify({ commandId: 'Command:Original' });
+    const failure = await options.requestWithStatus('/api/support/admin/tickets/ticket-example/follow-up/retest-receipt', { method: 'POST', body }).catch((value: unknown) => value);
+    expect(failure.status).toBe(status);
+    expect(failure.code).toBe(typeof error === 'string' ? error : undefined);
+    if (status === 429) expect(failure.retryAt).toBeGreaterThanOrEqual(Date.now());
+    const sent = page.calls.find((call) => call.path.endsWith('/retest-receipt'))!;
+    expect(sent.body).toBe(body);
+    expect(sent.headers.get('X-Pegma-CSRF')).toBe('csrf');
+  });
   it('preserves the actual202 status, current CSRF and credential fences without changing ordinary reads', async () => {
     let options: any;
     const panel = {
@@ -673,5 +783,58 @@ describe('actual PG ticket status-preserving preparation transport', () => {
     expect(
       await options.request('/api/support/admin/tickets/ticket-example'),
     ).toEqual(view);
+  });
+});
+
+class ControllerPanelNode extends BrowserNode {
+  setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+}
+describe('real ticket controller and retest panel terminal refusal recovery', () => {
+  it.each([
+    { status: 410, code: 'followup_retest_expired' },
+    { status: 429, code: 'followup_retest_capacity' },
+  ])('unblocks ordinary writes only after explicit discard of proven preparation refusal $status', async ({ status, code }) => {
+    const data = fixture(); data.work.ticketId = 'ticket-example';
+    const view = { ticket: { id: 'ticket-example', revision: 10, handling: { state: 'human-active', generation: 1 } },
+      messages: [], csrfToken: 'csrf', releaseFollowupEnabled: true };
+    const sent: string[] = []; let panel: any;
+    const page = supportBrowser('staff', (call) => {
+      if (call.path === '/api/identity/session') return { body: { account: { subject: 'Actor:A' }, csrfToken: 'csrf' } };
+      if (call.path.endsWith('/handoff')) return { body: { handoff: [], csrfToken: 'csrf' } };
+      if (call.path.includes('/follow-up/work?')) return { body: { result: data.work, csrfToken: 'csrf' } };
+      if (call.path === '/api/staff/knowledge/command') return { body: data.report };
+      if (call.path.endsWith('/retest-receipt')) {
+        sent.push(call.body!);
+        const packet = JSON.parse(call.body!);
+        if (status === 410 && sent.length === 1) return { status: 202, body: { result: {
+          actorId: 'Actor:A', ticketId: 'ticket-example', commandId: packet.commandId, workId: packet.workId,
+          retestRequestId: packet.retestRequestId, pending: 'report',
+        }, csrfToken: 'csrf' } };
+        return { status, body: { error: code } };
+      }
+      return { body: view };
+    }, { PegmaSupportFollowup: { createPanel(received: any) {
+      received.root.ownerDocument = { createElement: (tag: string) => new ControllerPanelNode(tag) };
+      panel = createPanel({ ...received, commandId: () => '15df8c75-33ac-4e45-a144-000000000001' });
+      return panel;
+    } } });
+    await page.until(() => !page.node('staff-ticket-detail').hidden && !page.node('staff-followup-panel').hidden);
+    const field = (name: string) => page.node('staff-followup-panel').all().find((node) => node.dataset.followupField === name)!;
+    const button = (name: string) => page.node('staff-followup-panel').all().find((node) => node.dataset.followupAction === name)!;
+    field('workId').value = data.work.workId; await panel.perform('work');
+    field('retestRequestId').value = 'Retest:ExactCase'; field('retestRequestId').fire('change');
+    field('articleId').value = 'Article:A'; field('ledgerEpoch').value = '2'; field('reportId').value = 'Report:A';
+    await panel.perform('report-read'); await panel.perform('retest-receipt');
+    expect(sent).toHaveLength(status === 410 ? 2 : 1);
+    expect(sent.every((body) => body === sent[0])).toBe(true);
+    expect(panel.hasPending()).toBe(true);
+    page.node('compose-body').value = 'A fictional ordinary reply after explicit recovery.';
+    page.mode('public'); page.node('staff-compose-form').fire('change');
+    expect(page.node('compose-submit').disabled).toBe(true);
+    expect(button('discard').disabled).toBe(false);
+    await panel.perform('discard');
+    expect(panel.hasPending()).toBe(false);
+    expect(page.node('compose-submit').disabled).toBe(false);
+    expect(page.calls.some((call) => call.path.endsWith('/retest') || call.path.endsWith('/messages'))).toBe(false);
   });
 });

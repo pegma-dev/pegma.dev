@@ -286,13 +286,23 @@ async function api(path, init = {}, includeStatus = false) {
           cache: 'no-store',
           referrerPolicy: 'no-referrer',
         });
-        if (!response.ok)
+        if (!response.ok) {
+          let code;
+          if (response.status === 410 || response.status === 429) {
+            try {
+              const failure = await response.json();
+              if (typeof failure?.error === 'string' && failure.error.length <= 200)
+                code = failure.error;
+            } catch { /* Missing/malformed error data retains unknown-outcome handling. */ }
+          }
           throw Object.assign(new Error('request_failed'), {
             status: response.status,
+            ...(code === undefined ? {} : { code }),
             ...(response.status === 429
               ? { retryAt: retryDeadline(response.headers.get('Retry-After')) }
               : {}),
           });
+        }
         const body = await response.json();
         return includeStatus ? { status: response.status, body } : body;
       })(),

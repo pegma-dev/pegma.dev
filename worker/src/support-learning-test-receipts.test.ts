@@ -393,6 +393,93 @@ async function fixture(
 }
 
 describe("staff-approved KB report associations", () => {
+  it.each([
+    ["prepare", "pending"], ["prepare", "rejected"], ["prepare", "revoked"],
+    ["verify", "pending"], ["verify", "rejected"], ["verify", "revoked"],
+    ["submission", "pending"], ["submission", "rejected"], ["submission", "revoked"],
+  ] as const)(
+    "closes the actual KB report after every final governance read for %s with %s change",
+    async (stage, change) => {
+      const f = await fixture({ observations: true });
+      if (change === "revoked") await f.acceptKB();
+      const input = await f.input();
+      const prepared = stage === "prepare" ? undefined : await f.bridge.prepare(f.staff(), input);
+      const actual = f.reports.observations;
+      if (!actual) throw new Error("Actual paired KB capability required");
+      const finished = humanLatch();
+      let confirmationStarted = false;
+      let governanceReads = 0;
+      let changed = false;
+      const reports = {
+        ...f.reports,
+        observations: {
+          ...actual,
+          async confirm(...args: Parameters<typeof actual.confirm>) {
+            confirmationStarted = true;
+            try { return await actual.confirm(...args); }
+            finally { finished.release(); }
+          },
+        },
+      };
+      const bridge = createSupportLearningTestReceipts({
+        ...f.configuration,
+        reports: () => reports,
+        async readGovernance(...args) {
+          const policy = await f.configuration.readGovernance(...args);
+          if (++governanceReads === 2) {
+            // Under the old Promise.all order, let the genuine confirmation
+            // finish before invalidating its report during this pending read.
+            // With the fixed order confirmation has not started yet.
+            if (confirmationStarted) await finished.ready;
+            if (change === "revoked") {
+              const evidence = await f.f.knowledge.getEvidence(f.f.actors.staff, { articleId: f.articleId });
+              const accepted = evidence.evidence[0];
+              if (!accepted) throw new Error("Actual accepted evidence required");
+              await f.f.knowledge.revokeEvidence(f.f.actors.admin, {
+                ...f.f.command("revoke-inside-final-governance", evidence.generation),
+                articleId: f.articleId, articleRevision: accepted.articleRevision,
+                evidenceId: accepted.id, evidenceVersion: accepted.version,
+                evidenceHash: accepted.hash, reason: "Fictional final governance revocation",
+              });
+            } else {
+              let report = await f.reports.read(f.f.actors.staff, f.reportKey);
+              await f.reports.decide(f.f.actors.staff, {
+                ...f.reportKey, commandId: "reset-inside-final-governance",
+                expectedReportGeneration: report.reportGeneration, reviewBindingHash: report.reviewBindingHash,
+              }, "pending");
+              if (change === "rejected") {
+                report = await f.reports.read(f.f.actors.staff, f.reportKey);
+                await f.reports.decide(f.f.actors.staff, {
+                  ...f.reportKey, commandId: "reject-inside-final-governance",
+                  expectedReportGeneration: report.reportGeneration, reviewBindingHash: report.reviewBindingHash,
+                }, "rejected");
+              }
+            }
+            changed = true;
+          }
+          return policy;
+        },
+      });
+      const before = await f.f.rows();
+      if (stage === "prepare") {
+        await expect(bridge.prepare(f.staff(), input)).rejects.toBeInstanceOf(LearningTestReceiptError);
+        expect(await bridge.cleanup({ limit: 32 })).toMatchObject({ scanned: 0 });
+      } else if (stage === "verify") {
+        expect(await bridge.verify(prepared!.receipt, await f.trust(input), new AbortController().signal)).toBeNull();
+      } else {
+        const scope = bridge.forSubmission();
+        await expect(f.applicationFor(scope.verifier).submitResolutionEvidence(f.f.actors.staff, {
+          ticketId: input.ticketId, commandId: "final-governance-evidence", correlationId: "final-governance-evidence",
+          expectedRevision: input.expectedRevision, resolutionCycle: input.resolutionCycle,
+          evidence: { kind: "successful_test", solutionMessageId: input.solutionMessageId, receipt: prepared!.receipt },
+        }, { verifyBeforeCommit: () => scope.confirm(new AbortController().signal) }))
+          .rejects.toBeInstanceOf(LearningTestReceiptError);
+      }
+      expect(changed).toBe(true);
+      expect(governanceReads).toBe(2);
+      expect(await f.f.rows()).toEqual(before);
+    },
+  );
   it.each([false, true])(
     "uses fresh public policy reads with scheduling hint=%s and a complete no-hint fallback",
     async (hinted) => {
