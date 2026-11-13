@@ -14,7 +14,7 @@ export type SupportHumanCoordinates = Readonly<
 >;
 
 interface HumanControlAuthority {
-  readonly sessions: Pick<SessionStore, 'get'>;
+  readonly sessions: Pick<SessionStore, 'observe'>;
   readonly authenticate: (request: Request) => Promise<Authenticated>;
   readonly access: (
     authenticated: SupportHumanCoordinates,
@@ -79,9 +79,9 @@ export function supportHumanBrowser(
         !hasPermission(access, options.permission)
       )
         throw new ApiError(403, 'forbidden');
-      // SessionStore.get enforces revocation and idle expiry. Keep this one
-      // closing read after role/Identity awaits; do not restart authorization.
-      const session = await options.sessions.get(authenticated.rawSessionId);
+      // Admission already counts as activity. Observe the same session afresh
+      // after role/Identity awaits without extending its idle lifetime.
+      const session = await options.sessions.observe(authenticated.rawSessionId);
       guard();
       if (session === null) throw new ApiError(401, 'authentication_required');
       let data: unknown;
@@ -103,8 +103,8 @@ export function supportHumanBrowser(
         Date.now() >= expiresAt
       )
         throw new ApiError(401, 'authentication_required');
-      // get() deliberately returns its initially validated record; the final
-      // synchronous absolute-expiry comparison covers time spent in that read.
+      // The observation is a snapshot. Retain the synchronous absolute-expiry
+      // fence across subsequent work and the final protected step.
       observedExpiry = expiresAt;
       return Object.freeze({ authenticated, access });
     },

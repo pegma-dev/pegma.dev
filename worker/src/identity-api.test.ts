@@ -43,6 +43,10 @@ class TestSessions implements SessionStore {
     return this.records.get(sessionId) ?? null;
   }
 
+  async observe(sessionId: string): Promise<SessionRecord | null> {
+    return this.records.get(sessionId) ?? null;
+  }
+
   async destroy(sessionId: string): Promise<void> {
     if (this.destroyFailure !== null) {
       throw this.destroyFailure;
