@@ -13,6 +13,7 @@ export type SupportBackgroundServiceKind =
   | 'learning-draft'
   | 'learning-retirement'
   | 'engineering-process'
+  | 'release-followup-process'
   | 'engineering-reconcile';
 /** Version identifies the current trusted profile AND its product/target scope.
  * It is host policy identity, without provider/build/check/funding attestation. */
@@ -41,12 +42,14 @@ export interface SupportBackgroundServiceAccess {
     EngineeringOptions,
     'serviceAccess' | 'reconciliationAccess'
   >;
+  readonly releaseFollowup: { readonly serviceAccess: LearningOptions['serviceAccess'] };
 }
 export const SUPPORT_BACKGROUND_SERVICE_IDS = Object.freeze({
   'learning-source': 'pegma/support-learning-source',
   'learning-draft': 'pegma/support-learning-draft',
   'learning-retirement': 'pegma/support-learning-retirement',
   'engineering-process': 'pegma/support-engineering-worker',
+  'release-followup-process': 'pegma/support-release-followup-worker',
   'engineering-reconcile': 'pegma/support-engineering-reconciler',
 });
 const sourceRead = Object.freeze([
@@ -74,6 +77,11 @@ const ceilings = Object.freeze({
     support.queueRead,
     support.engineeringRead,
     support.engineeringProcess,
+  ]),
+  'release-followup-process': Object.freeze([
+    support.queueRead,
+    support.engineeringFollowupRead,
+    support.engineeringFollowupProcess,
   ]),
   'engineering-reconcile': Object.freeze([support.engineeringReconcile]),
 });
@@ -213,5 +221,6 @@ export function createSupportBackgroundServiceAccess(
       serviceAccess: service('engineering-process'),
       reconciliationAccess: service('engineering-reconcile'),
     }),
+    releaseFollowup: Object.freeze({ serviceAccess: service('release-followup-process') }),
   });
 }

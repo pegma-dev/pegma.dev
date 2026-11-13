@@ -23,17 +23,25 @@ import { mapSupportError } from './support-desk';
 import { supportHumanBrowser } from './support-human-auth';
 import { supportReleaseFollowupIdentity } from './support-release-followup-ports';
 import type { SupportReleaseFollowupRuntime } from './support-release-followup';
+import {
+  verifySupportFollowupMappingInput,
+  withdrawSupportFollowupMappingInput,
+  type SupportFollowupMappings,
+} from './support-release-followup-mapping';
+import { prepareSupportFollowupRetestInput, type SupportFollowupRetests } from './support-release-followup-retests';
 
 export interface SupportReleaseFollowupHandlerOptions extends AgentBrowserOptions {
   readonly enabled: () => boolean;
   readonly runtime: () => SupportReleaseFollowupRuntime;
+  readonly mappings?: SupportFollowupMappings;
+  readonly retests?: SupportFollowupRetests;
   readonly readLimiter: DurableRateLimiter;
   readonly mutationLimiter: DurableRateLimiter;
 }
 const namespace =
   /^\/api\/support\/admin\/tickets\/[A-Za-z0-9._~-]{1,200}\/follow-up(?:\/|$)/u;
 const route =
-  /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/follow-up\/(scan|work|observe|reassess|post|reject|retry|abandon)$/u;
+  /^\/api\/support\/admin\/tickets\/([A-Za-z0-9._~-]{1,200})\/follow-up\/(scan|work|observe|reassess|post|reject|retry|abandon|mapping|verify-mapping|withdraw-mapping|retest-receipt|retest)$/u;
 export function isSupportReleaseFollowupRequest(path: string) {
   return namespace.test(path);
 }
@@ -114,6 +122,19 @@ export function supportReleaseFollowupWorkView(
     deadline: work.deadline,
     acceptedTicketRevision: work.acceptedTicketRevision,
     withdrawn: work.withdrawn,
+    retestResults: work.retestResults.map(({ requestId, result, verifiedAt }) => ({
+      requestId,
+      result,
+      verifiedAt,
+    })),
+    ...(work.handoff === undefined ? {} : { handoff: work.handoff }),
+    ...(work.delivered === undefined ? {} : {
+      delivered: {
+        messageId: work.delivered.messageId,
+        ticketRevision: work.delivered.ticketRevision,
+        postedAt: work.delivered.postedAt,
+      },
+    }),
     ...(work.heldReason === undefined ? {} : { heldReason: work.heldReason }),
     ...(work.candidate === undefined ? {} : { candidate: work.candidate }),
     ...(work.preparedBundle === undefined
@@ -147,9 +168,9 @@ export function createSupportReleaseFollowupHandlers(
     if (match === null) return json({ error: 'not_found' }, { status: 404 });
     const ticketId = match[1]!;
     const operation = match[2]!;
-    const mutation = operation !== 'work' && operation !== 'scan';
+    const mutation = operation !== 'work' && operation !== 'scan' && operation !== 'mapping';
     const required =
-      operation === 'observe'
+      operation === 'observe' || operation === 'verify-mapping' || operation === 'withdraw-mapping' || operation === 'retest-receipt' || operation === 'retest'
         ? supportPermissions.engineeringFollowupEvidenceSubmit
         : mutation
           ? supportPermissions.engineeringFollowupReview
@@ -222,6 +243,20 @@ export function createSupportReleaseFollowupHandlers(
         initial.principalId,
       );
       if (!mutation) {
+        if (operation === 'mapping') {
+          const mappings = options.mappings;
+          if (mappings === undefined)
+            throw new ApiError(503, 'followup_mapping_unavailable');
+          if (url.searchParams.size === 0)
+            return json({ result: await mappings.choices(context, ticketId), csrfToken });
+          if (url.searchParams.size !== 2 ||
+            url.searchParams.getAll('repositoryId').length !== 1 ||
+            url.searchParams.getAll('issueId').length !== 1)
+            throw new ApiError(400, 'invalid_request');
+          const result = await mappings.read(context, ticketId,
+            text(url.searchParams.get('repositoryId')), text(url.searchParams.get('issueId')));
+          return json({ result, csrfToken });
+        }
         if (operation === 'scan') {
           if (
             url.searchParams.size > 1 ||
@@ -267,8 +302,30 @@ export function createSupportReleaseFollowupHandlers(
         });
       }
       const raw = await readJson(request, { timeoutMs: 10_000 });
+      if (operation === 'retest-receipt') {
+        if (options.retests === undefined)
+          throw new ApiError(503, 'followup_retest_unavailable');
+        const parsed = prepareSupportFollowupRetestInput.safeParse(raw);
+        if (!parsed.success) throw new ApiError(400, 'invalid_request');
+        const result = await options.retests.prepare(context, ticketId, parsed.data);
+        return json({ result, csrfToken }, { status: 'pending' in result ? 202 : 200 });
+      }
+      if (operation === 'verify-mapping' || operation === 'withdraw-mapping') {
+        if (options.mappings === undefined)
+          throw new ApiError(503, 'followup_mapping_unavailable');
+        const parsed = operation === 'verify-mapping'
+          ? verifySupportFollowupMappingInput.safeParse(raw)
+          : withdrawSupportFollowupMappingInput.safeParse(raw);
+        if (!parsed.success) throw new ApiError(400, 'invalid_request');
+        const result = operation === 'verify-mapping'
+          ? await options.mappings.verify(context, ticketId, verifySupportFollowupMappingInput.parse(parsed.data))
+          : await options.mappings.withdraw(context, ticketId, withdrawSupportFollowupMappingInput.parse(parsed.data));
+        return json({ result, csrfToken });
+      }
       const fields =
-        operation === 'observe'
+        operation === 'retest'
+          ? ['commandId', 'workId', 'retestRequestId', 'receiptReference']
+          : operation === 'observe'
           ? ['commandId', 'repositoryId', 'issueId', 'inputReference']
           : operation === 'post'
             ? [
@@ -310,7 +367,14 @@ export function createSupportReleaseFollowupHandlers(
       const base = { ...identity, ticketId };
       const runtime = options.runtime();
       let result: unknown;
-      if (operation === 'observe')
+      if (operation === 'retest')
+        result = await runtime.retest(context, {
+          ...base,
+          workId: text(row.workId),
+          retestRequestId: text(row.retestRequestId),
+          receiptReference: text(row.receiptReference),
+        });
+      else if (operation === 'observe')
         result = await runtime.observe(context, {
           ...base,
           association: {

@@ -23,6 +23,9 @@ import {
 import type { SupportLearningRootComposition } from './index';
 import type { SupportEngineeringProductionOptions } from './support-engineering-production';
 import type { SupportEngineeringHumanComposition } from './support-engineering-composition';
+import { createSupportReleaseFollowupModel } from '@pegma/support-desk-ai/openrouter';
+import type { SupportReleaseFollowupComposition } from './support-release-followup-ports';
+import type { SupportReleaseFollowupPaidOptions } from './support-release-followup-production';
 
 export interface SupportPaidEnvironment extends SupportLearningSourceEnvironment {
   readonly SUPPORT_PAID_CONFIGURATION_JSON?: string;
@@ -35,6 +38,8 @@ export interface SupportPaidEnvironment extends SupportLearningSourceEnvironment
   readonly PEGMA_SUPPORT_LEARNING_WORKER_ENABLED?: string;
   readonly PEGMA_SUPPORT_ENGINEERING_REPOSITORY_ENABLED?: string;
   readonly PEGMA_SUPPORT_ENGINEERING_ISSUE_WRITE_ENABLED?: string;
+  readonly PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED?: string;
+  readonly PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED?: string;
 }
 export interface SupportReceiptKeyProvider {
   resolve(reference: string, signal: AbortSignal): Promise<IndependentCheckReceiptKey | null>;
@@ -48,6 +53,12 @@ interface Options {
   readonly fetch?: typeof globalThis.fetch;
 }
 const allowed = Object.freeze([
+  {
+    model: 'openai/gpt-4.1-mini',
+    provider: 'Azure',
+    endpointTag: 'azure/swedencentral',
+    outputTokenParameter: 'max_completion_tokens' as const,
+  },
   {
     model: 'openai/gpt-4.1-mini',
     provider: 'Azure',
@@ -291,6 +302,7 @@ export async function createSupportPaidBootstrap(
         learning: source.learning,
         engineeringProduction: {} as SupportEngineeringProductionOptions,
         engineering: {} as SupportEngineeringHumanComposition,
+        releaseFollowup: undefined as SupportReleaseFollowupComposition | undefined,
       });
     const receipt = profile.checks.receiptKey;
     const keyProvider =
@@ -354,6 +366,46 @@ export async function createSupportPaidBootstrap(
       ...independentChecks,
       authority: checkerAuthority.engineering.serviceAccess,
     };
+    let releaseFollowup: SupportReleaseFollowupComposition | undefined;
+    if (profile.releaseFollowup !== undefined && profile.checks.route.releaseFollowup !== undefined) {
+      // A missing purpose approval never inherits the engineering route's proof.
+      // Failure here holds only this optional feature and preserves Source intake.
+      try {
+        const selected = profile.releaseFollowup;
+        const qualifiedCounter = counter(selected.qualification);
+        const enabled = () => paid() &&
+          currentEnv().PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED === 'true' &&
+          currentEnv().PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED === 'true';
+        const readRoute = () => current() ? selected.route : undefined;
+        const validation = createSupportReleaseFollowupModel({
+          clock, enabled: current, readRoute, allowlist: allowed,
+          counter: qualifiedCounter, readApiKey, fetch: options.fetch,
+        }, 'pegma.dev');
+        const resolved = await validation.configuration.resolve(undefined, new AbortController().signal);
+        const route = validation.currentRoute();
+        const pool = selected.usagePolicy;
+        if (resolved.outcome === 'ready' && route !== undefined &&
+          route.credentialRef === SUPPORT_ASSISTANT_CREDENTIAL_REF &&
+          route.usageScopeRef === pool.scopeRef &&
+          resolved.configuration.version === pool.configurationVersion &&
+          resolved.configuration.modelVersion === pool.modelVersion &&
+          resolved.configuration.pricingRef === pool.pricingRef &&
+          resolved.configuration.budgets.maxCostMicros <= pool.maxReservationCostMicros &&
+          live({verifiedAt:pool.validFrom,validUntil:pool.validUntil},clock)) {
+          const generationAuthority = intrinsic(pool.scopeRef, current);
+          const production: SupportReleaseFollowupPaidOptions = {
+            current,
+            generator: {clock, enabled, readRoute, allowlist: allowed, counter: qualifiedCounter, readApiKey, fetch:options.fetch},
+            serviceAccess: generationAuthority.releaseFollowup.serviceAccess,
+            knowledgeAccess: checkerAuthority.learning.knowledgeAccess,
+            usagePolicy: pool,
+            checks: {...independentChecks, authority:checkerAuthority.releaseFollowup.serviceAccess},
+            target: selected.target,
+          };
+          releaseFollowup = Object.freeze({production});
+        }
+      } catch { /* Unready purpose configuration never manufactures authority. */ }
+    }
     let learning: SupportLearningRootComposition = {
       ...source.learning,
       independentChecks,
@@ -576,6 +628,7 @@ export async function createSupportPaidBootstrap(
       learning: Object.freeze(learning),
       engineeringProduction,
       engineering,
+      releaseFollowup,
     });
   } catch {
     return undefined;

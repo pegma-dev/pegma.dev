@@ -1,6 +1,7 @@
 import type { Clock, Logger } from '@pegma/spine';
 import type { SupportEngineeringDriverResult } from './support-engineering-driver';
 import type { SupportLearningDriverResult } from './support-learning-driver';
+import type { SupportReleaseFollowupDriverResult } from './support-release-followup-driver';
 
 export const SUPPORT_ENGINEERING_QUEUE = 'pegma-dev-support-engineering';
 export interface SupportEngineeringWake {
@@ -10,6 +11,10 @@ export interface SupportEngineeringWake {
 export interface SupportLearningWake {
   readonly version: 1;
   readonly kind: 'support-learning-wake';
+}
+export interface SupportReleaseFollowupWake {
+  readonly version: 1;
+  readonly kind: 'support-release-followup-wake';
 }
 interface WakeOptions<Wake, Result> {
   readonly clock: Clock;
@@ -28,6 +33,10 @@ export interface SupportLearningQueueOptions extends WakeOptions<
   SupportLearningWake,
   SupportLearningDriverResult
 > {}
+export interface SupportReleaseFollowupQueueOptions extends WakeOptions<
+  SupportReleaseFollowupWake,
+  SupportReleaseFollowupDriverResult
+> {}
 const wake: SupportEngineeringWake = Object.freeze({
   version: 1,
   kind: 'support-engineering-wake',
@@ -36,12 +45,18 @@ const learningWake: SupportLearningWake = Object.freeze({
   version: 1,
   kind: 'support-learning-wake',
 });
+const followupWake: SupportReleaseFollowupWake = Object.freeze({
+  version: 1,
+  kind: 'support-release-followup-wake',
+});
 type Controls = Pick<WakeOptions<never, never>, 'clock' | 'logger' | 'enabled'>;
 type Event =
   | 'support.engineering.queue_unavailable'
-  | 'support.learning.queue_unavailable';
+  | 'support.learning.queue_unavailable'
+  | 'support.release_followup.queue_unavailable';
 const engineeringEvent: Event = 'support.engineering.queue_unavailable';
 const learningEvent: Event = 'support.learning.queue_unavailable';
+const followupEvent: Event = 'support.release_followup.queue_unavailable';
 const MAX_DELIVERIES = 8; // Cloudflare Message.attempts starts at 1, including the first delivery.
 const MAX_AGE = 240_000;
 const RETRY_SECONDS = 1;
@@ -74,7 +89,7 @@ function ack(message: Message, options: Controls, event: Event): void {
 }
 function validBody(
   value: unknown,
-  kind: SupportEngineeringWake['kind'] | SupportLearningWake['kind'],
+  kind: SupportEngineeringWake['kind'] | SupportLearningWake['kind'] | SupportReleaseFollowupWake['kind'],
 ): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     return false;
@@ -94,6 +109,9 @@ export function isSupportLearningWake(
   value: unknown,
 ): value is SupportLearningWake {
   return validBody(value, 'support-learning-wake');
+}
+export function isSupportReleaseFollowupWake(value: unknown): value is SupportReleaseFollowupWake {
+  return validBody(value, 'support-release-followup-wake');
 }
 function currentMessage(message: Message, options: Controls): boolean {
   const now = Date.parse(options.clock.now());
@@ -246,5 +264,32 @@ export function consumeSupportLearningWake(
     isSupportLearningWake,
     continuation,
     learningEvent,
+  );
+}
+
+/** Reuses the registered engineering queue; no target or authority is carried. */
+export function seedSupportReleaseFollowupWake(
+  options: SupportReleaseFollowupQueueOptions,
+): Promise<void> {
+  return seedWake(options, followupWake, followupEvent);
+}
+export function consumeSupportReleaseFollowupWake(
+  batch: MessageBatch,
+  options: SupportReleaseFollowupQueueOptions,
+): Promise<void> {
+  return consumeWake(
+    batch,
+    options,
+    isSupportReleaseFollowupWake,
+    (result) => {
+      if (!result.checkpointSaved) return false;
+      if (result.outcome === 'scanned') return result.selected;
+      return result.outcome === 'work' && (
+        result.remainingTargets > 0 ||
+        result.result.outcome === 'candidate' ||
+        result.result.outcome === 'pending'
+      );
+    },
+    followupEvent,
   );
 }

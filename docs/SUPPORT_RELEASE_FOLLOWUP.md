@@ -1,23 +1,19 @@
 # Staff release-follow-up controls
 
-This source slice connects optional Support SDK follow-up methods to the
-registered Worker and staff ticket panel. The default Worker supplies no trusted
-follow-up composition. Its routes return 404 before opening the database. It
-adds no scheduled trigger, automatic notification, remote issue mutation or KB
-publication.
+The default Worker can compose staff-verified deployed-fix evidence and the
+bounded SD05 driver. `PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED` controls the
+nonpaid staff/source surface; `PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED`
+separately controls background preparation. Both default to `false`. An explicit
+`createWorker({ releaseFollowup })` selection retains its existing behavior,
+including an explicitly absent selection. OFF routes return 404 before Store
+initialization. No new cron, queue, remote issue write or automatic send/publish
+is installed.
 
-This isolated source selects all five qualified public Support 0.2.8 packages
-and all four public KB 0.1.6 packages. The follow-up mutations pass the original
-browser's fresh authority and synchronous closing assertion through the released
-late-guard options. The [0.2.8 publication receipt](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.8)
-binds the registry packages and their signature, provenance and clean-consumer
-qualification.
-
-The trusted composition remains absent from the default Worker. Current public
-graph Node and physical invocation results are recorded separately from earlier
-private development runs. Reconciliation onto the current host branch, complete
-normal gates and the unchanged 50-query/100-parameter Native profile remain
-pending. Live deployment, provider, CPU and Workers Free acceptance remain open.
+This isolated development graph uses unpublished Support 0.2.9 packs and KB
+0.1.8 packs. It is not public release or deployment acceptance. Development
+functional evidence and the unchanged Native 50-query/100-parameter acceptance
+are recorded separately; a functional Memory result does not establish that
+physical budget, provider quality, CPU use or Workers Free acceptance.
 
 ## Composition and current authority
 
@@ -31,17 +27,20 @@ model, token counter and bounded durable usage policy. Missing generation is
 held without a provider call. Checks on retained content remain independent of
 paid generation availability.
 
-Policy version 7 gives the stored Support role engineeringFollowupRead,
+The current policy retains the Support-role grants introduced in version 7: engineeringFollowupRead,
 engineeringFollowupReview and engineeringFollowupEvidenceSubmit, alongside its
 existing queue and reply authority. Admin or Knowledge alone receives no
-follow-up authority. Processing uses a separate current service principal.
+follow-up authority. Processing uses an intrinsic service identity with exactly follow-up Process,
+Read and queueRead. It has no human account, stored Role grant or review/send
+authority. The existing scoped governance reader is reused without new grants.
 Work hints contain no saved browser credentials or AccessContext.
 
 HTTP controls reuse Identity, Sessions, audited roles and the existing
 engineering read/control quotas. They require the original current cookie
 session and actor. Mutations require dynamic X-Pegma-CSRF, same-origin headers
-and a total ten-second JSON-read deadline. Each mutation reaches the SDK's late
-current-authority guard and synchronous closing fence. A closing guard can
+and a total ten-second JSON-read deadline. SDK mutations receive the late
+current-authority guard and synchronous closing fence; host mapping/receipt
+writes close the same browser authority around their own conditional commits. A closing guard can
 withhold an acknowledgement after a commit.
 
 ## HTTP and exact retry
@@ -75,7 +74,103 @@ responses block other writes. Restore the original account and current ticket
 view, then use **Retry the exact previous command**. Another actor cannot view
 or replay the retained packet. Keep the original tab open until confirmation.
 
-## Evidence and remaining integration
+## Current release and deployment evidence
+
+The normal signed GitHub release webhook and existing reconciliation feed
+maintain a small release epoch journal while the default SD05 Source flag is ON.
+Unchanged refreshes keep their epoch; withdrawal, replacement and republication
+advance it. Identical display facts after republication cannot revive an old
+mapping. OFF preserves the old projection I/O.
+
+The mapping picker reads at most 16 actual accepted SDK issue associations and
+their genuine Source product. Staff explicitly verifies the issue state,
+deployed version/build, deployment identity/epoch, scope and public facts under
+the current cookie, Role and ticket/mapping generations. The server records the
+mapping, exact command receipt and Audit atomically. The reference is meaningful
+only with that durable record, current repository policy and the SDK's accepted
+association/product checks. It is not a signed-marker claim. Withdrawal and
+rollback retain historical receipts and hold new work.
+
+New mapping routes share the existing namespace and quotas:
+
+| Method and suffix     | Exact input                                                                                                                                                                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET mapping           | No query: bounded accepted choices. Or exactly repositoryId and issueId for one current mapping/release view                                                                                                                                 |
+| POST verify-mapping   | commandId, expectedPrincipalId, expectedTicketRevision, expectedMappingGeneration, repositoryId, issueId, releaseRef, issueState, deploymentState, fixedProduct, deploymentId, deploymentEpoch, scopeRef, verificationReference, publicFacts |
+| POST withdraw-mapping | commandId, expectedPrincipalId, expectedTicketRevision, expectedMappingGeneration, repositoryId, issueId, reason                                                                                                                             |
+
+`fixedProduct` is exactly productId/version/buildId. Public facts have 1Ã¢â‚¬â€œ4 unique
+references (200 characters each), with text bounded to 1,000 characters.
+Mapping ACKs contain only actorId, ticketId, commandId, mappingGeneration and
+inputReference, plus the normal CSRF envelope. Observing that reference remains
+a separate SDK command.
+
+## Retest report association
+
+A local agent submits the existing KB test report; an authorized staff member
+must confirm it through the existing KB controls. Follow-up association neither
+confirms a report nor accepts KB evidence. It reads and confirms the actual
+current report, draft, requirements, evidence revocations and reviewer authority,
+and binds its product/build and request to the exact Work/release/target bundle.
+Passed and failed reports retain their actual result.
+
+`POST retest-receipt` accepts exactly commandId, expectedPrincipalId, workId,
+expectedWorkGeneration, expectedTicketRevision, retestRequestId and report. The
+report object is exactly articleId, ledgerEpoch, reportId,
+expectedReportGeneration, reviewBindingHash and receipt, obtained from the
+existing `reportRead` KB command.
+
+PG preparation first returns HTTP 202 with actorId, ticketId, commandId, workId,
+retestRequestId and `pending: "report"`. This acknowledges a body-free durable
+Work intent, not a test result or pass. Retry the same original packet in a
+separate invocation. The HTTP 200 result adds the purpose-bound opaque receipt
+and validUntil instead of pending. Unknown ACKs retain the same actor, command
+and packet; they never cause another association under a new identity.
+
+`POST retest` takes commandId, workId, retestRequestId and receiptReference.
+The real SDK owns current Source/association/release/Work checks and the late
+browser/session guard. The verifier reobserves the KB report under its original
+staff authority. Exact accepted SDK receipts recover before mutable proof reads.
+A delivered Work uses its handoff requests, original delivered bundle hash and
+delivered ticket revision. A later failed retest records failure and holds
+further work without retracting or sending another notice.
+
+## Background preparation and operator selection
+
+The optional `releaseFollowup` member of the existing closed paid profile holds
+its separate generator route, explicit evaluation, tokenizer evidence, finite
+usage policy and one explicit KB target (or none). Its independent route also
+needs the SD05-specific qualification. Existing engineering approval is not
+relabelled as follow-up approval. The dedicated versioned operator HMAC key
+provider remains separate from the provider API key. The fixed Azure Sweden
+endpoint allowlist accepts an explicitly approved `max_completion_tokens` route
+and retains `max_tokens` for existing qualified profiles. The exact provided
+parameter remains part of the approval hash; the host does not rewrite it or
+retry a request with a different alias.
+
+The shared optional OpenRouter adapters bind the actual final Support App,
+Knowledge App, Store and Clock. Purpose-specific checker handles use the same
+global independent-check pool as learning and engineering. Staff reassessment
+binds the original current staff resolver; it does not give Review to a service.
+Missing model, funding, key, evaluation or route approval holds paid preparation
+while ordinary Support and nonpaid Source actions remain available.
+
+The existing cleanup cron seeds SD05 on UTC minutes 0, 15, 30 and 45. Existing
+engineering/learning cadence is unchanged. One queue invocation performs one
+body-free scan or one SDK stage, using a separate durable SD05 cursor. Finite
+continuations reuse the original bounded queue delivery; no producer send or
+cursor write follows a paid/unknown model outcome. Retained SDK state is
+rediscovered after a crash or unknown ACK. Background work prepares drafts,
+private KB proposals and retest requests; current staff approval still sends a
+web notice, and KB review/publication remains separate.
+
+With the current `0-58 * * * *` cleanup schedule, two idle minute domains cost
+8,496 queue operations/day and SD05 adds 288, totaling 8,784 before retries or
+other queue traffic. Treating the first two as full minute domains gives a
+conservative 8,928. OFF adds zero. These are scheduling arithmetic, not a
+universal Free-tier traffic guarantee.
+
+## Evidence and validation
 
 A real ordinary accepted engineering association must already exist through
 approved SDK export/reconciliation. Entering an issue ID cannot create that
@@ -94,7 +189,10 @@ handoffs for separately authorized workflows.
 
 Real-SDK fixtures cover accepted association, complete bundle approval,
 role/session loss during proof, rollback/reopen and lost-ACK recovery. Run the
-normal check, test:node and build scripts. The focused physical test is
-worker/src/support-release-followup.d1.test.ts under vitest.d1.config.ts.
-It meters the entire cold Worker.fetch invocation, including authentication,
-quotas, SDK work and closing checks, with unchanged 50-query/100-parameter guards.
+normal check, test:node and build scripts. The focused physical tests are worker/src/support-release-followup.d1.test.ts
+and worker/src/support-release-followup-host.d1.test.ts under vitest.d1.config.ts.
+They meter cold Worker.fetch and registered queue invocations, including
+authentication, quotas, SDK work and closing checks, with unchanged
+50-query/100-parameter guards. The host suite also measures the default shared
+generator/checker composition and the real paired report preparation and
+consumption separately.

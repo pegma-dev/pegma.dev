@@ -9,6 +9,7 @@ import {
   supportPermissions,
   supportRecords,
   type EngineeringFollowupContext,
+  type EngineeringRepositoryDescriptor,
   type VerifiedEngineeringFollowupChecks,
 } from '@pegma/support-desk-application';
 import { isDeepStrictEqual } from 'node:util';
@@ -37,8 +38,9 @@ export const followupCommandId = '2df42b40-83da-460b-9765-152e36393753';
  * Only independent issue/deployment/model/check systems are fictional. */
 export async function createSupportReleaseFollowupFixture(
   backing: Store = createMemoryStore(),
+  fixture: { readonly repositories?: readonly EngineeringRepositoryDescriptor[] } = {},
 ) {
-  const f = await createSupportEngineeringHttpFixture(backing);
+  const f = await createSupportEngineeringHttpFixture(backing, fixture);
   await f.verified();
   const proposal = await f.prepared();
   if (proposal.proposal === undefined)

@@ -10,6 +10,8 @@ import type {
   IndependentCheckCounter,
   IndependentCheckRoute,
   SupportModelUsagePolicy,
+  ApprovedSupportReleaseFollowupRoute,
+  QualifiedSupportReleaseFollowupCounter,
 } from '@pegma/support-desk-ai/openrouter';
 import { strictJson } from './support-openrouter-model';
 import type {
@@ -127,6 +129,15 @@ const schema = z
           .strict(),
       })
       .strict(),
+    releaseFollowup: model<ApprovedSupportReleaseFollowupRoute>()
+      .extend({
+        target: z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('none') }).strict(),
+          z.object({ kind: z.literal('article'), articleId: scalar }).strict(),
+        ]),
+      })
+      .strict()
+      .optional(),
     learning: model<ApprovedSupportLearningRoute>()
       .extend({
         target: z
@@ -198,6 +209,10 @@ export interface PaidModel<Route, Qualification> {
 }
 export type SupportPaidProfile = z.infer<typeof schema> & {
   readonly checks: PaidModel<IndependentCheckRoute, IndependentCheckCounter['qualification']>;
+  readonly releaseFollowup?: PaidModel<
+    ApprovedSupportReleaseFollowupRoute,
+    QualifiedSupportReleaseFollowupCounter['qualification']
+  >;
   readonly learning?: PaidModel<
     ApprovedSupportLearningRoute,
     QualifiedSupportLearningCounter['qualification']
@@ -229,7 +244,7 @@ export function readSupportPaidProfile(raw: unknown): SupportPaidProfile | undef
   try {
     if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > 262144) return undefined;
     const parsed = schema.parse(strictJson(raw).value);
-    if (!parsed.learning && !parsed.engineering) return undefined;
+    if (!parsed.learning && !parsed.engineering && !parsed.releaseFollowup) return undefined;
     return freeze(parsed) as SupportPaidProfile;
   } catch {
     return undefined;

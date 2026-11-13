@@ -1,4 +1,5 @@
 import type { Store } from '@pegma/storage-core';
+import { recordSupportFollowupRelease } from './support-release-followup-releases';
 import type { Logger } from '@pegma/spine';
 import {
   componentReleaseCollection,
@@ -42,6 +43,7 @@ export interface ReleaseReconciliationSummary {
 }
 
 export interface RunReleaseReconciliationOptions {
+  readonly followupTracking?: () => boolean;
   readonly store: Store;
   readonly logger: Logger;
   readonly config: ReleaseReconciliationConfig;
@@ -329,6 +331,8 @@ export async function runReleaseReconciliation(
         observedAt,
         fetchImpl,
       });
+      if (result.outcome !== 'failed' && options.followupTracking?.() === true)
+        await recordSupportFollowupRelease(store, entry.repositoryId);
     } catch {
       // Version conflicts and unexpected store errors stay per-repository so
       // one hot key cannot abort the catalog pass or skip etag persistence.

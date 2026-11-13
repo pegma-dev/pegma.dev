@@ -11,13 +11,15 @@ import type {
   RejectEngineeringFollowupBundleCommand,
   RetryEngineeringFollowupWorkCommand,
   AbandonEngineeringFollowupWorkCommand,
+  SubmitEngineeringFollowupRetestResultCommand,
 } from '@pegma/support-desk-application';
-import type { AccessContext } from '@pegma/authorization-core';
+import { serializeAccessContext, type AccessContext } from '@pegma/authorization-core';
 import type { Clock } from '@pegma/spine';
 import type { Store } from '@pegma/storage-core';
 import { ApiError } from './api-auth';
 import type { SupportReleaseFollowupConfiguration } from './support-release-followup-ports';
 import { createSupportReleaseFollowupUsage } from './support-release-followup-usage';
+import { knowledgeDigest } from './knowledge-evidence';
 
 export interface SupportReleaseFollowupContext {
   current(): Promise<AccessContext>;
@@ -38,7 +40,12 @@ export function createSupportReleaseFollowupRuntime(options: {
   const unavailable = () => {
     throw new ApiError(503, 'followup_generation_unavailable');
   };
-  function coordinator(context?: SupportReleaseFollowupContext) {
+  function coordinator(
+    context?: SupportReleaseFollowupContext,
+    key?: EngineeringFollowupKey,
+    reassessmentAuthority?: Parameters<NonNullable<SupportReleaseFollowupConfiguration['reassessmentChecksFor']>>[1],
+  ) {
+    const scope = key === undefined ? undefined : { ticketId: key.ticketId, workId: key.workId };
     return createSupportDeskReleaseFollowup({
       application: {
         ...options.application,
@@ -66,7 +73,10 @@ export function createSupportReleaseFollowupRuntime(options: {
       },
       clock: options.clock,
       releaseEvidence: config.releaseEvidence,
-      checks: config.checks,
+      checks: scope === undefined ? config.checks
+        : reassessmentAuthority === undefined
+          ? config.checksFor?.(scope) ?? config.checks
+          : config.reassessmentChecksFor?.(scope, reassessmentAuthority) ?? config.checks,
       targets: config.targets,
       ...(config.knowledge === undefined
         ? {}
@@ -234,6 +244,18 @@ export function createSupportReleaseFollowupRuntime(options: {
           ...context,
           assertCurrent,
           signal,
+        }, command, {
+          async resolve() {
+            await current();
+            if (config.reassessmentUsageScopeRef === undefined)
+              return { outcome: 'unavailable' };
+            const fresh = await context.current();
+            return { outcome: 'ready', authority: {
+              access: fresh,
+              authorityVersion: 'pg-followup-staff/' + await knowledgeDigest(serializeAccessContext(fresh)),
+              usageScopeRef: config.reassessmentUsageScopeRef,
+            } };
+          },
         }).prepareStaffReassessment(
           access,
           command,
@@ -250,7 +272,7 @@ export function createSupportReleaseFollowupRuntime(options: {
           ...context,
           assertCurrent,
           signal,
-        }).approveAndPostWebUpdate(access, command, {
+        }, command).approveAndPostWebUpdate(access, command, {
           signal,
           verifyBeforeCommit: current,
         }),
@@ -266,6 +288,15 @@ export function createSupportReleaseFollowupRuntime(options: {
           command,
           mutationControl(current, assertCurrent, signal),
         ),
+      );
+    },
+    retest(
+      context: SupportReleaseFollowupContext,
+      command: SubmitEngineeringFollowupRetestResultCommand,
+    ) {
+      return staff(context, (access, current, assertCurrent, signal) =>
+        options.application.submitEngineeringFollowupRetestResult(access, command,
+          mutationControl(current, assertCurrent, signal)),
       );
     },
     retry(
@@ -292,7 +323,11 @@ export function createSupportReleaseFollowupRuntime(options: {
         ),
       );
     },
-    /** Programmatic only. No staff HTTP endpoint or new scheduled trigger. */
+    /** Body-free discovery for the existing bounded host queue. */
+    scanProcessing(bounds: Parameters<ReturnType<typeof coordinator>['scanCandidates']>[0]) {
+      return coordinator().scanCandidates(bounds);
+    },
+    /** One bounded SDK stage; never posts or publishes automatically. */
     async process(
       command: Parameters<ReturnType<typeof coordinator>['processWork']>[0],
       signal?: AbortSignal,
@@ -302,7 +337,7 @@ export function createSupportReleaseFollowupRuntime(options: {
           outcome: 'held' as const,
           reason: 'followup_generation_unavailable' as const,
         };
-      return coordinator().processWork(command, { signal });
+      return coordinator(undefined, command).processWork(command, { signal });
     },
   });
 }

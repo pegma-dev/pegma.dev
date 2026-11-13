@@ -23,6 +23,8 @@ export function composeSupportReleaseFollowup(
     enabled,
     readLimiter: runtime.engineeringReadLimiter,
     mutationLimiter: runtime.engineeringMutationLimiter,
+    ...(composition.mappings === undefined ? {} : { mappings: composition.mappings }),
+    ...(composition.retests === undefined ? {} : { retests: composition.retests }),
     runtime: () =>
       createSupportReleaseFollowupRuntime({
         application: runtime.application,

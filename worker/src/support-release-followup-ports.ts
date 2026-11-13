@@ -1,14 +1,27 @@
 import type {
   EngineeringFollowupOptions,
+  EngineeringFollowupKey,
   EngineeringFollowupReleaseEvidencePort,
 } from '@pegma/support-desk-application';
 import type { SupportDeskReleaseFollowupOptions } from '@pegma/support-desk-ai';
 import type { SupportModelUsagePolicy } from './support-model-usage-ledger';
+import type { SupportFollowupMappings } from './support-release-followup-mapping';
+import type { LearningServiceAccessPort } from '@pegma/support-desk-ai';
+import type { SupportFollowupRetests } from './support-release-followup-retests';
+import type { SupportReleaseFollowupPaidOptions } from './support-release-followup-production';
 
 /** Trusted current facts, never a webhook body, release tag or browser assertion. */
 export interface SupportReleaseFollowupConfiguration {
   readonly releaseEvidence: EngineeringFollowupReleaseEvidencePort;
   readonly checks: SupportDeskReleaseFollowupOptions['checks'];
+  readonly checksFor?: (
+    key: EngineeringFollowupKey,
+  ) => SupportDeskReleaseFollowupOptions['checks'];
+  readonly reassessmentChecksFor?: (
+    key: EngineeringFollowupKey,
+    authority: LearningServiceAccessPort,
+  ) => SupportDeskReleaseFollowupOptions['checks'];
+  readonly reassessmentUsageScopeRef?: string;
   readonly targets: SupportDeskReleaseFollowupOptions['targets'];
   readonly retestReceipts: NonNullable<
     EngineeringFollowupOptions['retestReceipts']
@@ -32,6 +45,36 @@ export interface SupportReleaseFollowupConfiguration {
 export interface SupportReleaseFollowupComposition {
   readonly enabled?: () => boolean;
   readonly configuration?: SupportReleaseFollowupConfiguration;
+  readonly mappings?: SupportFollowupMappings;
+  readonly retests?: SupportFollowupRetests;
+  readonly production?: SupportReleaseFollowupPaidOptions;
+  readonly governanceAccess?: {
+    resolve(collectionId: string, signal: AbortSignal): Promise<{
+      readonly access: import('@pegma/authorization-core').AccessContext;
+      readonly authorityVersion: string;
+    } | null>;
+  };
+}
+
+/** Presence selects the default binder; a legacy injected bundle keeps ownership. */
+export function supportReleaseFollowupUsesDefault(
+  value?: SupportReleaseFollowupComposition,
+) {
+  try {
+    return value === undefined ||
+      (value !== null && Object.hasOwn(value, 'production'));
+  } catch {
+    return false;
+  }
+}
+export function supportReleaseFollowupPaidSelection(
+  value?: SupportReleaseFollowupComposition,
+) {
+  try {
+    return value?.production;
+  } catch {
+    return undefined;
+  }
 }
 
 export function supportReleaseFollowupEnabled(

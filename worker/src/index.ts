@@ -8,7 +8,9 @@ import { runSupportAssistantTimer } from './support-assistant-timer';
 import { usageText } from './support-model-usage-ledger';
 import { createSupportAssistantStageDatabase as createSupportAssistantInvocationDatabase } from './support-assistant-stage-budget';
 import { createSupportAnsweringIngress, SUPPORT_ANSWERING_NAMESPACE } from './support-assistant-ingress';
-import { SUPPORT_ENGINEERING_QUEUE, seedSupportEngineeringWake, consumeSupportEngineeringWake, seedSupportLearningWake, consumeSupportLearningWake, isSupportLearningWake, type SupportEngineeringWake, type SupportLearningWake } from './support-engineering-queue';
+import { SUPPORT_ENGINEERING_QUEUE, seedSupportEngineeringWake, consumeSupportEngineeringWake, seedSupportLearningWake, consumeSupportLearningWake, isSupportLearningWake, seedSupportReleaseFollowupWake, consumeSupportReleaseFollowupWake, isSupportReleaseFollowupWake, type SupportEngineeringWake, type SupportLearningWake, type SupportReleaseFollowupWake } from './support-engineering-queue';
+import { createSupportReleaseFollowupDriver, supportReleaseFollowupWakeDue } from './support-release-followup-driver';
+import { createSupportReleaseFollowupRuntime } from './support-release-followup';
 import { createSupportLearningComposition, type SupportLearningCompositionOptions } from './support-learning-composition';
 import { createSupportLearningBootstrap, type SupportLearningSourceEnvironment } from './support-learning-bootstrap';
 import { createSupportPaidBootstrap, type SupportPaidEnvironment } from './support-paid-bootstrap';
@@ -17,7 +19,8 @@ import { createProductionSupportEngineering, type SupportEngineeringProductionOp
 import { composeSupportEngineeringDriver, composeSupportEngineeringHuman, supportEngineeringHumanEnabled, supportEngineeringIntakeOptions,
   type SupportEngineeringHumanComposition } from './support-engineering-composition';
 import { composeSupportReleaseFollowup } from './support-release-followup-composition';
-import { supportReleaseFollowupApplicationOptions, supportReleaseFollowupEnabled, type SupportReleaseFollowupComposition } from './support-release-followup-ports';
+import { createSupportReleaseFollowupBootstrap, createSupportFollowupGovernanceAccess, supportReleaseFollowupSourceEnabled, type SupportReleaseFollowupEnvironment } from './support-release-followup-bootstrap';
+import { supportReleaseFollowupApplicationOptions, supportReleaseFollowupEnabled, supportReleaseFollowupUsesDefault, supportReleaseFollowupPaidSelection, type SupportReleaseFollowupComposition } from './support-release-followup-ports';
 import { isSupportReleaseFollowupRequest } from './support-release-followup-handlers';
 import { isSupportEngineeringRequest } from './support-engineering-router';
 import {
@@ -83,19 +86,19 @@ import type { CatalogFetchEnv } from './mcp-catalog-fetch';
 import { createKnowledgeHostRuntime, handleKnowledgeRequest, isKnowledgeRequest, type KnowledgeHostRuntime } from './knowledge-host';
 import type { createSupportLearningReviewQueue, SupportLearningReviewQueueMessage } from './support-learning-review-queue';
 
-type AppEnv = Omit<Env, 'SUPPORT_PAID_CONFIGURATION_JSON' | 'PEGMA_SUPPORT_INDEPENDENT_CHECKS_ENABLED' | 'PEGMA_SUPPORT_ENGINEERING_REPOSITORY_ENABLED' | 'PEGMA_SUPPORT_ENGINEERING_ISSUE_WRITE_ENABLED' | 'SUPPORT_ENGINEERING_JOBS' | 'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED' | 'PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED' | 'PEGMA_SUPPORT_LEARNING_WORKER_ENABLED' | 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON'> &
+type AppEnv = Omit<Env, 'PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED' | 'PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED' | 'SUPPORT_PAID_CONFIGURATION_JSON' | 'PEGMA_SUPPORT_INDEPENDENT_CHECKS_ENABLED' | 'PEGMA_SUPPORT_ENGINEERING_REPOSITORY_ENABLED' | 'PEGMA_SUPPORT_ENGINEERING_ISSUE_WRITE_ENABLED' | 'SUPPORT_ENGINEERING_JOBS' | 'PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED' | 'PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED' | 'PEGMA_SUPPORT_LEARNING_WORKER_ENABLED' | 'PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CUSTOMER_ADMISSION_ENABLED' | 'PEGMA_SUPPORT_ASSISTANT_CONFIGURATION_JSON'> &
   LoggerEnv &
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
   SupportRuntimeEnv &
-  CatalogFetchEnv & SupportAssistantProductionEnvironment & SupportLearningSourceEnvironment & SupportPaidEnvironment & {
+  CatalogFetchEnv & SupportAssistantProductionEnvironment & SupportLearningSourceEnvironment & SupportPaidEnvironment & SupportReleaseFollowupEnvironment & {
     readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
     readonly PEGMA_SUPPORT_ASSISTANT_ENABLED?: string;
     readonly PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED?: string;
     readonly PEGMA_SUPPORT_LEARNING_INTAKE_ENABLED?: string;
     readonly PEGMA_SUPPORT_LEARNING_WORKER_ENABLED?: string;
     readonly SUPPORT_LEARNING_REVIEWS?: Queue<SupportLearningReviewQueueMessage>;
-    readonly SUPPORT_ENGINEERING_JOBS?: Queue<SupportEngineeringWake | SupportLearningWake>;
+    readonly SUPPORT_ENGINEERING_JOBS?: Queue<SupportEngineeringWake | SupportLearningWake | SupportReleaseFollowupWake>;
   };
 
 /** Trusted source composition only; no product/check/source ports are invented here. */
@@ -219,7 +222,7 @@ function createSupportHandler(
   logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {},
   answering: SupportAnsweringComposition = {},
-  releaseFollowup: SupportReleaseFollowupComposition = {},
+  releaseFollowup: SupportReleaseFollowupComposition | undefined = undefined,
   engineeringProduction: SupportEngineeringProductionOptions = {},
   learning?: SupportLearningRootComposition,
 ) {
@@ -247,9 +250,66 @@ function createSupportHandler(
   let configured = workerConfigured || supportEngineeringHumanEnabled(selectedEngineering);
   const answerConfigured = selectedAnswering.configuration !== undefined || selectedAnswering.recoveryOnly === true;
   let followupConfigured = supportReleaseFollowupEnabled(releaseFollowup);
-  const shared = configured || answerConfigured || followupConfigured || learningGraph !== undefined;
+  const followupSelection = releaseFollowup;
+  const defaultFollowup =
+    supportReleaseFollowupUsesDefault(releaseFollowup) &&
+    supportReleaseFollowupSourceEnabled(env);
+  const shared = configured || answerConfigured || followupConfigured || defaultFollowup || learningGraph !== undefined;
   const identityRuntime = createProductionIdentityRuntime(env, logger, shared ? 512 : undefined);
   let supportRuntime: ReturnType<typeof createSupportRuntime>;
+  if (defaultFollowup) {
+    releaseFollowup = createSupportReleaseFollowupBootstrap({
+      environment: env,
+      paid: supportReleaseFollowupPaidSelection(followupSelection),
+      store: identityRuntime.store,
+      clock: engineeringProduction.clock ?? systemClock,
+      application: () => supportRuntime.application,
+      resolvePrincipal: (id) => createAgentPrincipalResolver(supportRuntime)(id),
+      knowledge: () => knowledgeHost?.knowledge().application,
+      reports: () => knowledgeHost?.knowledge().evidence,
+      async readGovernance(collectionId, signal) {
+        const resolver =
+          followupSelection !== undefined &&
+          Object.hasOwn(followupSelection, 'governanceAccess')
+            ? followupSelection.governanceAccess
+            : learning?.testEvidence?.governanceAccess;
+        if (
+          !resolver ||
+          signal.aborted ||
+          !supportReleaseFollowupSourceEnabled(env)
+        )
+          return null;
+        const before = await resolver.resolve(collectionId, signal);
+        if (
+          !before ||
+          !hasPermission(before.access, knowledgePermissions.validationManage)
+        )
+          return null;
+        const authority = JSON.stringify([
+          before.authorityVersion,
+          serializeAccessContext(before.access),
+        ]);
+        const application = knowledgeHost?.knowledge().application;
+        if (!application) return null;
+        const result = await application.getGovernanceConfiguration(
+          before.access,
+          { collectionId },
+        );
+        const after = await resolver.resolve(collectionId, signal);
+        return after &&
+          !signal.aborted &&
+          supportReleaseFollowupSourceEnabled(env) &&
+          authority ===
+            JSON.stringify([
+              after.authorityVersion,
+              serializeAccessContext(after.access),
+            ])
+          ? result
+          : null;
+      },
+    });
+    followupConfigured = supportReleaseFollowupEnabled(releaseFollowup);
+  }
   let knowledgeHost: KnowledgeHostRuntime | null | undefined;
   let testReceiptPreparation:
     ReturnType<typeof createSupportLearningTestReceipts> | undefined;
@@ -443,6 +503,8 @@ function createSupportHandler(
       logSupportCompositionFailure(logger, 'learning_runtime');
     }
   }
+  if (followupConfigured && knowledgeHost === undefined && knowledgeRetrievalEnabled(env))
+    knowledgeHost = createKnowledgeHostRuntime(env, logger, { support: supportRuntime });
   const learningRuntime = learningGraph?.browserRuntime();
   const api = createSupportApi({
     application: supportRuntime.application,
@@ -519,6 +581,19 @@ function createSupportHandler(
         };
       },
     }),
+    followupDriver: !followupConfigured || releaseFollowup?.configuration?.generation === undefined ? undefined
+      : createSupportReleaseFollowupDriver({
+        store: supportRuntime.store,
+        clock: supportRuntime.clock,
+        enabled: () => env.PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED === 'true' && supportReleaseFollowupEnabled(releaseFollowup),
+        runtime: (current) => createSupportReleaseFollowupRuntime({
+          application: supportRuntime.application,
+          store: supportRuntime.store,
+          clock: supportRuntime.clock,
+          configuration: releaseFollowup!.configuration!,
+          enabled: () => current() && supportReleaseFollowupEnabled(releaseFollowup),
+        }),
+      }),
     engineeringDriver: configured && workerConfigured
       ? composeSupportEngineeringDriver(supportRuntime, { ...production.processing, logger }) : undefined,
   };
@@ -527,12 +602,13 @@ function createSupportHandler(
 /** Request-local optional human composition used by the registered Worker route. */
 export function createSupportRequestHandler(env: AppEnv, logger: ReturnType<typeof createAppLogger>,
   engineering: SupportEngineeringHumanComposition = {}, answering: SupportAnsweringComposition = {},
-  releaseFollowup: SupportReleaseFollowupComposition = {},
+  releaseFollowup: SupportReleaseFollowupComposition | undefined = undefined,
   engineeringProduction: SupportEngineeringProductionOptions = {},
   learning?: SupportLearningRootComposition) {
   return async (request: Request): Promise<Response> => {
     const selectedAnswering = checkedAnswering(answering, logger);
-    if (isSupportReleaseFollowupRequest(new URL(request.url).pathname) && !supportReleaseFollowupEnabled(releaseFollowup))
+    if (isSupportReleaseFollowupRequest(new URL(request.url).pathname) && !supportReleaseFollowupEnabled(releaseFollowup) &&
+      !(supportReleaseFollowupUsesDefault(releaseFollowup) && supportReleaseFollowupSourceEnabled(env)))
       return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
     if (isSupportEngineeringRequest(new URL(request.url).pathname) && !supportEngineeringHumanEnabled(engineering))
       return Response.json({ error: 'not_found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } });
@@ -595,6 +671,8 @@ async function prepareDefault(env: AppEnv) {
     env.PEGMA_SUPPORT_ENGINEERING_PROCESSING_ENABLED,
     env.PEGMA_SUPPORT_ENGINEERING_REPOSITORY_ENABLED,
     env.PEGMA_SUPPORT_ENGINEERING_ISSUE_WRITE_ENABLED,
+    env.PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED,
+    env.PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED,
   ]);
   const previous = paidSelections.get(env);
   if (previous?.signature === signature) return previous.promise;
@@ -629,6 +707,29 @@ function paidFor(env: AppEnv) {
     ? value.bundle
     : undefined;
 }
+const followupFor = (env: AppEnv): SupportReleaseFollowupComposition | undefined => {
+  if ('releaseFollowup' in options) return options.releaseFollowup ?? {};
+  if (!supportReleaseFollowupSourceEnabled(env)) return undefined;
+  return {
+    production: paidFor(env)?.releaseFollowup?.production,
+    governanceAccess: createSupportFollowupGovernanceAccess(env),
+  };
+};
+const followupWorkerEnabledFor = (env: AppEnv) => {
+  if (env.PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED !== 'true')
+    return false;
+  const selected = followupFor(env);
+  return (
+    supportReleaseFollowupEnabled(selected) ||
+    (supportReleaseFollowupUsesDefault(selected) &&
+      supportReleaseFollowupSourceEnabled(env))
+  );
+};
+const followupTrackingFor = (env: AppEnv) =>
+  supportReleaseFollowupSourceEnabled(env) &&
+  (!('releaseFollowup' in options) ||
+    (options.releaseFollowup !== undefined &&
+      supportReleaseFollowupUsesDefault(options.releaseFollowup)));
 const humanEngineeringFor = (env: AppEnv) =>
   'engineering' in options ? options.engineering : paidFor(env)?.engineering;
 const answeringFor = (env: AppEnv) => options.answering === undefined
@@ -717,7 +818,7 @@ const learningFor = (env: AppEnv): SupportLearningRootComposition | undefined =>
 const retrievalFor = (env: AppEnv, logger: ReturnType<typeof createAppLogger>) => {
   const learning = learningFor(env);
   if (!learningConfigured(learning)) return { store: createKnowledgeProjectionStore(env), clock: systemClock };
-  const selected = createSupportHandler(env, logger, humanEngineeringFor(env), {}, options.releaseFollowup,
+  const selected = createSupportHandler(env, logger, humanEngineeringFor(env), {}, followupFor(env),
     engineeringFor(env), learning).learning?.retrievalOptions();
   if (selected === undefined) throw new TypeError('Learning retrieval binding unavailable');
   return selected;
@@ -768,7 +869,7 @@ return {
       const learning = learningFor(env);
       if (!learningConfigured(learning)) return handleKnowledgeRequest(request, env, logger);
       try {
-        const composed = createSupportHandler(env, logger, humanEngineeringFor(env), {}, options.releaseFollowup,
+        const composed = createSupportHandler(env, logger, humanEngineeringFor(env), {}, followupFor(env),
           engineeringFor(env), learning);
         return handleKnowledgeRequest(request, env, logger, composed.knowledgeHost ?? null);
       } catch {
@@ -924,6 +1025,7 @@ return {
           store: createProductionStore(env),
           logger,
           config,
+          followupTracking: () => followupTrackingFor(env),
         });
       } catch (error) {
         logger.log('error', 'github_release_webhook.unavailable', {
@@ -991,7 +1093,7 @@ return {
         if (path.startsWith(SUPPORT_ANSWERING_NAMESPACE))
           return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, {}, engineeringFor(env), learningFor(env))(request);
         if (isSupportReleaseFollowupRequest(path))
-          return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, options.releaseFollowup, engineeringFor(env), learningFor(env))(request);
+          return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, followupFor(env), engineeringFor(env), learningFor(env))(request);
         if (isSupportEngineeringRequest(path))
           return await createSupportRequestHandler(env, logger, humanEngineeringFor(env), answering, {}, engineeringFor(env), learningFor(env))(request);
         const reviews = options.learningReviews;
@@ -1085,6 +1187,7 @@ return {
               logger,
               config: releasesConfig,
               scheduledTime: controller.scheduledTime,
+              followupTracking: () => followupTrackingFor(env),
             });
           } catch (error) {
             logger.log('error', 'release_reconciliation.unavailable', {
@@ -1113,6 +1216,21 @@ return {
         enabled: () => learningWorkerEnabled(env, selectedLearning),
         producer: () => env.SUPPORT_ENGINEERING_JOBS,
       }));
+    }
+
+    if (
+      controller.cron === CLEANUP_CRON &&
+      supportReleaseFollowupWakeDue(controller.scheduledTime) &&
+      env.PEGMA_SUPPORT_RELEASE_FOLLOWUP_PROCESSING_ENABLED === 'true'
+    ) {
+      ctx.waitUntil(
+        seedSupportReleaseFollowupWake({
+          clock: systemClock,
+          logger,
+          enabled: () => followupWorkerEnabledFor(env),
+          producer: () => env.SUPPORT_ENGINEERING_JOBS,
+        }),
+      );
     }
 
     const cleanup =
@@ -1239,12 +1357,33 @@ return {
       await prepareDefault(env);
     if (batch.queue === SUPPORT_ENGINEERING_QUEUE) {
       const logger = createAppLogger(env, (promise) => ctx.waitUntil(promise));
+      if (
+        batch.messages.length === 1 &&
+        isSupportReleaseFollowupWake(batch.messages[0]!.body)
+      ) {
+        await consumeSupportReleaseFollowupWake(batch, {
+          clock: systemClock,
+          logger,
+          enabled: () => followupWorkerEnabledFor(env),
+          create: () =>
+            createSupportHandler(
+              env,
+              logger,
+              humanEngineeringFor(env),
+              {},
+              followupFor(env),
+              engineeringFor(env),
+              learningFor(env),
+            ).followupDriver,
+        });
+        return;
+      }
       if (batch.messages.length === 1 && isSupportLearningWake(batch.messages[0]!.body)) {
         const selectedLearning = learningFor(env);
         await consumeSupportLearningWake(batch, {
           clock: systemClock, logger,
           enabled: () => learningWorkerEnabled(env, selectedLearning),
-          create: () => createSupportHandler(env, logger, humanEngineeringFor(env), {}, options.releaseFollowup,
+          create: () => createSupportHandler(env, logger, humanEngineeringFor(env), {}, followupFor(env),
             engineeringFor(env), selectedLearning).learningDriver,
         });
         return;

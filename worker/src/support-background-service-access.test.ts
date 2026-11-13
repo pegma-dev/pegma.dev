@@ -23,6 +23,7 @@ const ceilings = {
   ],
   'learning-retirement': [...source, k.draftRead, k.provenanceRead, k.retire],
   'engineering-process': [p.queueRead, p.engineeringRead, p.engineeringProcess],
+  'release-followup-process': [p.queueRead, p.engineeringFollowupRead, p.engineeringFollowupProcess],
   'engineering-reconcile': [p.engineeringReconcile],
 };
 function fixture() {
@@ -52,6 +53,7 @@ function fixture() {
     'learning-draft': ports.learning.knowledgeAccess,
     'learning-retirement': ports.learning.retirementAccess,
     'engineering-process': ports.engineering.serviceAccess,
+    'release-followup-process': ports.releaseFollowup.serviceAccess,
     'engineering-reconcile': ports.engineering.reconciliationAccess,
   };
   return { kinds, profiles, readProfile, options, ports, byKind };
@@ -78,6 +80,7 @@ describe('intrinsic bounded background authority', () => {
     for (const port of [
       ...Object.values(ports.learning),
       ...Object.values(ports.engineering),
+      ...Object.values(ports.releaseFollowup),
     ])
       expect(await port.resolve(live())).toEqual({ outcome: 'inactive' });
   });
@@ -101,7 +104,7 @@ describe('intrinsic bounded background authority', () => {
         expect.any(AbortSignal),
       );
       expect(new Set(Object.values(SUPPORT_BACKGROUND_SERVICE_IDS)).size).toBe(
-        5,
+        6,
       );
       for (const forbidden of [
         p.learningReview,

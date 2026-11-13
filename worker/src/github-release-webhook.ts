@@ -1,4 +1,5 @@
 import { createWebhookLedger, type WebhookLedger } from '@pegma/webhooks';
+import { recordSupportFollowupRelease } from './support-release-followup-releases';
 import { createCloudflareD1Store } from '@pegma/storage-cloudflare-d1';
 import type { Store } from '@pegma/storage-core';
 import type { Logger } from '@pegma/spine';
@@ -43,6 +44,8 @@ export interface HandleGitHubReleaseWebhookOptions {
   readonly config: GitHubReleaseWebhookConfig;
   readonly now?: string;
   readonly ledger?: WebhookLedger;
+  /** Optional SD05 Source journal; unrelated release processing keeps its old I/O. */
+  readonly followupTracking?: () => boolean;
 }
 
 function jsonResponse(
@@ -370,6 +373,8 @@ export async function handleGitHubReleaseWebhook(
     if (decision.kind === 'upsert' || decision.kind === 'delete') {
       await invalidateReleaseRepositoryEtag(store, facts.repositoryId);
     }
+    if (options.followupTracking?.() === true)
+      await recordSupportFollowupRelease(store, facts.repositoryId);
     await ledger.markProcessed(deliveryId);
     try {
       await markReleaseWebhookSuccess(store, observedAt);
