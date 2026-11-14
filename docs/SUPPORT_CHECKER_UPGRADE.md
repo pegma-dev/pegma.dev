@@ -73,12 +73,17 @@ withdrawal and exact acknowledgements using fictional provider responses only.
 
 Native tests measure real local D1 calls, not deployed Free CPU acceptance.
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
-currently give Free invocations 10ms CPU; waiting for network or D1 is distinct
+currently give Free HTTP and Cron invocations 10ms CPU; waiting for network or D1 is distinct
 from CPU time. The longer trusted system policy adds real encoding/tokenizer
 work, so retain a separate current-build cold/warm CPU measurement and quota
 acceptance gate. Do not increase CPU/D1 caps or enable customer AI to obtain a
 passing qualification. Cloud execution and live provider evaluation remain
 separately authorized host operations.
+
+The [isolated whole-checker CPU fixture](SUPPORT_CHECKER_CPU_STAGE.md) preserves
+two fictional inputs through the complete checker and token-count sequence.
+Its queue trigger requires its own effective Free CPU allowance and correlated
+platform invocation evidence; a queue result does not qualify another trigger.
 
 Producer contract:
 [AI adapter](https://github.com/pegma-dev/support-desk/blob/b41b301c955b1960ca2c6f9d3a186f2c6be28ca2/packages/ai/README.md),

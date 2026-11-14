@@ -13,6 +13,20 @@ import {
 } from './support-checker-cpu-inputs';
 
 export const CHECKER_CPU_QUEUE = 'pegma-support-checker-cpu-stage-wakeup';
+export type CheckerCpuHeldReason =
+  | 'input-unavailable'
+  | 'input-changed'
+  | 'counter-sequence'
+  | 'transport-refused'
+  | 'wire-changed'
+  | 'configuration-unavailable'
+  | 'budget-refused';
+export class CheckerCpuFixtureError extends Error {
+  constructor(readonly reason: CheckerCpuHeldReason) {
+    super('Checker CPU fixture held');
+  }
+}
+export type CheckerCpuProgress = 'counter-module-request' | 'counter-call';
 export const CHECKER_CPU_BUDGETS = Object.freeze({
   maxMessages: 20,
   maxInputBytes: 32_768,
@@ -149,7 +163,7 @@ function inputFor(caseId: CheckerCpuCaseId): IndependentCheckInput {
     parsed.kind !== 'learning' ||
     parsed.trustedInstructions !== CHECKER_CPU_FROZEN.trustedInstructions
   )
-    throw new TypeError('Frozen CPU input unavailable');
+    throw new CheckerCpuFixtureError('input-unavailable');
   const input = {
     trustedInstructions: CHECKER_CPU_FROZEN.trustedInstructions,
     kind: 'learning' as const,
@@ -159,7 +173,7 @@ function inputFor(caseId: CheckerCpuCaseId): IndependentCheckInput {
     comparison: parsed.comparison,
   };
   if (JSON.stringify(input) !== frozen.inputJson)
-    throw new TypeError('Frozen CPU input changed');
+    throw new CheckerCpuFixtureError('input-changed');
   return input;
 }
 export interface CheckerCpuActivity {
@@ -181,6 +195,7 @@ export interface CheckerCpuActivity {
 export async function runCheckerCpuFixture(
   caseId: CheckerCpuCaseId,
   clock: Clock = systemClock,
+  onProgress?: (phase: CheckerCpuProgress) => void,
 ) {
   const frozen = CHECKER_CPU_FROZEN.cases[caseId];
   const activity: CheckerCpuActivity = {
@@ -197,6 +212,7 @@ export async function runCheckerCpuFixture(
     withinBudget: false,
     scriptedCompletion: false,
   };
+  onProgress?.('counter-module-request');
   const { createSupportIndependentCheckTokenCounter } =
     await import('./support-independent-checks-token-counter');
   const actual = createSupportIndependentCheckTokenCounter(qualification);
@@ -212,8 +228,9 @@ export async function runCheckerCpuFixture(
       count(text) {
         const tokens = actual.count(text);
         activity.counterCalls++;
+        onProgress?.('counter-call');
         if (activity.counterCalls > 64)
-          throw new Error('Unexpected CPU counter sequence');
+          throw new CheckerCpuFixtureError('counter-sequence');
         activity.counterObservations.push({ codeUnits: text.length, tokens });
         return tokens;
       },
@@ -230,7 +247,7 @@ export async function runCheckerCpuFixture(
         url !== INDEPENDENT_CHECK_ENDPOINT ||
         init.method !== 'POST'
       )
-        throw new Error('CPU fixture transport refusal');
+        throw new CheckerCpuFixtureError('transport-refused');
       wireBody = String(init.body);
       const body = JSON.parse(wireBody);
       if (
@@ -241,7 +258,7 @@ export async function runCheckerCpuFixture(
         body.messages[1].content !== frozen.inputJson ||
         new TextEncoder().encode(wireBody).length !== frozen.expectedWireBytes
       )
-        throw new Error('CPU fixture wire changed');
+        throw new CheckerCpuFixtureError('wire-changed');
       return new Response(
         JSON.stringify({
           id: 'fictional-cpu-no-native-provider',
@@ -283,9 +300,10 @@ export async function runCheckerCpuFixture(
     },
   });
   const resolved = await model.resolve(undefined, new AbortController().signal);
-  if (!resolved) throw new Error('Fictional CPU configuration unavailable');
+  if (!resolved) throw new CheckerCpuFixtureError('configuration-unavailable');
   activity.withinBudget = model.withinBudget(input, resolved.configuration);
-  if (!activity.withinBudget) throw new Error('Whole frozen CPU input refused');
+  if (!activity.withinBudget)
+    throw new CheckerCpuFixtureError('budget-refused');
   const response = await model.generate(
     input,
     {

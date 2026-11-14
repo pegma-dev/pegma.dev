@@ -12,7 +12,8 @@ The [frozen inputs](../worker/src/support-checker-cpu-inputs.ts) preserve the tw
 fictional known-pair USER byte strings. The genuine SDK reconstructs the captured
 v3 SYSTEM message from their common trusted policy. Both original Node captures
 had identical request bytes and metrics. No semantic oracle or provider result
-is included; the local scripted response uses `uncertain` verdicts only.
+is included; the local scripted response uses only `uncertain` and
+`not_applicable` verdicts.
 
 | Input       | USER bytes | Complete SYSTEM + USER bytes | Input tokens including framing |
 | ----------- | ---------: | ---------------------------: | -----------------------------: |
@@ -39,6 +40,8 @@ secret/config bindings and no CPU-limit override. Compatibility matches the
 current host. It enables complete invocation logs. The production manifest,
 existing answering-stage resources, SDK pins and customer AI settings stay as
 they are. Normal deployment does not deploy this separate manifest.
+The normal `pnpm run check` gate does validate and bundle it through the
+binding-free `check:checker-cpu-stage` dry run.
 
 Cloudflare currently documents Queues on Workers Free with 10,000 standard
 operations/day and fixed 24-hour retention. Four small messages normally require
@@ -53,8 +56,10 @@ separate operator execution. This source checkpoint performs none of them.
 
 After source inspection, local test qualification and the configured review/CI
 gates, an operator may separately qualify the isolated deployment. Bind its
-source/tree, lockfile, Worker version, queue, effective plan and deployed
-consumer settings before sending messages. Do not point the manifest at the
+source/tree, lockfile, account, Worker version, queue, effective plan and deployed
+consumer settings before sending messages. Set `CLOUDFLARE_ACCOUNT_ID` explicitly
+for that isolated account when executing Wrangler; this manifest deliberately
+contains no account selection. Do not point the manifest at the
 existing production or answering-stage queue. Do not raise a CPU limit.
 
 Send one selector, await its terminal platform invocation record, then proceed:
@@ -66,14 +71,19 @@ Send one selector, await its terminal platform invocation record, then proceed:
 
 Each is one whole SDK invocation, with at most one in-process provider call.
 Each message is acknowledged; the consumer never requests a retry. Malformed,
-redelivered, duplicate, wrong-queue or multi-message deliveries refuse model
-work. A warm selector requires a completed first sample of that input in the
-same entry/isolate. A new isolate refuses an unpaired warm selector.
+broker-redelivered (`attempts !== 1`), wrong-queue or multi-message deliveries
+refuse model work. Repeating a selector is refused within the same entry/isolate;
+a newly published first-use selector can run again after isolate replacement.
+A warm selector requires a completed first sample of that input in the same
+entry/isolate. A new isolate refuses an unpaired warm selector.
 
-The logs distinguish per-input first-use from the optional counter module's
-first request by this entry. A fresh counter wrapper does not reset tokenizer
-tables. On a reused isolate, the second input's first-use sample may already
-have a previously requested module. To observe module-first-use for both
+The terminal logs distinguish per-input first-use, the optional counter module's
+actual request by this entry, and successful token-count calls. A held delivery
+can request the module yet execute no counts; it does not advance the count-use
+label. Held records include only a finite fixture reason or `sdk-or-runtime`,
+never raw error text. A fresh counter wrapper does not reset tokenizer tables.
+On a reused isolate, the second input's first-use sample may already have a
+previously requested module. To observe module-first-use for both
 inputs, the operator needs a fresh, observed isolate/version for each input
 pair while retaining the exact same source and input bytes. Concurrency 1 does
 not guarantee isolate reuse. Missing or mismatched samples are inconclusive;

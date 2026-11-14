@@ -136,6 +136,12 @@ describe('isolated whole-checker CPU fixture', () => {
       'warm',
     ]);
     expect(complete.map((x) => x.counterEntryUse)).toEqual([
+      'first-count-by-entry',
+      'previous-count-by-entry',
+      'previous-count-by-entry',
+      'previous-count-by-entry',
+    ]);
+    expect(complete.map((x) => x.counterModuleUse)).toEqual([
       'first-request-by-entry',
       'previous-request-by-entry',
       'previous-request-by-entry',
@@ -205,21 +211,34 @@ describe('isolated whole-checker CPU fixture', () => {
 
   it('holds expired fictional evidence and refuses a warm sample after an incomplete first sample', async () => {
     const observations: CheckerCpuObservation[] = [];
+    let now = '2027-01-02T00:00:00.000Z';
     const stage = createCheckerCpuStage({
-      clock: { now: () => '2027-01-02T00:00:00.000Z' },
+      clock: { now: () => now },
       observe: (x) => observations.push(x),
     });
     const first = message(CHECKER_CPU_DELIVERIES[0].body),
       warm = message(CHECKER_CPU_DELIVERIES[1].body);
     await stage.queue(batch([first]));
     await stage.queue(batch([warm]));
-    expect(observations.some((x) => x.outcome === 'held')).toBe(true);
+    expect(observations.find((x) => x.outcome === 'held')).toMatchObject({
+      reason: 'configuration-unavailable',
+      counterModuleUse: 'first-request-by-entry',
+      counterEntryUse: 'not-counted-in-delivery',
+      counterCalls: 0,
+    });
     expect(observations.at(-1)).toMatchObject({
       event: 'refused',
       reason: 'phase-or-duplicate',
     });
     expect(first.retry).not.toHaveBeenCalled();
     expect(warm.retry).not.toHaveBeenCalled();
+    now = clock.now();
+    await stage.queue(batch([message(CHECKER_CPU_DELIVERIES[2].body)]));
+    expect(observations.at(-1)).toMatchObject({
+      outcome: 'fixture-complete',
+      counterModuleUse: 'previous-request-by-entry',
+      counterEntryUse: 'first-count-by-entry',
+    });
   });
 
   it('exposes only a queue consumer and a separate binding-free private manifest', () => {
@@ -233,6 +252,28 @@ describe('isolated whole-checker CPU fixture', () => {
     );
     expect(parsed.error).toBeUndefined();
     const config = parsed.config;
+    const host = parseConfigFileTextToJson(
+      'wrangler.jsonc',
+      readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'),
+    );
+    expect(host.error).toBeUndefined();
+    expect(config.compatibility_date).toBe(host.config.compatibility_date);
+    expect(config.compatibility_flags).toEqual(host.config.compatibility_flags);
+    expect(Object.keys(config).sort()).toEqual(
+      [
+        '$schema',
+        'name',
+        'main',
+        'compatibility_date',
+        'compatibility_flags',
+        'workers_dev',
+        'preview_urls',
+        'routes',
+        'triggers',
+        'queues',
+        'observability',
+      ].sort(),
+    );
     expect(config.main).toBe('src/support-checker-cpu-stage-entry.ts');
     expect(config.workers_dev).toBe(false);
     expect(config.preview_urls).toBe(false);

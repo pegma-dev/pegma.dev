@@ -2,6 +2,7 @@ import { type Clock } from '@pegma/spine';
 import {
   runCheckerCpuFixture,
   CHECKER_CPU_QUEUE,
+  CheckerCpuFixtureError,
 } from './support-checker-cpu-stage';
 import {
   CHECKER_CPU_FIXTURE_VERSION,
@@ -43,6 +44,7 @@ export function createCheckerCpuStage(options: Options = {}) {
   const completedFirst = new Set<string>();
   let isolateId: string | undefined;
   let counterEntryRequested = false;
+  let counterEntryCounted = false;
   const observe = (fields: CheckerCpuObservation) => {
     try {
       if (options.observe) options.observe(fields);
@@ -96,30 +98,58 @@ export function createCheckerCpuStage(options: Options = {}) {
         caseId: selected.caseId,
         requestedPhase: selected.phase,
         isolateId,
-        counterEntryUse: counterEntryRequested
-          ? 'previous-request-by-entry'
-          : 'first-request-by-entry',
         inputSha256: CHECKER_CPU_FROZEN.cases[selected.caseId].inputSha256,
         systemSha256: CHECKER_CPU_FROZEN.systemSha256,
       };
-      counterEntryRequested = true;
+      let counterModuleUse = 'not-requested-in-delivery';
+      let counterEntryUse = 'not-counted-in-delivery';
+      let counterCalls = 0;
       observe({ ...sample, event: 'start' });
       try {
         const { activity } = await runCheckerCpuFixture(
           selected.caseId,
           options.clock,
+          (phase) => {
+            if (phase === 'counter-module-request') {
+              counterModuleUse = counterEntryRequested
+                ? 'previous-request-by-entry'
+                : 'first-request-by-entry';
+              counterEntryRequested = true;
+            } else {
+              if (counterCalls === 0) {
+                counterEntryUse = counterEntryCounted
+                  ? 'previous-count-by-entry'
+                  : 'first-count-by-entry';
+                counterEntryCounted = true;
+              }
+              counterCalls++;
+            }
+          },
         );
         if (selected.phase === 'first-use') completedFirst.add(first);
         observe({
           ...sample,
           event: 'finish',
           outcome: 'fixture-complete',
+          counterModuleUse,
+          counterEntryUse,
           ...activity,
         });
-      } catch {
+      } catch (error) {
         // CPU termination may prevent this record too. Retain the platform
         // terminal invocation outcome; never infer completion from a start log.
-        observe({ ...sample, event: 'finish', outcome: 'held' });
+        observe({
+          ...sample,
+          event: 'finish',
+          outcome: 'held',
+          reason:
+            error instanceof CheckerCpuFixtureError
+              ? error.reason
+              : 'sdk-or-runtime',
+          counterModuleUse,
+          counterEntryUse,
+          counterCalls,
+        });
       } finally {
         message.ack();
       }
