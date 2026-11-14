@@ -26,6 +26,28 @@ const GITHUB_API = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const USER_AGENT = 'pegma-dev-release-reconciliation';
+// Scheduled invocations examine one repository; only explicit full passes can
+// truncate details, with the omitted count retained in the same summary.
+const MAX_FAILURE_DETAILS = 4;
+
+/** Existing summary only: finite public metadata, never error/body/header text.
+ * bodyBytes saturates at MAX_RESPONSE_BYTES + 1; source distinguishes a
+ * declared oversized length from actual bytes consumed from the stream. */
+interface ReleaseFailureDetail {
+  readonly repositoryId: string;
+  phase: 'fetch' | 'status' | 'body' | 'facts' | 'url' | 'projection';
+  failureClass:
+    | 'operation_rejected'
+    | 'fetch_rejected'
+    | 'http_status'
+    | 'too_large'
+    | 'invalid_json'
+    | 'invalid_release'
+    | 'unsafe_release_url';
+  httpStatus?: number;
+  bodyBytes?: number;
+  bodyBytesSource?: 'declared' | 'streamed';
+}
 
 export interface ReleaseReconciliationConfig {
   readonly allowedRepositoryIds: ReadonlySet<string>;
@@ -113,6 +135,7 @@ export function githubLatestToFacts(
 
 async function readBoundedJson(
   response: Response,
+  failure: ReleaseFailureDetail,
 ): Promise<
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly reason: 'too_large' | 'invalid_json' }
@@ -120,6 +143,8 @@ async function readBoundedJson(
   const declared = response.headers.get('content-length');
   if (declared !== null && /^\d+$/.test(declared)) {
     if (Number(declared) > MAX_RESPONSE_BYTES) {
+      failure.bodyBytes = MAX_RESPONSE_BYTES + 1;
+      failure.bodyBytesSource = 'declared';
       return { ok: false, reason: 'too_large' };
     }
   }
@@ -127,6 +152,8 @@ async function readBoundedJson(
   if (reader === undefined) {
     return { ok: true, value: null };
   }
+  failure.bodyBytes = 0;
+  failure.bodyBytesSource = 'streamed';
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
@@ -138,6 +165,7 @@ async function readBoundedJson(
       continue;
     }
     total += value.byteLength;
+    failure.bodyBytes = Math.min(total, MAX_RESPONSE_BYTES + 1);
     if (total > MAX_RESPONSE_BYTES) {
       try {
         await reader.cancel();
@@ -167,12 +195,13 @@ async function reconcileOneRepository(options: {
   readonly etag: string | undefined;
   readonly observedAt: string;
   readonly fetchImpl: typeof fetch;
+  readonly failure: ReleaseFailureDetail;
 }): Promise<{
   readonly outcome:
     'upserted' | 'cleared' | 'not_modified' | 'unchanged' | 'failed';
   readonly etag: string | undefined;
 }> {
-  const { store, entry, observedAt, fetchImpl } = options;
+  const { store, entry, observedAt, fetchImpl, failure } = options;
   // Fetch by stable numeric repository ID so a rename/recreate cannot attach
   // another repo's release under this catalog slot.
   const url = `${GITHUB_API}/repositories/${entry.repositoryId}/releases/latest`;
@@ -193,10 +222,14 @@ async function reconcileOneRepository(options: {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch {
+    failure.failureClass = 'fetch_rejected';
     return { outcome: 'failed', etag: options.etag };
   }
 
+  failure.phase = 'status';
+  failure.httpStatus = response.status;
   if (response.status === 304) {
+    failure.phase = 'projection';
     await touchCurrentReleaseObservedAt(store, entry.repositoryId, observedAt);
     return { outcome: 'not_modified', etag: options.etag };
   }
@@ -204,6 +237,7 @@ async function reconcileOneRepository(options: {
   const nextEtag = response.headers.get('etag') ?? undefined;
 
   if (response.status === 404) {
+    failure.phase = 'projection';
     const cleared = await clearCurrentRelease(store, entry.repositoryId);
     return {
       outcome: cleared ? 'cleared' : 'unchanged',
@@ -212,27 +246,35 @@ async function reconcileOneRepository(options: {
   }
 
   if (response.status < 200 || response.status >= 300) {
+    failure.failureClass = 'http_status';
     return { outcome: 'failed', etag: options.etag };
   }
 
-  const parsed = await readBoundedJson(response);
+  failure.phase = 'body';
+  const parsed = await readBoundedJson(response, failure);
   if (!parsed.ok) {
+    failure.failureClass = parsed.reason;
     return { outcome: 'failed', etag: options.etag };
   }
 
+  failure.phase = 'facts';
   const facts = githubLatestToFacts(entry, parsed.value);
   if (facts === null) {
     // 2xx with an unusable body is not proof that no stable release exists
     // (unlike 404). Fail closed so we do not clear good local state.
+    failure.failureClass = 'invalid_release';
     return { outcome: 'failed', etag: options.etag };
   }
   // Catalog repositoryId is the authority; name is display-only.
   if (facts.repositoryId !== entry.repositoryId) {
+    failure.failureClass = 'invalid_release';
     return { outcome: 'failed', etag: options.etag };
   }
 
+  failure.phase = 'url';
   const releaseUrl = buildPegmaReleaseUrl(facts.repositoryName, facts.tagName);
   if (releaseUrl === null) {
+    failure.failureClass = 'unsafe_release_url';
     return { outcome: 'failed', etag: options.etag };
   }
 
@@ -247,6 +289,7 @@ async function reconcileOneRepository(options: {
   };
   // Authoritative path: GitHub's current stable wins even when older than a
   // local row left behind by a missed delete/unpublish webhook.
+  failure.phase = 'projection';
   const wrote = await applyAuthoritativeCurrentRelease(store, release);
   return {
     outcome: wrote === 'written' ? 'upserted' : 'unchanged',
@@ -285,6 +328,7 @@ export async function runReleaseReconciliation(
   // Epoch-conditioned ETag updates so a concurrent webhook invalidation wins.
   const etagUpdates: ConditionalEtagUpdate[] = [];
   const succeeded: string[] = [];
+  const failureDetails: ReleaseFailureDetail[] = [];
 
   let examined = 0;
   let upserted = 0;
@@ -297,6 +341,11 @@ export async function runReleaseReconciliation(
     // Re-read live ETags/epochs each repo so mid-run invalidations apply.
     const live = await readReleaseOpsState(store);
     const expectedEpoch = live.repositoryEtagEpochs[entry.repositoryId] ?? 0;
+    const failure: ReleaseFailureDetail = {
+      repositoryId: entry.repositoryId,
+      phase: 'fetch',
+      failureClass: 'operation_rejected',
+    };
     let result: {
       readonly outcome:
         'upserted' | 'cleared' | 'not_modified' | 'unchanged' | 'failed';
@@ -309,6 +358,7 @@ export async function runReleaseReconciliation(
         etag: live.repositoryEtags[entry.repositoryId],
         observedAt,
         fetchImpl,
+        failure,
       });
     } catch {
       // Version conflicts and unexpected store errors stay per-repository so
@@ -318,6 +368,7 @@ export async function runReleaseReconciliation(
 
     if (result.outcome === 'failed') {
       failed += 1;
+      if (failureDetails.length < MAX_FAILURE_DETAILS) failureDetails.push(failure);
     } else {
       succeeded.push(entry.repositoryId);
     }
@@ -386,6 +437,8 @@ export async function runReleaseReconciliation(
       cleared: summary.cleared,
       notModified: summary.notModified,
       failed: summary.failed,
+      failureDetails,
+      failureDetailsOmitted: summary.failed - failureDetails.length,
     });
   }
 
