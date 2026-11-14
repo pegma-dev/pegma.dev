@@ -586,9 +586,9 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
     },
   );
 
-  it("retains the actual SDK follow-up purpose hold while its generator remains legacy", async () => {
-    // A ready legacy control rules out missing keys/purpose evidence as the
-    // reason that the otherwise qualified group counterpart is held.
+  it("admits qualified SDK follow-up group checks while its generator remains legacy", async () => {
+    // Public 0.2.13 permits the explicit group for checks with its own current
+    // SD05 proof. Generation and credential-free policy reads stay unchanged.
     for (const group of [false, true]) {
       const f = await supportFollowupPaidFixture();
       if (group) await selectGroupChecks(f.profile.checks);
@@ -634,8 +634,32 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
         "pegma.dev",
       );
       expect((await checks.resolvePolicy(undefined, signal())).outcome).toBe(
-        group ? "unavailable" : "ready",
+        "ready",
       );
+      if (group) {
+        const { releaseFollowup: _purpose, approval, ...unsigned } =
+          f.profile.checks.route;
+        const withoutPurpose = {
+          ...unsigned,
+          approval: {
+            ...approval,
+            requestPolicySha256: await independentCheckRoutePolicyHash(unsigned),
+          },
+        };
+        const unqualified = createSupportReleaseFollowupChecks(
+          {
+            ...paid.checks,
+            readRoute: () => withoutPurpose,
+            store: createMemoryStore(),
+            application,
+            releaseEvidence: { verifyInput: evidence, confirm: evidence },
+          },
+          "pegma.dev",
+        );
+        expect(
+          (await unqualified.resolvePolicy(undefined, signal())).outcome,
+        ).toBe("unavailable");
+      }
       expect(application).not.toHaveBeenCalled();
       expect(evidence).not.toHaveBeenCalled();
       expect(providerKey).not.toHaveBeenCalled();
