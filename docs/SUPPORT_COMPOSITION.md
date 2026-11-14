@@ -37,6 +37,9 @@ and contracts `0.1.8`; the host selects all four KB packages at that version.
 Producer qualification and installation do not complete host or provider
 acceptance. [Public Support Desk release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.11),
 [public KB release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.8).
+The [checker wire upgrade](SUPPORT_CHECKER_UPGRADE.md) describes fresh route and
+tokenizer qualification, complete-message admission and the separate Free CPU
+acceptance gate.
 The earlier [Support `0.2.7`](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7)
 and [KB `0.1.6`](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.6)
 producer checkpoints remain historical; they do not qualify the current host.
