@@ -545,16 +545,44 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
         readRoute: () => route,
         readApiKey: key,
       });
-      expect(await model.resolve()).toBeNull();
-      await expect(
-        model.generate(
-          input(f),
-          context(f),
-          f.profile.checks.route.configuration,
-        ),
-      ).rejects.toThrow();
-      expect(key).not.toHaveBeenCalled();
-      expect(fetch).not.toHaveBeenCalled();
+      const digest =
+        field === "nonfinite-price"
+          ? vi.spyOn(crypto.subtle, "digest")
+          : undefined;
+      try {
+        if (digest) {
+          const valid = createSupportIndependentCheckModel({
+            ...b.learning.independentChecks!,
+            clock: f.clock,
+          });
+          expect(await valid.resolve()).not.toBeNull();
+          expect(digest).toHaveBeenCalled();
+          digest.mockClear();
+          // The public canonicalizer cannot produce an approval for Infinity.
+          // Observe actual rejection before hashing, never forge such an approval.
+          const { approval: _approval, ...unsigned } = route;
+          expect(unsigned.host).toBe('pegma.dev');
+          await expect(
+            independentCheckRoutePolicyHash({ ...unsigned, host: 'pegma.dev' }),
+          ).rejects.toThrow(TypeError);
+          expect(digest).not.toHaveBeenCalled();
+        }
+        expect(await model.resolve()).toBeNull();
+        await expect(
+          model.generate(
+            input(f),
+            context(f),
+            f.profile.checks.route.configuration,
+          ),
+        ).rejects.toThrow();
+        // A stale-hash comparison cannot be the cause: no invalid-route digest
+        // was computed, while the same observer saw the valid control above.
+        if (digest) expect(digest).not.toHaveBeenCalled();
+        expect(key).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        digest?.mockRestore();
+      }
     },
   );
 
