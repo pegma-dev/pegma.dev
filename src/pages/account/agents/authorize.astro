@@ -34,7 +34,7 @@ import Base from '../../../layouts/Base.astro';
     <button id="agent-approved-grant" type="button" class="secondary-button" hidden>Retry loading the approved grant controls</button>
     <section>
       <h2>View or revoke a known grant</h2>
-      <p>Enter the grant ID from your approval. Only your own grants are available here.</p>
+      <p>Enter the grant ID from your approval. Only your own grants are available here. After approval redirects to your agent, use your browser's Back button to return to these controls, then bookmark the grant link.</p>
       <form id="agent-grant-lookup" class="account-form">
         <label for="agent-grant-id">Grant ID</label>
         <input id="agent-grant-id" name="grantId" type="text" maxlength="128" required autocomplete="off" />
@@ -43,6 +43,7 @@ import Base from '../../../layouts/Base.astro';
       <section id="agent-grant" hidden>
         <dl id="agent-grant-details"></dl>
         <p id="agent-grant-instructions" class="form-note"></p>
+        <p><a id="agent-grant-management-link" href="/account/agents/authorize" hidden>Link to these grant controls</a></p>
         <button id="agent-revoke" type="button" class="secondary-button">Revoke this grant</button>
       </section>
     </section>

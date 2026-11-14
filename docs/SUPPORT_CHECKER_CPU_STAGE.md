@@ -1,6 +1,6 @@
 # Isolated whole-checker CPU fixture
 
-This source harness supports measuring one complete published Support Desk `0.2.12`
+This source harness supports measuring one complete published Support Desk `0.2.13`
 checker invocation with the actual pinned `gpt-tokenizer@4.1.2` GPT-5.4 counter.
 The [entry](../worker/src/support-checker-cpu-stage-entry.ts) accepts only four
 fixed queue selectors. The [runner](../worker/src/support-checker-cpu-stage.ts)

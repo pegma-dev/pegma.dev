@@ -1,10 +1,10 @@
 # Preparing the independent checker wire upgrade
 
-The host pins synchronized public Support Desk `0.2.12`, released from
-`b41b301c955b1960ca2c6f9d3a186f2c6be28ca2` after strict public registry and
+The host pins synchronized public Support Desk `0.2.13`, released from
+`114094de1f55a6b18ba1378cecafa91df877d735` after strict public registry and
 release-artifact verification. The
-[public release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.12)
-supersedes the host's `0.2.11` dependency selection. Publication and local tests
+[public release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.13)
+supersedes the host's `0.2.12` dependency selection. Publication and local tests
 do not establish provider quality, deployed Free CPU acceptance or customer
 activation.
 
@@ -36,10 +36,11 @@ Qualification model/version, framing and evidence dates remain
 operator evidence, checked by the SDK. Unknown models refuse before key access
 or a provider request. The legacy GPT-4.1-mini checker selection, generation,
 customer-answer and release-follow-up generator allowlists remain unchanged.
-All host checker consumers receive the shared checker tuple/counter; the
-published SDK separately refuses provider groups for release-follow-up checks.
-That purpose remains held for a group route rather than inheriting a learning
-or engineering approval. No
+All host checker consumers receive the shared checker tuple/counter. Public
+`0.2.13` also supports the explicit group opt-in for release-follow-up checks,
+with separate current SD05 purpose evidence; learning or engineering approval
+does not authorize that purpose. Release-follow-up generation retains its
+existing endpoint restrictions. No
 route, price, approval, credential or feature flag is installed or enabled by
 this code change. Customer AI remains off.
 
@@ -86,5 +87,5 @@ Its queue trigger requires its own effective Free CPU allowance and correlated
 platform invocation evidence; a queue result does not qualify another trigger.
 
 Producer contract:
-[AI adapter](https://github.com/pegma-dev/support-desk/blob/b41b301c955b1960ca2c6f9d3a186f2c6be28ca2/packages/ai/README.md),
-[upgrade notes](https://github.com/pegma-dev/support-desk/blob/b41b301c955b1960ca2c6f9d3a186f2c6be28ca2/docs/UPGRADING.md).
+[AI adapter](https://github.com/pegma-dev/support-desk/blob/114094de1f55a6b18ba1378cecafa91df877d735/packages/ai/README.md),
+[upgrade notes](https://github.com/pegma-dev/support-desk/blob/114094de1f55a6b18ba1378cecafa91df877d735/docs/UPGRADING.md).

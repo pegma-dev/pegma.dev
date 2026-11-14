@@ -150,6 +150,10 @@ function parameter(name) {
   return values.length === 1 && values[0].length <= 128 ? values[0] : '';
 }
 
+function grantManagementPath(id) {
+  return `/account/agents/authorize?${new URLSearchParams({ grant_id: id })}`;
+}
+
 function setMutationPending(pending) {
   mutationPending = pending;
   for (const button of consentForm.querySelectorAll('button'))
@@ -242,6 +246,19 @@ consentForm.addEventListener('submit', async (event) => {
         !(callback.protocol === 'http:' && loopback)
       )
         throw new Error('invalid_request');
+      if (decision === 'approve') {
+        // Retain only the public locator for Back/bookmark recovery. The owner
+        // lookup rechecks current access; the callback and its PKCE data stay unchanged.
+        try {
+          window.history.replaceState(
+            null,
+            '',
+            grantManagementPath(request.requestId),
+          );
+        } catch {
+          // A history failure must not interrupt an already accepted callback.
+        }
+      }
       window.location.assign(callback.href);
       return;
     }
@@ -292,6 +309,13 @@ async function loadGrant(id, acceptedConsent = false) {
     grantPanel.hidden = false;
     document.querySelector('#agent-grant-instructions').textContent =
       `Grant ID: ${grant.grantId}. Use this ID in the lookup form or choose Revoke this grant below. Status: ${grant.status}.`;
+    const managementLink = document.querySelector(
+      '#agent-grant-management-link',
+    );
+    if (managementLink) {
+      managementLink.href = grantManagementPath(grant.grantId);
+      managementLink.hidden = false;
+    }
     setMutationPending(mutationPending);
     if (acceptedConsent)
       document.querySelector('#agent-approved-grant').hidden = true;
@@ -358,6 +382,13 @@ async function start() {
       userCodeInput.value = parameter('user_code');
       status('Enter or confirm the code shown by your agent.');
     } else {
+      if (new URLSearchParams(window.location.search).has('grant_id')) {
+        const grantId = parameter('grant_id');
+        if (!/^[A-Za-z0-9_-]{1,128}$/u.test(grantId))
+          throw new Error('invalid_request');
+        await loadGrant(grantId);
+        return;
+      }
       const requestId = parameter('request_id');
       if (requestId)
         await loadApproval(new URLSearchParams({ request_id: requestId }));
@@ -370,5 +401,26 @@ async function start() {
     await failure(error);
   }
 }
+
+window.addEventListener('pageshow', (event) => {
+  if (
+    !event.persisted ||
+    flow !== 'authorization_code' ||
+    !new URLSearchParams(window.location.search).has('grant_id')
+  )
+    return;
+  // Back may restore this document without executing the module again.
+  ++loadGeneration;
+  ++grantGeneration;
+  csrfToken = '';
+  approval = null;
+  currentGrant = null;
+  requestPanel.hidden = true;
+  grantPanel.hidden = true;
+  panel.hidden = true;
+  signedOut.hidden = true;
+  setMutationPending(mutationPending);
+  void start();
+});
 
 await start();

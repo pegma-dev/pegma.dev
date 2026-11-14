@@ -5,6 +5,7 @@ import { createRoleStore } from '@pegma/authorization-storage';
 import { identityLinkKeyFromVerifiedIdentityClaims } from '@pegma/authorization-identity';
 import { hasPermission } from '@pegma/authorization-core';
 import type { PublicClient } from '@pegma/agent-access';
+import type { Clock } from '@pegma/spine';
 import type {
   IdentityPort,
   IdentityUser,
@@ -53,7 +54,7 @@ function text(value: Record<string, unknown>, key: string): string {
   return field;
 }
 
-async function fixture() {
+async function fixture(clock?: Clock) {
   const store = createMemoryStore();
   const logger = { log: vi.fn() };
   const sessions = createSessionStore(store, { logger });
@@ -142,6 +143,7 @@ async function fixture() {
     logger,
     identityLinkFromClaims: identityLinkKeyFromVerifiedIdentityClaims,
     clients: [client],
+    ...(clock === undefined ? {} : { clock }),
   };
   const candidateRuntime = createAgentAccessRuntime(options);
   if (candidateRuntime === null)
@@ -210,7 +212,139 @@ async function fixture() {
   };
 }
 
+async function approvedAuthorization(
+  f: Awaited<ReturnType<typeof fixture>>,
+) {
+  const verifier = 'v'.repeat(64);
+  const challenge = Buffer.from(
+    await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(verifier),
+    ),
+  ).toString('base64url');
+  const redirectUri = client.redirectUris[0] ?? '';
+  const authorize = await f.runtime.protocol.handle(
+    f.request(
+      `/api/agent-access/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id: client.clientId,
+        redirect_uri: redirectUri,
+        resource: AGENT_RESOURCE,
+        scope: AGENT_KNOWLEDGE_PERMISSIONS[0] ?? '',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        state: 'exact/+% state',
+      })}`,
+    ),
+  );
+  expect(authorize?.status).toBe(303);
+  const approvalUrl = new URL(authorize?.headers.get('Location') ?? '');
+  const requestId = approvalUrl.searchParams.get('request_id');
+  if (requestId === null)
+    throw new Error('Expected a PKCE request locator.');
+  const approvalPath = `/api/agent-access/approval?request_id=${requestId}`;
+  expect(
+    await body(await f.runtime.api(f.request(approvalPath))),
+  ).toMatchObject({
+    requestId,
+    flow: 'authorization_code',
+    status: 'pending',
+  });
+  const result = await body(
+    await f.runtime.api(
+      f.request('/api/agent-access/approval', 'admin', {
+        method: 'POST',
+        body: JSON.stringify({
+          requestId,
+          decision: 'approve',
+          approvedScopes: [AGENT_KNOWLEDGE_PERMISSIONS[0]],
+        }),
+      }),
+    ),
+  );
+  expect(result.flow).toBe('authorization_code');
+  const callback = new URL(text(result, 'redirectUri'));
+  expect(callback.origin + callback.pathname).toBe(redirectUri);
+  expect(callback.searchParams.get('state')).toBe('exact/+% state');
+  expect(callback.searchParams.get('iss')).toBe(IDENTITY_ISSUER);
+  const code = callback.searchParams.get('code');
+  if (code === null)
+    throw new Error('Expected a real authorization code.');
+  const tokens = await f.runtime.service.exchangeAuthorizationCode({
+    clientId: client.clientId,
+    resource: AGENT_RESOURCE,
+    code,
+    redirectUri,
+    codeVerifier: verifier,
+  });
+  return { requestId, approvalPath, tokens };
+}
+
 describe('Agent Access host composition', () => {
+  it('recovers the actual PKCE grant by its request locator after the approval request expires', async () => {
+    let now = Date.now();
+    const f = await fixture({ now: () => new Date(now).toISOString() });
+    const { requestId, approvalPath, tokens } =
+      await approvedAuthorization(f);
+    await expect(
+      f.runtime.service.authenticate({
+        token: tokens.access_token,
+        resource: AGENT_RESOURCE,
+      }),
+    ).resolves.toMatchObject({ grantId: requestId });
+    now += 601_000;
+    const expired = await f.runtime.api(f.request(approvalPath));
+    expect(expired?.status).toBe(400);
+    expect(await body(expired)).toMatchObject({ error: 'expired_token' });
+    const current = await f.runtime.api(
+      f.request(`/api/agent-access/grants/${requestId}`),
+    );
+    expect(current?.status).toBe(200);
+    expect(await body(current)).toMatchObject({
+      grantId: requestId,
+      status: 'active',
+      clientId: client.clientId,
+      resource: AGENT_RESOURCE,
+      ownerId: 'admin',
+    });
+    expect(current?.headers.get('Cache-Control')).toContain('no-store');
+  });
+
+  it('denies a different Admin the real PKCE grant locator and preserves owner revocation', async () => {
+    const f = await fixture();
+    const { requestId, tokens } = await approvedAuthorization(f);
+    const path = `/api/agent-access/grants/${requestId}`;
+    for (const method of ['GET', 'DELETE']) {
+      const denied = await f.runtime.api(
+        f.request(path, 'other-admin', { method }),
+      );
+      expect(denied?.status).toBe(403);
+      expect(await body(denied)).not.toHaveProperty('grantId');
+    }
+    expect(await body(await f.runtime.api(f.request(path)))).toMatchObject(
+      {
+        grantId: requestId,
+        status: 'active',
+      },
+    );
+    expect(
+      (await f.runtime.api(f.request(path, 'admin', { method: 'DELETE' })))
+        ?.status,
+    ).toBe(204);
+    expect(await body(await f.runtime.api(f.request(path)))).toMatchObject(
+      {
+        grantId: requestId,
+        status: 'revoked',
+      },
+    );
+    await expect(
+      f.runtime.service.authenticate({
+        token: tokens.access_token,
+        resource: AGENT_RESOURCE,
+      }),
+    ).rejects.toThrow();
+  });
+
   it('applies an explicit resource budget using the existing durable limiter', async () => {
     const f = await fixture();
     const runtime = createAgentAccessRuntime({
