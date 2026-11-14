@@ -2,6 +2,7 @@ import type { Store } from '@pegma/storage-core';
 import { systemClock, type Clock, type Logger } from '@pegma/spine';
 import {
   ReleaseCatalogAuthenticationUnavailable,
+  CatalogResponseError,
   readCatalogAuthenticationJson,
   releaseRateHints,
   type ReleaseCatalogAuthentication,
@@ -25,6 +26,7 @@ import {
   type ReleaseEventFacts,
 } from './release-projection';
 import type { ComponentRelease } from './component-release';
+import type { ReleaseProjectionFence } from './support-release-followup-releases';
 
 /** One repository per minute during each six-hour reconciliation window. */
 export const RELEASE_RECONCILIATION_CRON = '0-59 */6 * * *';
@@ -50,9 +52,11 @@ interface ReleaseFailureDetail {
     | 'too_large'
     | 'invalid_json'
     | 'invalid_release'
+    | 'invalid_repository'
     | 'unsafe_release_url';
   rateLimitRemaining?: number | null;
   retryAfterSeconds?: number | null;
+  authenticationFailure?: 'invalid_configuration' | 'issuer_unavailable' | 'invalid_grant' | 'authority_unavailable';
   httpStatus?: number;
   bodyBytes?: number;
   bodyBytesSource?: 'declared' | 'streamed';
@@ -215,6 +219,7 @@ async function reconcileOneRepositoryRequest(options: ReconcileOneOptions & {
   readonly signal: AbortSignal;
   readonly credential?: ReleaseCatalogCredential;
   readonly assertCurrent: () => void;
+  readonly fence?: ReleaseProjectionFence;
 }): Promise<{
   readonly outcome:
     'upserted' | 'cleared' | 'not_modified' | 'unchanged' | 'failed';
@@ -237,26 +242,51 @@ async function reconcileOneRepositoryRequest(options: ReconcileOneOptions & {
   async function verifyPublicRepository() {
     if (!credential) return;
     failure.phase = 'repository';
+    failure.failureClass = 'operation_rejected';
+    delete failure.httpStatus;
+    delete failure.bodyBytes;
+    delete failure.bodyBytesSource;
+    delete failure.rateLimitRemaining;
+    delete failure.retryAfterSeconds;
     const metadataUrl = `${GITHUB_API}/repositories/${entry.repositoryId}`;
     assertCurrent();
-    const metadata = await fetchImpl(metadataUrl, {
-      method: 'GET', redirect: 'error', signal,
-      headers: { Accept: headers.Accept!, 'User-Agent': USER_AGENT,
-        'X-GitHub-Api-Version': headers['X-GitHub-Api-Version']!, Authorization: headers.Authorization! },
-    });
-    assertCurrent();
-    if (metadata.status !== 200) throw new ReleaseCatalogAuthenticationUnavailable({
-      httpStatus: metadata.status, ...releaseRateHints(metadata),
-    });
-    if (metadata.redirected || (metadata.url !== '' && metadata.url !== metadataUrl))
+    let metadata: Response;
+    try {
+      metadata = await fetchImpl(metadataUrl, {
+        method: 'GET', redirect: 'error', signal,
+        headers: { Accept: headers.Accept!, 'User-Agent': USER_AGENT,
+          'X-GitHub-Api-Version': headers['X-GitHub-Api-Version']!, Authorization: headers.Authorization! },
+      });
+    } catch {
+      failure.failureClass = 'fetch_rejected';
       throw new ReleaseCatalogAuthenticationUnavailable();
-    const value = asRecord(await readCatalogAuthenticationJson(metadata, signal));
+    }
+    assertCurrent();
+    failure.httpStatus = metadata.status;
+    if (metadata.status !== 200) {
+      failure.failureClass = 'http_status';
+      if (metadata.status === 403 || metadata.status === 429) Object.assign(failure, releaseRateHints(metadata));
+      throw new ReleaseCatalogAuthenticationUnavailable();
+    }
+    if (metadata.redirected || (metadata.url !== '' && metadata.url !== metadataUrl)) {
+      failure.failureClass = 'invalid_repository';
+      throw new ReleaseCatalogAuthenticationUnavailable();
+    }
+    let payload: unknown;
+    try { payload = await readCatalogAuthenticationJson(metadata, signal); }
+    catch (error) {
+      if (error instanceof CatalogResponseError) failure.failureClass = error.reason;
+      throw new ReleaseCatalogAuthenticationUnavailable();
+    }
+    const value = asRecord(payload);
     assertCurrent();
     const owner = asRecord(value?.owner);
     if (value === null || asId(value.id) !== entry.repositoryId || value.private !== false ||
         value.visibility !== 'public' || owner?.type !== 'Organization' ||
-        owner.login !== 'pegma-dev' || asId(owner.id) !== credential.organizationId)
+        asId(owner.id) !== credential.organizationId) {
+      failure.failureClass = 'invalid_repository';
       throw new ReleaseCatalogAuthenticationUnavailable();
+    }
   }
 
   let response: Response;
@@ -283,7 +313,7 @@ async function reconcileOneRepositoryRequest(options: ReconcileOneOptions & {
     await verifyPublicRepository();
     assertCurrent();
     failure.phase = 'projection';
-    await touchCurrentReleaseObservedAt(store, entry.repositoryId, observedAt);
+    await touchCurrentReleaseObservedAt(store, entry.repositoryId, observedAt, options.fence);
     return { outcome: 'not_modified', etag: options.etag };
   }
 
@@ -293,7 +323,7 @@ async function reconcileOneRepositoryRequest(options: ReconcileOneOptions & {
     await verifyPublicRepository();
     assertCurrent();
     failure.phase = 'projection';
-    const cleared = await clearCurrentRelease(store, entry.repositoryId);
+    const cleared = await clearCurrentRelease(store, entry.repositoryId, options.fence);
     return {
       outcome: cleared ? 'cleared' : 'unchanged',
       etag: undefined,
@@ -350,7 +380,7 @@ async function reconcileOneRepositoryRequest(options: ReconcileOneOptions & {
   // Authoritative path: GitHub's current stable wins even when older than a
   // local row left behind by a missed delete/unpublish webhook.
   failure.phase = 'projection';
-  const wrote = await applyAuthoritativeCurrentRelease(store, release);
+  const wrote = await applyAuthoritativeCurrentRelease(store, release, options.fence);
   return {
     outcome: wrote === 'written' ? 'upserted' : 'unchanged',
     etag: nextEtag,
@@ -365,12 +395,14 @@ async function reconcileOneRepository(options: ReconcileOneOptions) {
   const started = new Date(options.clock.now()).getTime();
   const deadline = started + REQUEST_TIMEOUT_MS;
   let credential: ReleaseCatalogCredential | null = null;
-  let timedOut = false;
+  let submitting = false;
   const unavailable = () => ({ outcome: 'failed' as const, etag: options.etag });
   const aborted = new Promise<never>((_resolve, reject) => {
-    controller.signal.addEventListener('abort', () => reject(new ReleaseCatalogAuthenticationUnavailable()), { once: true });
+    controller.signal.addEventListener('abort', () => {
+      if (!submitting) reject(new ReleaseCatalogAuthenticationUnavailable());
+    }, { once: true });
   });
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const assertCurrent = () => {
     const now = new Date(options.clock.now()).getTime();
     if (!credential || controller.signal.aborted || !Number.isFinite(started) || !Number.isFinite(deadline) || !Number.isFinite(now) || now < started ||
@@ -387,14 +419,16 @@ async function reconcileOneRepository(options: ReconcileOneOptions) {
       throw new ReleaseCatalogAuthenticationUnavailable();
     assertCurrent();
     options.failure.phase = 'fetch';
-    return reconcileOneRepositoryRequest({ ...options, credential, signal: controller.signal, assertCurrent });
+    return reconcileOneRepositoryRequest({ ...options, credential, signal: controller.signal, assertCurrent,
+      fence: { current: assertCurrent, submitted: () => { assertCurrent(); submitting = true; }, settled: () => { submitting = false; } },
+    });
   }
   try {
     return await Promise.race([run(), aborted]);
   } catch (error) {
     // No raw issuer/provider error, credential or response body is logged.
-    options.failure.failureClass = 'operation_rejected';
-    if (timedOut) options.failure.phase = 'authentication';
+    if (options.failure.phase === 'authentication') options.failure.authenticationFailure =
+      error instanceof ReleaseCatalogAuthenticationUnavailable ? error.reason : 'issuer_unavailable';
     if (error instanceof ReleaseCatalogAuthenticationUnavailable && error.response)
       Object.assign(options.failure, error.response);
     return unavailable();

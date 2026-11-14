@@ -364,6 +364,13 @@ organization ID and exact 13-ID repository allowlist must be configured. No
 App, installation, key or enabled mode is supplied by the default deployment.
 The dedicated App installation must select only those 13 public repositories
 and grant metadata-read only.
+Both IDs are positive decimal **JSON strings**, not numbers. `version` is a
+1–100 character string of letters, digits, dot, underscore or hyphen;
+`validUntil` is a future UTC ISO timestamp ending in `Z` (optional millisecond
+precision). The allowlist var is shared with webhook ingestion and public
+release display. This App mode deliberately requires the complete 13-ID
+deployment contract; narrowing it makes App mode unavailable. Do not widen an
+ingestion allowlist merely to repair a configured authentication refusal.
 The issuer signs a fresh RS256 App JWT and requests a selected installation
 token for one scheduled immutable repository ID with **metadata-read only**.
 It refuses any contents, issues or write permission in the returned grant.
@@ -379,16 +386,30 @@ After each authenticated 200, 304 or 404, a fresh metadata read must confirm
 the exact repository is public and belongs to the configured Pegma organization
 before projection or progress advances. Inaccessible, private, transferred,
 expired or changed authority holds the prior state. Authenticated requests
-reject redirects. Minting, release access and metadata verification share one
-ten-second deadline, with at most three GitHub requests and no retry/cache.
+reject redirects. Minting, release access, metadata verification and projection
+preparation share one ten-second admission deadline, with at most three GitHub
+requests and no retry/cache. Authority is checked after awaited preparation
+and synchronously at atomic transaction submission. Public Store transactions
+cannot be canceled once submitted: the caller awaits their actual outcome,
+including a late acknowledgement, rather than reporting a false timeout while
+an abandoned write continues. A refusal or timeout before submission cannot
+later resume into a write. Issuer and reconciliation must share one clock and
+transport; the production root wires both explicitly.
 Local tests do not prove deployed signing CPU cost or grant live access.
 
-HTTP 403/429 summaries retain only bounded numeric `rateLimitRemaining` and
-`retryAfterSeconds` hints, or null. Zero remaining or Retry-After is a throttle
+HTTP 403/429 summaries retain only bounded numeric `rateLimitRemaining` (up to
+2,147,483,647) and `retryAfterSeconds` (decimal seconds up to 86,400), or null.
+HTTP-date, malformed and out-of-bound Retry-After values are deliberately
+discarded. Zero remaining or a retained numeric Retry-After is a throttle
 signal; absent hints or nonzero remaining do not establish permission failure
 or exclude secondary limiting. No error response body, raw headers, key, JWT
 or token is logged. The [issuer and reconciliation tests](src/release-catalog-auth.test.ts)
 exercise the optional contract with fictional responses.
+Authentication failures use only the closed reason codes
+`invalid_configuration`, `issuer_unavailable`, `invalid_grant` and
+`authority_unavailable`. Metadata failures retain their own response status and
+classification; they never combine a release body's byte count with a
+different response.
 
 Each successful scheduled shard records its scheduled timestamp durably in the
 existing operations collection. Global reconciliation health advances only

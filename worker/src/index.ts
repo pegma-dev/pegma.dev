@@ -1254,12 +1254,16 @@ return {
               logger.log('error', 'release_reconciliation.not_configured', {});
               return;
             }
+            const releaseClock = systemClock;
+            const releaseFetch = fetch;
             await runReleaseReconciliation({
               store: createProductionStore(env),
               logger,
               config: releasesConfig,
               scheduledTime: controller.scheduledTime,
-              authentication: releaseCatalogAuthenticationFor(() => env),
+              authentication: releaseCatalogAuthenticationFor(() => env, { clock: releaseClock, fetch: releaseFetch }),
+              clock: releaseClock,
+              fetchImpl: releaseFetch,
               followupTracking: () => followupTrackingFor(env),
             });
           } catch (error) {

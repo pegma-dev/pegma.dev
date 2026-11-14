@@ -101,7 +101,8 @@ describe('dedicated catalog App issuer', () => {
       if (fault === 'extra-allowlist') f.env.GITHUB_ALLOWED_REPOSITORY_IDS += ',999';
       if (fault === 'unknown-config-field') f.env.GITHUB_RELEASE_APP_CONFIGURATION = JSON.stringify({
         ...JSON.parse(f.env.GITHUB_RELEASE_APP_CONFIGURATION!), token: 'not-a-supported-config-field' });
-      expect(await f.resolve()).toBeNull(); expect(f.transport).not.toHaveBeenCalled();
+      await expect(f.resolve()).rejects.toMatchObject({ reason: 'invalid_configuration' });
+      expect(f.transport).not.toHaveBeenCalled();
     },
   );
 
@@ -117,7 +118,7 @@ describe('dedicated catalog App issuer', () => {
       if (fault === 'expired-token') grant.expires_at = new Date(START).toISOString();
       f.transport.mockResolvedValueOnce(Response.json(grant, { status: 201 }));
       if (fault === 'expired-token') await expect(f.resolve()).rejects.toThrow('Catalog authentication unavailable');
-      else expect(await f.resolve()).toBeNull();
+      else await expect(f.resolve()).rejects.toMatchObject({ reason: 'invalid_grant' });
       expect(f.transport).toHaveBeenCalledTimes(1);
     },
   );
@@ -125,6 +126,9 @@ describe('dedicated catalog App issuer', () => {
   it('refuses cancellation and an unapproved purpose/repository without a network call', async () => {
     const f = fixture(); const controller = new AbortController(); controller.abort();
     expect(await f.resolve(controller.signal)).toBeNull();
+    // Deliberately invalid runtime input: exercise the guard beyond TS callers.
+    expect(await f.auth().resolve({ purpose: 'support_bug_assessment' as 'public_release_catalog_read', repositoryId: ID,
+      deadline: START + 10_000 }, new AbortController().signal)).toBeNull();
     expect(await f.auth().resolve({ purpose: 'public_release_catalog_read', repositoryId: '999', deadline: START + 10_000 }, new AbortController().signal)).toBeNull();
     expect(f.transport).not.toHaveBeenCalled();
   });
@@ -163,8 +167,35 @@ describe('authenticated catalog observation', () => {
     expect((await readReleaseOpsState(f.store)).lastSuccessfulReconciliationAt).toBeNull();
     expect(f.transport).toHaveBeenCalledTimes(3);
     expect(f.log).toHaveBeenCalledWith('error', 'release_reconciliation.partial_failure', expect.objectContaining({
-      failureDetails: [expect.objectContaining({ phase: 'repository', failureClass: 'operation_rejected' })],
+      failureDetails: [expect.objectContaining({ phase: 'repository', failureClass: 'invalid_repository' })],
     }));
+  });
+
+  it('uses immutable organization identity when its display login changes', async () => {
+    const f = fixture(); f.metadata.owner.login = 'renamed-display-login';
+    expect((await f.run()).upserted).toBe(1);
+    expect((await f.row())!.releaseId).toBe('123');
+  });
+
+  it.each([
+    ['fetch', 'fetch_rejected', undefined], ['status', 'http_status', 403],
+    ['JSON', 'invalid_json', 200], ['size', 'too_large', 200],
+  ] as const)('keeps metadata %s failures separate from the earlier release body', async (fault, failureClass, httpStatus) => {
+    const f = fixture(); const normal = f.transport.getMockImplementation()!;
+    f.transport.mockImplementation(async (url, init) => {
+      if (!String(url).endsWith('/repositories/' + ID)) return normal(url, init);
+      if (fault === 'fetch') throw new Error('PRIVATE_METADATA_ERROR');
+      if (fault === 'status') return new Response('PRIVATE_METADATA_ERROR', { status: 403 });
+      if (fault === 'JSON') return new Response('PRIVATE_METADATA_ERROR');
+      return new Response('PRIVATE_METADATA_ERROR', { headers: { 'Content-Length': '65537' } });
+    });
+    expect((await f.run()).failed).toBe(1);
+    const fields = f.log.mock.calls[0]![2];
+    expect(fields.failureDetails[0]).toMatchObject({ phase: 'repository', failureClass });
+    expect(fields.failureDetails[0].httpStatus).toBe(httpStatus);
+    expect(fields.failureDetails[0]).not.toHaveProperty('bodyBytes');
+    expect(fields.failureDetails[0]).not.toHaveProperty('bodyBytesSource');
+    expect(JSON.stringify(fields)).not.toContain('PRIVATE_METADATA_ERROR');
   });
 
   it.each([304, 404])('does not treat HTTP %i as success when public repository access cannot be verified', async status => {

@@ -46,9 +46,13 @@ export class ReleaseCatalogAuthenticationUnavailable extends Error {
     readonly httpStatus: number;
     readonly rateLimitRemaining: number | null;
     readonly retryAfterSeconds: number | null;
-  }) {
+  }, readonly reason: 'invalid_configuration' | 'issuer_unavailable' | 'invalid_grant' | 'authority_unavailable' = 'authority_unavailable') {
     super('Catalog authentication unavailable');
   }
+}
+
+export class CatalogResponseError extends Error {
+  constructor(readonly reason: 'too_large' | 'invalid_json') { super('Catalog response unavailable'); }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -72,27 +76,29 @@ export async function readCatalogAuthenticationJson(response: Response, signal: 
   const limit = 65_536;
   const declared = response.headers.get('content-length');
   if (declared !== null && /^\d+$/u.test(declared) && Number(declared) > limit)
-    throw new ReleaseCatalogAuthenticationUnavailable();
+    throw new CatalogResponseError('too_large');
   const reader = response.body?.getReader();
-  if (!reader) throw new ReleaseCatalogAuthenticationUnavailable();
+  if (!reader) throw new CatalogResponseError('invalid_json');
   const chunks: Uint8Array[] = [];
   let total = 0, reads = 0;
   const cancel = () => { void reader.cancel().catch(() => {}); };
   signal.addEventListener('abort', cancel, { once: true });
   try {
     for (;;) {
-      if (signal.aborted || ++reads > limit + 64) throw new ReleaseCatalogAuthenticationUnavailable();
+      if (signal.aborted) throw new ReleaseCatalogAuthenticationUnavailable();
+      if (++reads > limit + 64) throw new CatalogResponseError('too_large');
       const next = await reader.read();
       if (signal.aborted) throw new ReleaseCatalogAuthenticationUnavailable();
       if (next.done) break;
       total += next.value.byteLength;
-      if (total > limit) throw new ReleaseCatalogAuthenticationUnavailable();
+      if (total > limit) throw new CatalogResponseError('too_large');
       chunks.push(next.value);
     }
     const bytes = new Uint8Array(total);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-    return JSON.parse(new TextDecoder().decode(bytes));
+    try { return JSON.parse(new TextDecoder().decode(bytes)); }
+    catch { throw new CatalogResponseError('invalid_json'); }
   } finally {
     signal.removeEventListener('abort', cancel);
     cancel();
@@ -115,27 +121,32 @@ export function releaseCatalogAuthenticationFor(
   return {
     async resolve(input, signal) {
       const env = environment();
-      if (env.GITHUB_RELEASE_AUTH_MODE !== 'github_app' || signal.aborted ||
-          input.purpose !== 'public_release_catalog_read' ||
+      if (signal.aborted || input.purpose !== 'public_release_catalog_read' ||
           !RELEASE_CATALOG.some(entry => entry.repositoryId === input.repositoryId)) return null;
+      if (env.GITHUB_RELEASE_AUTH_MODE !== 'github_app')
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration');
       const raw = env.GITHUB_RELEASE_APP_CONFIGURATION;
       const pem = env.GITHUB_RELEASE_APP_PRIVATE_KEY_PKCS8;
       const allowed = env.GITHUB_ALLOWED_REPOSITORY_IDS;
       const organizationId = env.GITHUB_ORGANIZATION_ID;
       if (typeof raw !== 'string' || raw.length > 2_048 || typeof pem !== 'string' ||
-          pem.length > 16_384 || typeof allowed !== 'string' || !numericId(organizationId)) return null;
+          pem.length > 16_384 || typeof allowed !== 'string' || !numericId(organizationId))
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration');
       let config: unknown;
-      try { config = JSON.parse(raw); } catch { return null; }
+      try { config = JSON.parse(raw); }
+      catch { throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration'); }
       const ids = allowed.split(',').map(value => value.trim());
       if (!record(config) || Object.keys(config).sort().join(',') !== 'appId,installationId,validUntil,version' ||
           !numericId(config.appId) || !numericId(config.installationId) ||
           typeof config.version !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/u.test(config.version) ||
           ids.length !== RELEASE_CATALOG.length || new Set(ids).size !== ids.length ||
-          !RELEASE_CATALOG.every(entry => ids.includes(entry.repositoryId))) return null;
+          !RELEASE_CATALOG.every(entry => ids.includes(entry.repositoryId)))
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration');
       const validUntil = timestamp(config.validUntil);
       const started = new Date(clock.now()).getTime();
       if (!Number.isFinite(started) || !Number.isFinite(validUntil) ||
-          !Number.isFinite(input.deadline) || validUntil <= started || input.deadline <= started) return null;
+          !Number.isFinite(input.deadline) || validUntil <= started || input.deadline <= started)
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration');
       let expiresAt = Math.min(validUntil, input.deadline);
       function current() {
         const now = new Date(clock.now()).getTime(), latest = environment();
@@ -148,13 +159,17 @@ export function releaseCatalogAuthenticationFor(
       }
       function assertCurrent() { if (!current()) throw new ReleaseCatalogAuthenticationUnavailable(); }
       const match = /^-----BEGIN PRIVATE KEY-----\s+([A-Za-z0-9+/=\s]+)\s+-----END PRIVATE KEY-----\s*$/u.exec(pem);
-      if (!match) return null;
-      const key = await crypto.subtle.importKey('pkcs8',
-        Uint8Array.from(atob(match[1]!.replace(/\s/gu, '')), char => char.charCodeAt(0)),
-        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+      if (!match) throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration');
+      let key: CryptoKey;
+      try {
+        key = await crypto.subtle.importKey('pkcs8',
+          Uint8Array.from(atob(match[1]!.replace(/\s/gu, '')), char => char.charCodeAt(0)),
+          { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+      } catch { throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration'); }
       assertCurrent();
       if (!('modulusLength' in key.algorithm) || typeof key.algorithm.modulusLength !== 'number' ||
-          key.algorithm.modulusLength < 2_048 || key.algorithm.modulusLength > 4_096) return null;
+          key.algorithm.modulusLength < 2_048 || key.algorithm.modulusLength > 4_096)
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_configuration');
       const seconds = Math.floor(new Date(clock.now()).getTime() / 1_000);
       const jwtExpiry = (seconds + 540) * 1_000;
       expiresAt = Math.min(expiresAt, jwtExpiry);
@@ -175,18 +190,24 @@ export function releaseCatalogAuthenticationFor(
       assertCurrent();
       if (response.status !== 201) throw new ReleaseCatalogAuthenticationUnavailable({
         httpStatus: response.status, ...releaseRateHints(response),
-      });
+      }, 'issuer_unavailable');
       if (response.redirected || (response.url !== '' && response.url !== url))
         throw new ReleaseCatalogAuthenticationUnavailable();
-      const grant = await readCatalogAuthenticationJson(response, signal);
+      let grant: unknown;
+      try { grant = await readCatalogAuthenticationJson(response, signal); }
+      catch (error) {
+        if (error instanceof ReleaseCatalogAuthenticationUnavailable) throw error;
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_grant');
+      }
       assertCurrent();
       if (!record(grant) || typeof grant.token !== 'string' || !/^[\x21-\x7E]{1,2048}$/u.test(grant.token) ||
           grant.repository_selection !== 'selected' || !record(grant.permissions) ||
           grant.permissions.metadata !== 'read' || Object.keys(grant.permissions).length !== 1 ||
-          !Array.isArray(grant.repositories) || grant.repositories.length !== 1) return null;
+          !Array.isArray(grant.repositories) || grant.repositories.length !== 1)
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_grant');
       const repository: unknown = grant.repositories[0];
       if (!record(repository) || String(repository.id) !== input.repositoryId || repository.private !== false)
-        return null;
+        throw new ReleaseCatalogAuthenticationUnavailable(undefined, 'invalid_grant');
       expiresAt = Math.min(expiresAt, timestamp(grant.expires_at));
       assertCurrent();
       return { repositoryId: input.repositoryId, organizationId, token: grant.token, expiresAt, current };

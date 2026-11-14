@@ -14,6 +14,14 @@ export {
   type FollowupReleaseObservation,
 } from './component-release';
 
+/** Optional host authority fence. Once submitted, Store transactions cannot be
+ * canceled; the caller must await their actual outcome rather than abandon them. */
+export interface ReleaseProjectionFence {
+  current(): void;
+  submitted(): void;
+  settled(): void;
+}
+
 /** Refresh timestamps are not release changes. Deletion/republication advances
  * the durable epoch even if the release later has identical display facts. */
 export function supportFollowupReleaseFingerprint(value: ComponentRelease) {
@@ -36,6 +44,7 @@ export async function updateSupportFollowupRelease(
   decide: (
     current: ComponentRelease | null,
   ) => ComponentRelease | null | undefined,
+  fence?: ReleaseProjectionFence,
 ): Promise<{
   release: ComponentRelease | null;
   changed: boolean;
@@ -45,7 +54,9 @@ export async function updateSupportFollowupRelease(
   const key = componentReleaseKey(repositoryId);
   const epochKey = supportFollowupReleaseObservationKey(repositoryId);
   for (let attempt = 0; attempt < 3; attempt++) {
+    fence?.current();
     const prior = await records.getVersioned(epochKey);
+    fence?.current();
     if (
       prior !== null &&
       (prior.value.kind !== 'observation' ||
@@ -53,6 +64,7 @@ export async function updateSupportFollowupRelease(
     )
       throw new TypeError('Invalid release observation identity');
     const stored = await records.getVersioned(key);
+    fence?.current();
     if (
       stored !== null &&
       (stored.value.kind !== 'release' ||
@@ -72,6 +84,7 @@ export async function updateSupportFollowupRelease(
     const fingerprint = basis
       ? await supportFollowupReleaseFingerprint(basis)
       : previous!.fingerprint;
+    fence?.current();
     const state = release ? ('active' as const) : ('withdrawn' as const);
     const same =
       previous?.state === state && previous.fingerprint === fingerprint;
@@ -104,8 +117,17 @@ export async function updateSupportFollowupRelease(
         actions.push({ action: 'put', value: { kind: 'release', release } });
       else if (stored !== null) actions.push({ action: 'delete', key });
     }
-    if ((await records.transact(key.partition, actions)).committed)
+    fence?.current();
+    fence?.submitted();
+    let committed: boolean;
+    try {
+      committed = (await records.transact(key.partition, actions)).committed;
+    } finally {
+      fence?.settled();
+    }
+    if (committed)
       return { release, changed, observation };
+    fence?.current();
   }
   throw new TypeError('Release observation changed');
 }
