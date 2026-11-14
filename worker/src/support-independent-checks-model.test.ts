@@ -213,6 +213,7 @@ async function fixture(
 }
 describe('purpose-qualified independent checker transport', () => {
   it('sends complete untrusted content through the actual transport with qualified provider policy and tokenizer', async () => {
+    expect(INDEPENDENT_CHECK_WIRE).toBe('openrouter-support-independent-check-v2');
     const f = await fixture();
     expect(await f.model.resolve()).not.toBeNull();
     const result = await f.model.generate(f.input, f.context, f.c);
@@ -220,6 +221,15 @@ describe('purpose-qualified independent checker transport', () => {
     expect(result.usage.costMicros).toBe(100);
     expect(f.state.calls).toBe(1);
     const body = JSON.parse(String(f.state.requests[0]!.init.body));
+    expect(Object.keys(body).sort()).toEqual([
+      'max_tokens',
+      'messages',
+      'model',
+      'provider',
+      'response_format',
+      'stream',
+    ]);
+    expect(body.stream).toBe(false);
     expect(body.messages[1].content).toContain(
       '<!-- hidden unverified claim -->',
     );
@@ -228,11 +238,12 @@ describe('purpose-qualified independent checker transport', () => {
     );
     expect(body.messages[0].content).toContain(f.c.trustedInstructions);
     expect(JSON.parse(body.messages[1].content)).toEqual(f.input);
-    expect(body.provider).toMatchObject({
+    expect(body.provider).toEqual({
       only: ['fictional/region'],
       allow_fallbacks: false,
       zdr: true,
       data_collection: 'deny',
+      require_parameters: true,
     });
     expect(body.response_format.json_schema.name).toBe(
       'support_independent_check_v1',
