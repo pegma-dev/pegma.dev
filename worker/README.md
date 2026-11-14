@@ -350,6 +350,46 @@ remaining slots return without database or GitHub I/O. The 60-slot capacity is
 checked in code. Fetches use stable numeric repository IDs, conditional ETags,
 and bounded timeouts/bodies. Full-catalog backfill remains available explicitly.
 
+Reconciliation defaults to anonymous public reads. The optional dedicated
+catalog GitHub App mode is selected only by `GITHUB_RELEASE_AUTH_MODE=github_app`;
+omission or `anonymous` preserves the default. An invalid or unavailable
+configured App mode fails closed, without an anonymous retry. It never uses
+the engineering App credentials or enables engineering/AI capabilities.
+
+The separate `GITHUB_RELEASE_APP_CONFIGURATION` JSON has exactly `appId`,
+`installationId`, `version`, and UTC `validUntil` fields. The host supplies its
+dedicated PKCS#8 PEM signing key as the secret
+`GITHUB_RELEASE_APP_PRIVATE_KEY_PKCS8`, never a committed var. The existing
+organization ID and exact 13-ID repository allowlist must be configured. No
+App, installation, key or enabled mode is supplied by the default deployment.
+The dedicated App installation must select only those 13 public repositories
+and grant metadata-read only.
+The issuer signs a fresh RS256 App JWT and requests a selected installation
+token for one scheduled immutable repository ID with **metadata-read only**.
+It refuses any contents, issues or write permission in the returned grant.
+
+Public latest-release access with this metadata-only token is an inference
+from GitHub's public-resource access contract, not a deployed compatibility
+claim. Before activation, verify that exact public read using the separately
+approved App/installation; a refusal must not prompt broader permissions.
+See GitHub's [latest-release access contract](https://docs.github.com/en/rest/releases/releases#get-the-latest-release),
+[installation-token scope](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
+and [App JWT requirements](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
+After each authenticated 200, 304 or 404, a fresh metadata read must confirm
+the exact repository is public and belongs to the configured Pegma organization
+before projection or progress advances. Inaccessible, private, transferred,
+expired or changed authority holds the prior state. Authenticated requests
+reject redirects. Minting, release access and metadata verification share one
+ten-second deadline, with at most three GitHub requests and no retry/cache.
+Local tests do not prove deployed signing CPU cost or grant live access.
+
+HTTP 403/429 summaries retain only bounded numeric `rateLimitRemaining` and
+`retryAfterSeconds` hints, or null. Zero remaining or Retry-After is a throttle
+signal; absent hints or nonzero remaining do not establish permission failure
+or exclude secondary limiting. No error response body, raw headers, key, JWT
+or token is logged. The [issuer and reconciliation tests](src/release-catalog-auth.test.ts)
+exercise the optional contract with fictional responses.
+
 Each successful scheduled shard records its scheduled timestamp durably in the
 existing operations collection. Global reconciliation health advances only
 when every currently allowlisted catalog repository has succeeded in that

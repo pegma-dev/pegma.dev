@@ -1,5 +1,12 @@
 import type { Store } from '@pegma/storage-core';
-import type { Logger } from '@pegma/spine';
+import { systemClock, type Clock, type Logger } from '@pegma/spine';
+import {
+  ReleaseCatalogAuthenticationUnavailable,
+  readCatalogAuthenticationJson,
+  releaseRateHints,
+  type ReleaseCatalogAuthentication,
+  type ReleaseCatalogCredential,
+} from './release-catalog-auth';
 import { componentReleaseStateCollection } from './component-release';
 import {
   allowedReleaseCatalog,
@@ -35,7 +42,7 @@ const MAX_FAILURE_DETAILS = 4;
  * declared oversized length from actual bytes consumed from the stream. */
 interface ReleaseFailureDetail {
   readonly repositoryId: string;
-  phase: 'fetch' | 'status' | 'body' | 'facts' | 'url' | 'projection';
+  phase: 'authentication' | 'repository' | 'fetch' | 'status' | 'body' | 'facts' | 'url' | 'projection';
   failureClass:
     | 'operation_rejected'
     | 'fetch_rejected'
@@ -44,6 +51,8 @@ interface ReleaseFailureDetail {
     | 'invalid_json'
     | 'invalid_release'
     | 'unsafe_release_url';
+  rateLimitRemaining?: number | null;
+  retryAfterSeconds?: number | null;
   httpStatus?: number;
   bodyBytes?: number;
   bodyBytesSource?: 'declared' | 'streamed';
@@ -68,6 +77,8 @@ export interface RunReleaseReconciliationOptions {
   readonly config: ReleaseReconciliationConfig;
   readonly now?: string;
   readonly fetchImpl?: typeof fetch;
+  readonly authentication?: ReleaseCatalogAuthentication;
+  readonly clock?: Clock;
   /** Cron timestamp selects one catalog slot; omit for explicit full backfill. */
   readonly scheduledTime?: number;
 }
@@ -189,19 +200,28 @@ async function readBoundedJson(
   }
 }
 
-async function reconcileOneRepository(options: {
+interface ReconcileOneOptions {
   readonly store: Store;
   readonly entry: ReleaseCatalogEntry;
   readonly etag: string | undefined;
   readonly observedAt: string;
   readonly fetchImpl: typeof fetch;
   readonly failure: ReleaseFailureDetail;
+  readonly authentication?: ReleaseCatalogAuthentication;
+  readonly clock: Clock;
+}
+
+async function reconcileOneRepositoryRequest(options: ReconcileOneOptions & {
+  readonly signal: AbortSignal;
+  readonly credential?: ReleaseCatalogCredential;
+  readonly assertCurrent: () => void;
 }): Promise<{
   readonly outcome:
     'upserted' | 'cleared' | 'not_modified' | 'unchanged' | 'failed';
   readonly etag: string | undefined;
 }> {
   const { store, entry, observedAt, fetchImpl, failure } = options;
+  const { credential, signal, assertCurrent } = options;
   // Fetch by stable numeric repository ID so a rename/recreate cannot attach
   // another repo's release under this catalog slot.
   const url = `${GITHUB_API}/repositories/${entry.repositoryId}/releases/latest`;
@@ -213,22 +233,55 @@ async function reconcileOneRepository(options: {
   if (options.etag !== undefined) {
     headers['If-None-Match'] = options.etag;
   }
+  if (credential) headers.Authorization = 'Bearer ' + credential.token;
+  async function verifyPublicRepository() {
+    if (!credential) return;
+    failure.phase = 'repository';
+    const metadataUrl = `${GITHUB_API}/repositories/${entry.repositoryId}`;
+    assertCurrent();
+    const metadata = await fetchImpl(metadataUrl, {
+      method: 'GET', redirect: 'error', signal,
+      headers: { Accept: headers.Accept!, 'User-Agent': USER_AGENT,
+        'X-GitHub-Api-Version': headers['X-GitHub-Api-Version']!, Authorization: headers.Authorization! },
+    });
+    assertCurrent();
+    if (metadata.status !== 200) throw new ReleaseCatalogAuthenticationUnavailable({
+      httpStatus: metadata.status, ...releaseRateHints(metadata),
+    });
+    if (metadata.redirected || (metadata.url !== '' && metadata.url !== metadataUrl))
+      throw new ReleaseCatalogAuthenticationUnavailable();
+    const value = asRecord(await readCatalogAuthenticationJson(metadata, signal));
+    assertCurrent();
+    const owner = asRecord(value?.owner);
+    if (value === null || asId(value.id) !== entry.repositoryId || value.private !== false ||
+        value.visibility !== 'public' || owner?.type !== 'Organization' ||
+        owner.login !== 'pegma-dev' || asId(owner.id) !== credential.organizationId)
+      throw new ReleaseCatalogAuthenticationUnavailable();
+  }
 
   let response: Response;
   try {
+    assertCurrent();
     response = await fetchImpl(url, {
       method: 'GET',
       headers,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal,
+      ...(credential ? { redirect: 'error' as const } : {}),
     });
-  } catch {
+    assertCurrent();
+  } catch (error) {
+    if (error instanceof ReleaseCatalogAuthenticationUnavailable) throw error;
     failure.failureClass = 'fetch_rejected';
     return { outcome: 'failed', etag: options.etag };
   }
+  if (credential && (response.redirected || (response.url !== '' && response.url !== url)))
+    throw new ReleaseCatalogAuthenticationUnavailable();
 
   failure.phase = 'status';
   failure.httpStatus = response.status;
   if (response.status === 304) {
+    await verifyPublicRepository();
+    assertCurrent();
     failure.phase = 'projection';
     await touchCurrentReleaseObservedAt(store, entry.repositoryId, observedAt);
     return { outcome: 'not_modified', etag: options.etag };
@@ -237,6 +290,8 @@ async function reconcileOneRepository(options: {
   const nextEtag = response.headers.get('etag') ?? undefined;
 
   if (response.status === 404) {
+    await verifyPublicRepository();
+    assertCurrent();
     failure.phase = 'projection';
     const cleared = await clearCurrentRelease(store, entry.repositoryId);
     return {
@@ -246,12 +301,15 @@ async function reconcileOneRepository(options: {
   }
 
   if (response.status < 200 || response.status >= 300) {
+    if (response.status === 403 || response.status === 429)
+      Object.assign(failure, releaseRateHints(response));
     failure.failureClass = 'http_status';
     return { outcome: 'failed', etag: options.etag };
   }
 
   failure.phase = 'body';
   const parsed = await readBoundedJson(response, failure);
+  assertCurrent();
   if (!parsed.ok) {
     failure.failureClass = parsed.reason;
     return { outcome: 'failed', etag: options.etag };
@@ -277,6 +335,8 @@ async function reconcileOneRepository(options: {
     failure.failureClass = 'unsafe_release_url';
     return { outcome: 'failed', etag: options.etag };
   }
+  await verifyPublicRepository();
+  assertCurrent();
 
   const release: ComponentRelease = {
     repositoryId: facts.repositoryId,
@@ -295,6 +355,53 @@ async function reconcileOneRepository(options: {
     outcome: wrote === 'written' ? 'upserted' : 'unchanged',
     etag: nextEtag,
   };
+}
+
+async function reconcileOneRepository(options: ReconcileOneOptions) {
+  if (!options.authentication) return reconcileOneRepositoryRequest({
+    ...options, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), assertCurrent: () => {},
+  });
+  const controller = new AbortController();
+  const started = new Date(options.clock.now()).getTime();
+  const deadline = started + REQUEST_TIMEOUT_MS;
+  let credential: ReleaseCatalogCredential | null = null;
+  let timedOut = false;
+  const unavailable = () => ({ outcome: 'failed' as const, etag: options.etag });
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new ReleaseCatalogAuthenticationUnavailable()), { once: true });
+  });
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
+  const assertCurrent = () => {
+    const now = new Date(options.clock.now()).getTime();
+    if (!credential || controller.signal.aborted || !Number.isFinite(started) || !Number.isFinite(deadline) || !Number.isFinite(now) || now < started ||
+        now >= deadline || now >= credential.expiresAt || !credential.current())
+      throw new ReleaseCatalogAuthenticationUnavailable();
+  };
+  async function run() {
+    options.failure.phase = 'authentication';
+    credential = await options.authentication!.resolve({
+      purpose: 'public_release_catalog_read', repositoryId: options.entry.repositoryId, deadline,
+    }, controller.signal);
+    if (!credential || credential.repositoryId !== options.entry.repositoryId ||
+        !/^[\x21-\x7E]{1,2048}$/u.test(credential.token) || !Number.isFinite(credential.expiresAt))
+      throw new ReleaseCatalogAuthenticationUnavailable();
+    assertCurrent();
+    options.failure.phase = 'fetch';
+    return reconcileOneRepositoryRequest({ ...options, credential, signal: controller.signal, assertCurrent });
+  }
+  try {
+    return await Promise.race([run(), aborted]);
+  } catch (error) {
+    // No raw issuer/provider error, credential or response body is logged.
+    options.failure.failureClass = 'operation_rejected';
+    if (timedOut) options.failure.phase = 'authentication';
+    if (error instanceof ReleaseCatalogAuthenticationUnavailable && error.response)
+      Object.assign(options.failure, error.response);
+    return unavailable();
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }
 
 /**
@@ -359,6 +466,8 @@ export async function runReleaseReconciliation(
         observedAt,
         fetchImpl,
         failure,
+        authentication: options.authentication,
+        clock: options.clock ?? systemClock,
       });
     } catch {
       // Version conflicts and unexpected store errors stay per-repository so
