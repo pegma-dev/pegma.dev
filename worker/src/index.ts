@@ -45,6 +45,7 @@ import {
   type GitHubReleaseWebhookEnv,
 } from './github-release-webhook';
 import { loadReleaseHealthDetail } from './release-health';
+import { releaseCatalogAuthenticationFor, type ReleaseCatalogAuthenticationEnv } from './release-catalog-auth';
 import {
   RELEASE_RECONCILIATION_CRON,
   runReleaseReconciliation,
@@ -92,6 +93,7 @@ type AppEnv = Omit<Env, 'PEGMA_SUPPORT_RELEASE_FOLLOWUP_ENABLED' | 'PEGMA_SUPPOR
   LoggerEnv &
   IdentityRuntimeEnv &
   GitHubReleaseWebhookEnv &
+  ReleaseCatalogAuthenticationEnv &
   SupportRuntimeEnv &
   CatalogFetchEnv & SupportAssistantProductionEnvironment & SupportLearningSourceEnvironment & SupportPaidEnvironment & SupportReleaseFollowupEnvironment & {
     readonly PEGMA_SUPPORT_LEARNING_REVIEWS_ENABLED?: string;
@@ -1252,11 +1254,16 @@ return {
               logger.log('error', 'release_reconciliation.not_configured', {});
               return;
             }
+            const releaseClock = systemClock;
+            const releaseFetch = fetch;
             await runReleaseReconciliation({
               store: createProductionStore(env),
               logger,
               config: releasesConfig,
               scheduledTime: controller.scheduledTime,
+              authentication: releaseCatalogAuthenticationFor(() => env, { clock: releaseClock, fetch: releaseFetch }),
+              clock: releaseClock,
+              fetchImpl: releaseFetch,
               followupTracking: () => followupTrackingFor(env),
             });
           } catch (error) {

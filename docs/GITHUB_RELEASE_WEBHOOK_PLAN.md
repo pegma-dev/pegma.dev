@@ -347,10 +347,14 @@ independent. Reconciliation should:
 6. persist a cursor or last-success marker;
 7. log counts and classifications without response bodies.
 
-Public unauthenticated GitHub API access is sufficient at the current
-repository count. If its limit becomes operationally inadequate, use a
-least-privileged GitHub App installation token; do not introduce a broad
-personal token.
+Public unauthenticated GitHub API access is the default. It can fail under
+upstream limits or other access conditions; HTTP 403 alone does not identify
+the cause. The optional [catalog-only GitHub App mode](../worker/README.md#github-release-ingestion-operators)
+uses one selected repository per metadata-only token, fresh public repository
+and organization checks, current expiry fences and no retry. It cannot reuse
+engineering write credentials. Its public-release compatibility and deployed
+CPU cost require qualification before separate host activation. Do not
+introduce a broad personal token or widen contents permissions after a refusal.
 
 ## Operational visibility
 

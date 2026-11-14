@@ -1,6 +1,6 @@
 import type { Store } from '@pegma/storage-core';
 import type { ComponentRelease } from './component-release';
-import { updateSupportFollowupRelease } from './support-release-followup-releases';
+import { updateSupportFollowupRelease, type ReleaseProjectionFence } from './support-release-followup-releases';
 
 const GITHUB_ORG_PREFIX = 'https://github.com/pegma-dev/';
 const SAFE_REPO_NAME = /^[A-Za-z0-9_.-]+$/;
@@ -148,6 +148,7 @@ export async function applyReleaseProjection(
 export async function applyAuthoritativeCurrentRelease(
   store: Store,
   release: ComponentRelease,
+  fence?: ReleaseProjectionFence,
 ): Promise<'written' | 'unchanged'> {
   const result = await updateSupportFollowupRelease(
     store,
@@ -161,6 +162,7 @@ export async function applyAuthoritativeCurrentRelease(
       )
         ? undefined
         : release,
+    fence,
   );
   return result.changed ? 'written' : 'unchanged';
 }
@@ -170,12 +172,13 @@ export async function touchCurrentReleaseObservedAt(
   store: Store,
   repositoryId: string,
   observedAt: string,
+  fence?: ReleaseProjectionFence,
 ): Promise<boolean> {
   return (
     await updateSupportFollowupRelease(store, repositoryId, (current) =>
       current === null || current.observedAt === observedAt
         ? undefined
-        : { ...current, observedAt },
+        : { ...current, observedAt }, fence,
     )
   ).changed;
 }
@@ -185,10 +188,11 @@ export async function touchCurrentReleaseObservedAt(
 export async function clearCurrentRelease(
   store: Store,
   repositoryId: string,
+  fence?: ReleaseProjectionFence,
 ): Promise<boolean> {
   return (
     await updateSupportFollowupRelease(store, repositoryId, (current) =>
-      current === null ? undefined : null,
+      current === null ? undefined : null, fence,
     )
   ).changed;
 }

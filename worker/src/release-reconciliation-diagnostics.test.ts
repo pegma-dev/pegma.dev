@@ -128,7 +128,8 @@ describe('bounded release reconciliation diagnostics', () => {
       const expected = {
         level: 'error', message: 'release_reconciliation.partial_failure', fields: {
           examined: 1, upserted: 0, cleared: 0, notModified: 0, failed: 1,
-          failureDetails: [{ repositoryId: ID, phase: 'status', failureClass: 'http_status', httpStatus: 403 }],
+          failureDetails: [{ repositoryId: ID, phase: 'status', failureClass: 'http_status', httpStatus: 403,
+            rateLimitRemaining: null, retryAfterSeconds: null }],
           failureDetailsOmitted: 0,
         },
       };
