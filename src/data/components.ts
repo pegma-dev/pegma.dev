@@ -199,7 +199,7 @@ export const components: readonly PegmaComponent[] = [
       'Being a hosted SaaS — hosts run it, own its data, and choose its providers',
       'AI processing before the host documents what may leave its boundary',
     ],
-    now: 'The 0.2.12 package set is published on npm and composed by the Cloudflare reference host; optional AI routes remain host-controlled.',
+    now: 'Exact published package versions are compiled from npm; optional AI routes remain host-controlled.',
     plan: 'docs/PROJECT_PLAN.md',
   },
   {

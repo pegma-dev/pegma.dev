@@ -79,7 +79,7 @@ export class BrowserNode extends EventTarget {
   }
 }
 
-function documentFromTemplate(template: string) {
+export function documentFromTemplate(template: string) {
   const root = new BrowserNode('document');
   const stack = [root];
   const voidTags = new Set(['input', 'img', 'link', 'meta', 'br', 'hr']);

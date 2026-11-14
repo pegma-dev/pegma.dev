@@ -289,6 +289,15 @@ the UI reads the actual `GrantView` and displays its returned grant ID/status
 and revocation controls; a failed management lookup does not undo accepted
 consent. Logout revokes the browser session, not every agent family.
 
+After an approved PKCE request, the browser replaces the consent-page history
+entry with `/account/agents/authorize?grant_id=<grant-id>` before following the
+registered callback unchanged. Use Back to return to current owner-only grant
+controls and bookmark their link. This URL contains only the public locator,
+not an authorization code, state, or credential; it does not grant access.
+The pinned Agent Access `0.1.1` uses the same locator for the request and grant.
+Returning through this link reads the current `GrantView` directly, even after
+the original approval request expires. It does not list other grants.
+
 `/staff/knowledge` exposes capability-gated collection reads, management,
 draft/report review, exact publication, article retirement and exact evidence
 revocation. `/knowledge` uses only the three signed-in portal operations and

@@ -1313,6 +1313,8 @@ describe('real production KB request budgets over actual D1', () => {
     },
   );
 
+  // This real-backend walkthrough spans many separate invocations, including
+  // history setup. Its aggregate wall-time allowance is not a Workers CPU budget.
   it('profiles both protocols and the full staff/portal lifecycle over one genuine32-proof high-history D1 article', async () => {
     const f = await fixture(true);
     let sequence = 0;
@@ -1809,5 +1811,5 @@ describe('real production KB request budgets over actual D1', () => {
     } finally {
       f.meter.assertFreeBudget();
     }
-  }, 180_000);
+  }, 300_000);
 });
