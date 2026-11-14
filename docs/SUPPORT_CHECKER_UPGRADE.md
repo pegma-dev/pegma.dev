@@ -21,10 +21,15 @@ adoption does not enable provider-group selection or add a price policy. Any
 future opt-in requires separate current route, pricing, privacy and tokenizer
 qualification. Customer AI remains off.
 
+Legacy endpoint routing sends `provider.only=[endpointTag]`,
+`allow_fallbacks:false`, `zdr:true`, `data_collection:'deny'` and
+`require_parameters:true`. The transport regression pins this complete block
+of existing routing constraints.
+
 Before enabling a selected checker profile, qualify the actual installed wire
-and exact endpoint/model, tokenizer implementation, complete system and user
-contents, framing allowance and structured schema. Both message contents count
-against byte/input-token admission; input plus reserved output must also fit the
+and exact endpoint/model and provider routing block, tokenizer implementation,
+complete system and user contents, framing allowance and structured schema.
+Both message contents count against byte/input-token admission; input plus reserved output must also fit the
 context ceiling. Do not keep a v1 approval or tokenizer evidence, lower counts,
 raise budgets, infer approval from a new digest, or relabel old provider results.
 The SDK must refuse stale route/tokenizer evidence before credential access.
