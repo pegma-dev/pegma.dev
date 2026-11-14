@@ -179,11 +179,11 @@ describe('bounded release reconciliation diagnostics', () => {
     expect(JSON.stringify(f.log.mock.calls)).not.toContain(CANARY);
   });
 
-  it('accepts exactly the existing body cap and rejects one byte over with saturated diagnostics', async () => {
+  it.each([1, 999])('accepts the existing body cap and rejects %i bytes over with saturated diagnostics', async (extraBytes) => {
     const f = fixture(); const body = validBody + ' '.repeat(LIMIT - validBody.length);
     expect((await f.run(async () => new Response(body))).failed).toBe(0);
     f.log.mockClear();
-    const next = await f.run(async () => new Response(body + ' '.repeat(999)));
+    const next = await f.run(async () => new Response(body + ' '.repeat(extraBytes)));
     expect(next.failed).toBe(1);
     expect(f.log).toHaveBeenCalledWith('error', 'release_reconciliation.partial_failure', expect.objectContaining({
       failureDetails: [{ repositoryId: ID, phase: 'body', failureClass: 'too_large', httpStatus: 200, bodyBytes: LIMIT + 1, bodyBytesSource: 'streamed' }],
