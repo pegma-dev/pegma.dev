@@ -844,6 +844,7 @@ export async function supportAssistantFixture(
     access,
     answer,
     usagePolicy,
+    customerIdentity: () => identityRuntime.identity.getUser(owner),
     setModel(next: typeof script) {
       script = next;
     },
@@ -941,6 +942,43 @@ export async function supportAssistantFixture(
   };
 }
 
+async function expectPendingHumanHandoff(
+  f: Awaited<ReturnType<typeof supportAssistantFixture>>,
+) {
+  const staff = await f.support.readStaffTicket(
+    await f.access(operator),
+    'fictional-answer-ticket',
+  );
+  const customer = await f.support.readCustomerTicket(
+    await f.access(owner),
+    staff.ticket.id,
+  );
+  const work = await f.support.readHandoffWork(
+    await f.access(operator),
+    staff.ticket.id,
+  );
+  expect(staff.ticket.handling?.state).toBe('human-pending');
+  expect(
+    staff.messages.filter((message) => message.authorKind === 'assistant'),
+  ).toEqual([]);
+  expect(work).toHaveLength(1);
+  const handoff = work[0]!;
+  expect(handoff).toMatchObject({
+    ticketId: staff.ticket.id,
+    status: 'pending',
+    handlingGeneration: staff.ticket.handling?.generation,
+    transcript: {
+      ticketId: staff.ticket.id,
+      lastVisibleMessageId: customer.messages.at(-1)?.id,
+    },
+  });
+  expect(handoff.transcript.throughRevision).toBeGreaterThan(0);
+  expect(handoff.transcript.throughRevision).toBeLessThanOrEqual(
+    staff.ticket.revision,
+  );
+  return { handoff, customer };
+}
+
 /** Each backend executes these same scenarios through public package entries. */
 export function registerSupportAssistantCases(
   name: string,
@@ -1012,6 +1050,77 @@ export function registerSupportAssistantCases(
       expect(
         (await f.rows()).filter((row) => row.kind === 'assistant_turn'),
       ).toMatchObject([{ status: 'completed' }]);
+    });
+
+    it.each([
+      {
+        scenario: 'unsupported guidance',
+        reason: 'no_guidance',
+        summary:
+          'No approved guide supports the requested export format. Staff should confirm the available export options.',
+      },
+      {
+        scenario: 'conflicting guidance',
+        reason: 'other',
+        summary:
+          'The supplied export guidance needs staff clarification before another option is suggested.',
+      },
+    ] as const)(
+      'retains useful human context when the fake connector selects $scenario escalation',
+      async ({ reason, summary }) => {
+        const f = await supportAssistantFixture(await createBackend());
+        const identityBefore = structuredClone(await f.customerIdentity());
+        const messagesBefore = await f.messages();
+        expect(identityBefore).not.toBeNull();
+        // The connector chooses this decision. This tests the real handoff
+        // pipeline, not semantic unsupported/conflict detection by a model.
+        f.setModel(async (_input, context) => ({
+          ...f.answer(context),
+          outputJson: JSON.stringify({
+            kind: 'escalate',
+            reason,
+            text: summary,
+          }),
+        }));
+
+        await f.untilTurn();
+
+        expect(f.modelCalls).toHaveLength(1);
+        const references = f.modelCalls[0]!.context.allSourceReferences;
+        expect(references).toHaveLength(1);
+        const { handoff, customer } = await expectPendingHumanHandoff(f);
+        expect(handoff).toMatchObject({
+          reason,
+          summary,
+          attemptedGuideIds: references.map((reference) => reference.articleId),
+        });
+        expect(customer.messages).toEqual(messagesBefore);
+        expect(JSON.stringify(customer)).not.toContain(summary);
+        expect(await f.customerIdentity()).toEqual(identityBefore);
+      },
+    );
+
+    it('escalates actual empty permitted retrieval without calling the connector or changing the account', async () => {
+      const f = await supportAssistantFixture(await createBackend());
+      await f.retireGuide();
+      const identityBefore = structuredClone(await f.customerIdentity());
+      const messagesBefore = await f.messages();
+      expect(identityBefore).not.toBeNull();
+
+      // Retire the sole permitted guide through the real KB. No fake model
+      // decision manufactures the coordinator's no-guidance boundary.
+      await f.untilTurn();
+
+      expect(f.modelCalls).toEqual([]);
+      expect(f.usageReservations).toEqual([]);
+      const { handoff, customer } = await expectPendingHumanHandoff(f);
+      expect(handoff).toMatchObject({
+        reason: 'no_guidance',
+        attemptedGuideIds: [],
+      });
+      expect(handoff.summary).toContain('A person can help');
+      expect(customer.messages).toEqual(messagesBefore);
+      expect(await f.customerIdentity()).toEqual(identityBefore);
     });
 
     it('does not infer botRead from collection mapping, service authority or the existing host policy', async () => {
