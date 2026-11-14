@@ -15,11 +15,30 @@ retaining the complete user envelope as data. The verdict schema remains named
 The host's [checker adapter](../worker/src/support-independent-checks-model.ts)
 delegates this contract and the route-policy hash to the SDK.
 
-The SDK's explicit provider-group mode is opt-in. This host retains its existing
-endpoint-qualified route configuration and model allowlists; this dependency
-adoption does not enable provider-group selection or add a price policy. Any
-future opt-in requires separate current route, pricing, privacy and tokenizer
-qualification. Customer AI remains off.
+The normal paid bootstrap also permits one explicit learning/engineering
+checker-only tuple:
+`openai/gpt-5.4` / `Azure` / `azure` / `max_completion_tokens` with
+`providerSelectionScope:'provider_group'`. Route, static checker allowlist and
+current Admin approval must independently select that scope. The route must
+include a hash-bound `providerMaxPrice` with finite prompt/completion prices in
+USD per million tokens and `request:0`; the SDK checks its worst-case token cost
+against configured and current total-cost caps. Any change requires current
+approval of the new policy hash, not an inferred approval from recomputing it.
+The group requires separate current privacy, evaluation and tokenizer evidence;
+an earlier exact-region approval does not qualify it or guarantee a region.
+
+GPT-5.4 checks use the static `gpt-tokenizer@4.1.2` `model/gpt-5.4` entry with
+request-derived merge caching disabled and special-looking text counted as
+ordinary input. Qualification model/version, framing and evidence dates remain
+operator evidence, checked by the SDK. Unknown models refuse before key access
+or a provider request. The legacy GPT-4.1-mini checker selection, generation,
+customer-answer and release-follow-up generator allowlists remain unchanged.
+All host checker consumers receive the shared checker tuple/counter; the
+published SDK separately refuses provider groups for release-follow-up checks.
+That purpose remains held for a group route rather than inheriting a learning
+or engineering approval. No
+route, price, approval, credential or feature flag is installed or enabled by
+this code change. Customer AI remains off.
 
 Legacy endpoint routing sends `provider.only=[endpointTag]`,
 `allow_fallbacks:false`, `zdr:true`, `data_collection:'deny'` and

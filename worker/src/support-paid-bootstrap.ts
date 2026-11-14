@@ -12,6 +12,7 @@ import { createSupportBackgroundServiceAccess } from './support-background-servi
 import { createSupportLearningModelPorts } from './support-learning-model';
 import { createSupportEngineeringModelPorts } from './support-engineering-model';
 import { createSupportAssistantTokenCounter } from './support-assistant-token-counter';
+import { createSupportIndependentCheckTokenCounter } from './support-independent-checks-token-counter';
 import { SUPPORT_ASSISTANT_CREDENTIAL_REF } from './support-assistant-production';
 import { canonical } from './support-openrouter-model';
 import { knowledgeDigest } from './knowledge-evidence';
@@ -75,6 +76,20 @@ const allowed = Object.freeze([
     provider: 'Azure',
     endpointTag: 'azure/swedencentral',
     outputTokenParameter: 'max_tokens' as const,
+  },
+]);
+// Static capability only: route and current Admin approval must independently
+// opt in to the group and bind its finite price/privacy/qualification evidence.
+// All generation and customer answers keep their existing lists. The SDK also
+// retains its separate release-follow-up checker purpose/approval restrictions.
+const checkerAllowed = Object.freeze([
+  ...allowed,
+  {
+    model: 'openai/gpt-5.4',
+    provider: 'Azure',
+    endpointTag: 'azure',
+    outputTokenParameter: 'max_completion_tokens' as const,
+    providerSelectionScope: 'provider_group' as const,
   },
 ]);
 function live(value: { verifiedAt?: string; validUntil: string }, clock: Clock) {
@@ -261,7 +276,7 @@ export async function createSupportPaidBootstrap(
   try {
     const version = profile.revision + ':' + (await knowledgeDigest(profile));
     if (!current()) return undefined;
-    const checkCounter = counter(profile.checks.qualification);
+    const checkCounter = createSupportIndependentCheckTokenCounter(profile.checks.qualification);
     const readApiKey = (reference: string) =>
       current() && reference === SUPPORT_ASSISTANT_CREDENTIAL_REF
         ? currentEnv().SUPPORT_ASSISTANT_OPENROUTER_API_KEY
@@ -270,7 +285,7 @@ export async function createSupportPaidBootstrap(
       clock,
       enabled: current,
       readRoute: () => (current() ? profile.checks.route : undefined),
-      allowlist: allowed,
+      allowlist: checkerAllowed,
       counter: checkCounter,
     });
     const reviewPolicy: LearningCheckPolicyPort = {
@@ -366,7 +381,7 @@ export async function createSupportPaidBootstrap(
       enabled: paid,
       authority: checkerAuthority.learning.serviceAccess,
       readRoute: () => (current() ? profile.checks.route : undefined),
-      allowlist: allowed,
+      allowlist: checkerAllowed,
       counter: checkCounter,
       readApiKey,
       fetch: options.fetch,
