@@ -29,7 +29,10 @@ an earlier exact-region approval does not qualify it or guarantee a region.
 
 GPT-5.4 checks use the static `gpt-tokenizer@4.1.2` `model/gpt-5.4` entry with
 request-derived merge caching disabled and special-looking text counted as
-ordinary input. Qualification model/version, framing and evidence dates remain
+ordinary input. Its implementation is loaded only when the profile selects
+GPT-5.4; absent, malformed, unknown-model and legacy-mini selections do not
+initialize it. This does not establish bundle size or deployed CPU acceptance.
+Qualification model/version, framing and evidence dates remain
 operator evidence, checked by the SDK. Unknown models refuse before key access
 or a provider request. The legacy GPT-4.1-mini checker selection, generation,
 customer-answer and release-follow-up generator allowlists remain unchanged.

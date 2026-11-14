@@ -11,6 +11,9 @@ import {
   type IndependentCheckContext,
 } from "./support-independent-checks-model";
 import { createSupportIndependentCheckTokenCounter } from "./support-independent-checks-token-counter";
+import { createMemoryStore } from "@pegma/storage-core";
+import { createSupportReleaseFollowupChecks } from "@pegma/support-desk-ai/openrouter";
+import { supportFollowupPaidFixture } from "./support-release-followup-paid-fixtures";
 
 const { gpt54Count } = vi.hoisted(() => ({ gpt54Count: vi.fn() }));
 vi.mock("gpt-tokenizer/model/gpt-5.4", async (importOriginal) => {
@@ -35,7 +38,13 @@ const verdict = {
 // Every model version, price, approval and evidence reference is fictional.
 async function groupFixture() {
   const f = await paidBootstrapFixture();
-  const r = f.profile.checks.route;
+  await selectGroupChecks(f.profile.checks);
+  return f;
+}
+async function selectGroupChecks(
+  checks: Awaited<ReturnType<typeof paidBootstrapFixture>>["profile"]["checks"],
+) {
+  const r = checks.route;
   Object.assign(r.configuration, {
     model: "openai/gpt-5.4",
     modelVersion: "fictional-gpt54",
@@ -47,17 +56,16 @@ async function groupFixture() {
     providerMaxPrice: { prompt: 0.01, completion: 0.01, request: 0 },
   });
   Object.assign(r.approval, { providerSelectionScope: "provider_group" });
-  Object.assign(f.profile.checks.qualification, {
+  Object.assign(checks.qualification, {
     model: "openai/gpt-5.4",
     modelVersion: "fictional-gpt54",
   });
-  Object.assign(f.profile.checks.usagePolicy, {
+  Object.assign(checks.usagePolicy, {
     modelVersion: "fictional-gpt54",
   });
   const { approval: _approval, ...unsigned } = r;
   r.approval.requestPolicySha256 =
     await independentCheckRoutePolicyHash(unsigned);
-  return f;
 }
 type Fixture = Awaited<ReturnType<typeof groupFixture>>;
 function save(f: Fixture) {
@@ -220,6 +228,21 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
       f.profile.checks.route.configuration,
     );
     const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body));
+    expect(f.profile.checks.route.approval.requestPolicySha256).toBe(
+      "aeb815a1974805e372cda8947d5c4f5bdb7a9c8e94ac69688ba5b9f0966e2302",
+    );
+    expect(
+      createHash("sha256")
+        .update(String(fetch.mock.calls[0]![1]!.body))
+        .digest("hex"),
+    ).toBe("be81b80386f0569314f8a5b30fd5be11fdb6e05634848d7d8365229ad5e4fd45");
+    const { approval: _approval, ...unsigned } = f.profile.checks.route;
+    expect(
+      await independentCheckRoutePolicyHash({
+        ...unsigned,
+        providerMaxPrice: { ...unsigned.providerMaxPrice!, prompt: 0.02 },
+      }),
+    ).not.toBe(f.profile.checks.route.approval.requestPolicySha256);
     expect(body.model).toBe("openai/gpt-5.4");
     expect(body.max_completion_tokens).toBe(1000);
     expect(body).not.toHaveProperty("max_tokens");
@@ -250,12 +273,10 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
 
   it.each([
     "route-scope-absent",
-    "route-scope-undefined",
+    "route-scope-other",
     "approval-scope-absent",
-    "approval-scope-undefined",
+    "approval-scope-other",
     "price-absent",
-    "price-undefined",
-    "price-nonfinite",
     "request-charge",
     "over-budget",
     "changed-price-hash",
@@ -268,7 +289,6 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
     "wrong-tokenizer-evidence",
     "old-wire",
     "logging-enabled",
-    "unknown-route-model",
     "unknown-tokenizer-model",
   ])("holds %s before credential reads or provider work", async (change) => {
     const f = await groupFixture(),
@@ -277,23 +297,17 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
       case "route-scope-absent":
         Reflect.deleteProperty(r, "providerSelectionScope");
         break;
-      case "route-scope-undefined":
-        Reflect.set(r, "providerSelectionScope", undefined);
+      case "route-scope-other":
+        Reflect.set(r, "providerSelectionScope", "exact_endpoint");
         break;
       case "approval-scope-absent":
         Reflect.deleteProperty(r.approval, "providerSelectionScope");
         break;
-      case "approval-scope-undefined":
-        Reflect.set(r.approval, "providerSelectionScope", undefined);
+      case "approval-scope-other":
+        Reflect.set(r.approval, "providerSelectionScope", "exact_endpoint");
         break;
       case "price-absent":
         Reflect.deleteProperty(r, "providerMaxPrice");
-        break;
-      case "price-undefined":
-        Reflect.set(r, "providerMaxPrice", undefined);
-        break;
-      case "price-nonfinite":
-        Reflect.set(r.providerMaxPrice!, "prompt", Infinity);
         break;
       case "request-charge":
         Reflect.set(r.providerMaxPrice!, "request", 1);
@@ -335,16 +349,21 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
       case "logging-enabled":
         Reflect.set(r.approval, "inputOutputLogging", true);
         break;
-      case "unknown-route-model":
-        r.configuration.model = "unknown/model";
-        break;
       case "unknown-tokenizer-model":
         f.profile.checks.qualification.model = "unknown/model";
         break;
     }
+    const normalized = JSON.parse(JSON.stringify(r));
+    const { approval: _approval, ...unsigned } = normalized;
+    const renewedHash = await independentCheckRoutePolicyHash(unsigned);
+    if (change === "changed-price-hash") {
+      expect(renewedHash).not.toBe(r.approval.requestPolicySha256);
+      // The changed price still fits the configured cap: only approval is stale.
+      expect(Math.ceil(32_000 * 0.02 + 1_000 * 0.01)).toBeLessThan(1_000);
+    } else {
+      r.approval.requestPolicySha256 = renewedHash;
+    }
     save(f);
-    // JSON has no undefined/non-finite representation: these become absent/null
-    // operator fields and must still hold at the normal root.
     const secret = vi.fn(() => {
       throw new Error("Must refuse before credentials");
     });
@@ -489,5 +508,110 @@ describe("normal paid bootstrap checker-only GPT-5.4 capability", () => {
         model: "unknown/model",
       }),
     ).toThrow(TypeError);
+  });
+
+  it.each(["route-scope", "approval-scope", "price", "nonfinite-price"])(
+    "refuses actual non-serialized %s authoring fields before credentials",
+    async (field) => {
+      const f = await groupFixture(),
+        fetch = fetcher(f);
+      save(f);
+      const b = (await createSupportPaidBootstrap(f.env, {
+        clock: f.clock,
+        fetch,
+      }))!;
+      const route = structuredClone(b.profile.checks.route);
+      if (field === "approval-scope") {
+        Reflect.set(route.approval, "providerSelectionScope", undefined);
+        expect(Object.hasOwn(route.approval, "providerSelectionScope")).toBe(
+          true,
+        );
+      } else if (field === "nonfinite-price") {
+        route.providerMaxPrice!.prompt = Infinity;
+        expect(route.providerMaxPrice!.prompt).toBe(Infinity);
+      } else {
+        const key =
+          field === "route-scope"
+            ? "providerSelectionScope"
+            : "providerMaxPrice";
+        Reflect.set(route, key, undefined);
+        expect(Object.hasOwn(route, key)).toBe(true);
+      }
+      // Deliberately no JSON round trip: SDK sees own undefined/Infinity values.
+      const key = vi.fn(() => "FICTIONAL_KEY");
+      const model = createSupportIndependentCheckModel({
+        ...b.learning.independentChecks!,
+        clock: f.clock,
+        readRoute: () => route,
+        readApiKey: key,
+      });
+      expect(await model.resolve()).toBeNull();
+      await expect(
+        model.generate(
+          input(f),
+          context(f),
+          f.profile.checks.route.configuration,
+        ),
+      ).rejects.toThrow();
+      expect(key).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains the actual SDK follow-up purpose hold while its generator remains legacy", async () => {
+    // A ready legacy control rules out missing keys/purpose evidence as the
+    // reason that the otherwise qualified group counterpart is held.
+    for (const group of [false, true]) {
+      const f = await supportFollowupPaidFixture();
+      if (group) await selectGroupChecks(f.profile.checks);
+      Reflect.set(
+        f.env,
+        "SUPPORT_PAID_CONFIGURATION_JSON",
+        JSON.stringify(f.profile),
+      );
+      const providerKey = vi.fn(() => {
+        throw new Error("No provider credential for policy reads");
+      });
+      Object.defineProperty(f.env, "SUPPORT_ASSISTANT_OPENROUTER_API_KEY", {
+        get: providerKey,
+      });
+      const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+        throw new Error("No provider call");
+      });
+      const b = (await createSupportPaidBootstrap(f.env, {
+        clock: f.clock,
+        fetch,
+      }))!;
+      const paid = b.releaseFollowup!.production!;
+      expect(paid.generator.counter!.qualification.model).toBe(
+        "openai/gpt-4.1-mini",
+      );
+      expect(paid.checks.counter).toBe(b.learning.independentChecks!.counter);
+      expect(paid.checks.counter!.qualification.model).toBe(
+        group ? "openai/gpt-5.4" : "openai/gpt-4.1-mini",
+      );
+      const application = vi.fn(() => {
+        throw new Error("Policy read must not inspect application records");
+      });
+      const evidence = vi.fn(async () => {
+        throw new Error("Policy read must not inspect release evidence");
+      });
+      const checks = createSupportReleaseFollowupChecks(
+        {
+          ...paid.checks,
+          store: createMemoryStore(),
+          application,
+          releaseEvidence: { verifyInput: evidence, confirm: evidence },
+        },
+        "pegma.dev",
+      );
+      expect((await checks.resolvePolicy(undefined, signal())).outcome).toBe(
+        group ? "unavailable" : "ready",
+      );
+      expect(application).not.toHaveBeenCalled();
+      expect(evidence).not.toHaveBeenCalled();
+      expect(providerKey).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    }
   });
 });

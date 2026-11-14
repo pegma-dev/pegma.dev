@@ -12,7 +12,6 @@ import { createSupportBackgroundServiceAccess } from './support-background-servi
 import { createSupportLearningModelPorts } from './support-learning-model';
 import { createSupportEngineeringModelPorts } from './support-engineering-model';
 import { createSupportAssistantTokenCounter } from './support-assistant-token-counter';
-import { createSupportIndependentCheckTokenCounter } from './support-independent-checks-token-counter';
 import { SUPPORT_ASSISTANT_CREDENTIAL_REF } from './support-assistant-production';
 import { canonical } from './support-openrouter-model';
 import { knowledgeDigest } from './knowledge-evidence';
@@ -168,6 +167,14 @@ function counter<Q extends { readonly model: string }>(qualification: Q) {
     count: (text: string) => implementation.count(text),
   });
 }
+async function checkerCounter(qualification: SupportPaidProfile['checks']['qualification']) {
+  if (qualification.model === 'openai/gpt-4.1-mini') return counter(qualification);
+  if (qualification.model !== 'openai/gpt-5.4')
+    throw new TypeError('Unsupported checker tokenizer implementation');
+  const { createSupportIndependentCheckTokenCounter } =
+    await import('./support-independent-checks-token-counter');
+  return createSupportIndependentCheckTokenCounter(qualification);
+}
 function targets(
   profile: NonNullable<SupportPaidProfile['learning']>,
   product: { productId: string; version: string; buildId: string },
@@ -276,7 +283,8 @@ export async function createSupportPaidBootstrap(
   try {
     const version = profile.revision + ':' + (await knowledgeDigest(profile));
     if (!current()) return undefined;
-    const checkCounter = createSupportIndependentCheckTokenCounter(profile.checks.qualification);
+    const checkCounter = await checkerCounter(profile.checks.qualification);
+    if (!current()) return undefined;
     const readApiKey = (reference: string) =>
       current() && reference === SUPPORT_ASSISTANT_CREDENTIAL_REF
         ? currentEnv().SUPPORT_ASSISTANT_OPENROUTER_API_KEY
