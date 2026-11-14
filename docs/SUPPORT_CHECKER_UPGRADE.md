@@ -1,19 +1,25 @@
 # Preparing the independent checker wire upgrade
 
-The host pins synchronized public Support Desk `0.2.11`, released from
-`8f6bc9f033c93dc8166a15c5c214dd4319894c1f` after strict public registry and
+The host pins synchronized public Support Desk `0.2.12`, released from
+`b41b301c955b1960ca2c6f9d3a186f2c6be28ca2` after strict public registry and
 release-artifact verification. The
-[public release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.11)
-supersedes the host's `0.2.10` dependency selection. Publication and local tests
+[public release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.12)
+supersedes the host's `0.2.11` dependency selection. Publication and local tests
 do not establish provider quality, deployed Free CPU acceptance or customer
 activation.
 
-The new producer wire is `openrouter-support-independent-check-v2`. It places
+The producer wire remains `openrouter-support-independent-check-v2`. It places
 the current server-configured review policy in the system message while
 retaining the complete user envelope as data. The verdict schema remains named
 `support_independent_check_v1`; that schema name does not identify the wire.
 The host's [checker adapter](../worker/src/support-independent-checks-model.ts)
 delegates this contract and the route-policy hash to the SDK.
+
+The SDK's explicit provider-group mode is opt-in. This host retains its existing
+endpoint-qualified route configuration and model allowlists; this dependency
+adoption does not enable provider-group selection or add a price policy. Any
+future opt-in requires separate current route, pricing, privacy and tokenizer
+qualification. Customer AI remains off.
 
 Before enabling a selected checker profile, qualify the actual installed wire
 and exact endpoint/model, tokenizer implementation, complete system and user
@@ -48,5 +54,5 @@ passing qualification. Cloud execution and live provider evaluation remain
 separately authorized host operations.
 
 Producer contract:
-[AI adapter](https://github.com/pegma-dev/support-desk/blob/8f6bc9f033c93dc8166a15c5c214dd4319894c1f/packages/ai/README.md),
-[upgrade notes](https://github.com/pegma-dev/support-desk/blob/8f6bc9f033c93dc8166a15c5c214dd4319894c1f/docs/UPGRADING.md).
+[AI adapter](https://github.com/pegma-dev/support-desk/blob/b41b301c955b1960ca2c6f9d3a186f2c6be28ca2/packages/ai/README.md),
+[upgrade notes](https://github.com/pegma-dev/support-desk/blob/b41b301c955b1960ca2c6f9d3a186f2c6be28ca2/docs/UPGRADING.md).

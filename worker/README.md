@@ -248,7 +248,7 @@ public acknowledgement endpoint.
 
 ## Support Desk composition
 
-Authenticated product feedback composes exact `0.2.11` versions of
+Authenticated product feedback composes exact `0.2.12` versions of
 `@pegma/support-desk-contracts`, `@pegma/support-desk-core`,
 `@pegma/support-desk-application`, and `@pegma/support-desk-templates` over
 the same `IDENTITY_DB` D1 binding. Support Desk collections
@@ -259,7 +259,7 @@ via AccessContext defaults (not a paid entitlement). Categories:
 `feedback`, `bug`, `feature_request`, `documentation`, `question`. Subject
 marker: `[PEG-…]`. Tracking pages: `/feedback` and `/feedback/ticket/?id=…`.
 
-The optional `@pegma/support-desk-ai@0.2.11` package is installed for the
+The optional `@pegma/support-desk-ai@0.2.12` package is installed for the
 [isolated scripted answering stage](../docs/SUPPORT_ASSISTANT_STAGE.md). The
 earlier public `0.2.5` graph passed the 1,125-test local/CI
 [adoption checkpoint](../docs/KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint);

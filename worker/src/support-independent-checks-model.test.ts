@@ -228,11 +228,12 @@ describe('purpose-qualified independent checker transport', () => {
     );
     expect(body.messages[0].content).toContain(f.c.trustedInstructions);
     expect(JSON.parse(body.messages[1].content)).toEqual(f.input);
-    expect(body.provider).toMatchObject({
+    expect(body.provider).toEqual({
       only: ['fictional/region'],
       allow_fallbacks: false,
       zdr: true,
       data_collection: 'deny',
+      require_parameters: true,
     });
     expect(body.response_format.json_schema.name).toBe(
       'support_independent_check_v1',

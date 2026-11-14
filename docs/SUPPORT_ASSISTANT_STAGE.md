@@ -51,7 +51,7 @@ checked during cloud qualification. See
 ## Run the local checks
 
 Use the repository's supported Node version and frozen dependency install.
-The current package selection is Support Desk `0.2.11` with direct Knowledge Base
+The current package selection is Support Desk `0.2.12` with direct Knowledge Base
 `0.1.8`; [package.json](../package.json) and the
 [lockfile](../pnpm-lock.yaml) are authoritative.
 
@@ -91,7 +91,7 @@ reconciliation, with the persisted ledger stable across later duplicates.
 These historical results apply to that fictional fixture. The earlier public
 `0.2.5` graph passed the normal 1,125-test local/CI
 [adoption checkpoint](KNOWLEDGE_COMPOSITION.md#public-025-adoption-checkpoint).
-That checkpoint does not qualify the current `0.2.11` graph. Current host
+That checkpoint does not qualify the current `0.2.12` graph. Current host
 validation remains pending. Deployed broker timing, retry delivery, CPU use and
 wider workloads retain their qualification gates.
 
