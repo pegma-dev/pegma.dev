@@ -976,7 +976,7 @@ return {
         probe: 'disabled' | 'ok' | 'fail';
       } = {
         storage: 'cloudflare-d1',
-        packages: '@pegma/support-desk-application@0.2.10',
+        packages: '@pegma/support-desk-application@0.2.11',
         probe: 'disabled',
       };
       if (supportHealthProbeEnabled(env)) {

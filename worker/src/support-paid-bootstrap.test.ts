@@ -48,6 +48,29 @@ describe('closed current paid operator bootstrap', () => {
     expect(b!.learning.production?.enabled?.()).toBe(false);
     expect(key).not.toHaveBeenCalled();
   });
+  it('keeps Source intake but holds paid ports with prior v1 checker route and tokenizer evidence', async () => {
+    const f = await paidBootstrapFixture();
+    Object.assign(f.profile.checks.route.approval, {
+      wireVersion: 'openrouter-support-independent-check-v1',
+    });
+    Object.assign(f.profile.checks.qualification, {
+      wireVersion: 'openrouter-support-independent-check-v1',
+    });
+    Reflect.set(f.env, 'SUPPORT_PAID_CONFIGURATION_JSON', JSON.stringify(f.profile));
+    const key = vi.fn(() => {
+      throw new Error('Prior wire evidence must not read a key');
+    });
+    Object.defineProperty(f.env, 'SUPPORT_INDEPENDENT_CHECK_RECEIPT_KEY_BASE64', { get: key });
+    Object.defineProperty(f.env, 'SUPPORT_ASSISTANT_OPENROUTER_API_KEY', { get: key });
+    const b = await createSupportPaidBootstrap(f.env, { clock: f.clock });
+    expect(b).toBeDefined();
+    expect(b!.learning.intake!.enabled).toBe(true);
+    expect(await b!.learning.source!.reviewPolicy.resolvePolicy(undefined, signal())).toEqual({
+      outcome: 'unavailable',
+    });
+    expect(b!.learning.independentChecks).toBeUndefined();
+    expect(key).not.toHaveBeenCalled();
+  });
   it('uses distinct intrinsic ceilings with the exact SAME checker pool and a distinct generation scope', async () => {
     const f = await paidBootstrapFixture();
     const b = (await createSupportPaidBootstrap(f.env, { clock: f.clock }))!;

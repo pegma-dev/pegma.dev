@@ -16,16 +16,16 @@ provider and customer activation retain their acceptance gates. See the
 
 ## Packages
 
-Public selection as of 2026-11-13: Support Desk `0.2.10`, Knowledge Base `0.1.8`
+Public selection as of 2026-11-13: Support Desk `0.2.11`, Knowledge Base `0.1.8`
 and Sessions `0.3.0`. [`package.json`](../package.json) and
 [`pnpm-lock.yaml`](../pnpm-lock.yaml) are the source of truth for current direct
 selections and the installed graph.
 
-- `@pegma/support-desk-application@0.2.10`
-- `@pegma/support-desk-contracts@0.2.10`
-- `@pegma/support-desk-core@0.2.10`
-- `@pegma/support-desk-templates@0.2.10`
-- `@pegma/support-desk-ai@0.2.10` (optional coordinator)
+- `@pegma/support-desk-application@0.2.11`
+- `@pegma/support-desk-contracts@0.2.11`
+- `@pegma/support-desk-core@0.2.11`
+- `@pegma/support-desk-templates@0.2.11`
+- `@pegma/support-desk-ai@0.2.11` (optional coordinator)
 - `@pegma/authorization-admin@0.4.0` (role administration service)
 - `@pegma/authorization-core@0.4.0` (AccessContext resolution)
 - `@pegma/authorization-policy@0.4.0` (PolicyDocumentV1 schema validation)
@@ -35,7 +35,7 @@ All five Support Desk packages have completed producer publication and
 registry qualification. The optional AI package selects exact KB application
 and contracts `0.1.8`; the host selects all four KB packages at that version.
 Producer qualification and installation do not complete host or provider
-acceptance. [Public Support Desk release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.10),
+acceptance. [Public Support Desk release](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.11),
 [public KB release](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.8).
 The earlier [Support `0.2.7`](https://github.com/pegma-dev/support-desk/releases/tag/v0.2.7)
 and [KB `0.1.6`](https://github.com/pegma-dev/knowledge-base/releases/tag/v0.1.6)

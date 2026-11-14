@@ -1,5 +1,6 @@
 import type { SupportPaidEnvironment } from './support-paid-bootstrap';
 import {
+  INDEPENDENT_CHECK_WIRE,
   independentCheckRoutePolicyHash,
   type IndependentCheckRoute,
 } from './support-independent-checks-model';
@@ -61,9 +62,9 @@ export async function paidBootstrapFixture() {
       purpose: 'support_independent_check',
     },
   };
-  const approval = {
+  const approval: IndependentCheckRoute['approval'] = {
     configurationVersion: common.version,
-    wireVersion: 'openrouter-support-independent-check-v1' as const,
+    wireVersion: INDEPENDENT_CHECK_WIRE,
     requestPolicySha256: '',
     evidenceRef: 'fictional-approval',
     effectivePolicyRef: 'fictional-policy',
@@ -160,7 +161,7 @@ export async function paidBootstrapFixture() {
     sourceRevision: source.revision,
     checks: {
       route: checkRoute,
-      qualification: qualification('openrouter-support-independent-check-v1'),
+      qualification: qualification(INDEPENDENT_CHECK_WIRE),
       usagePolicy: pool(checkRoute.usageScopeRef, configuration.version),
       receiptKey: {
         id: 'fictional-receipt-key-v1',
