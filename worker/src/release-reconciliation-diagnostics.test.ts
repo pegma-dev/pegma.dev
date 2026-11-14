@@ -10,6 +10,7 @@ import { componentReleaseCollection, componentReleaseKey } from './component-rel
 import { RELEASE_CATALOG } from './release-catalog';
 import { readReleaseOpsState } from './release-ops-state';
 import { runReleaseReconciliation } from './release-reconciliation';
+import { createAppLogger } from './logger';
 
 const ID = '1312512520';
 const START = Date.parse('2026-11-14T00:00:00Z');
@@ -114,6 +115,41 @@ describe('bounded release reconciliation diagnostics', () => {
     expect(f.log).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves nested failure details through the production tee and Cloudflare logger adapters', async () => {
+    const sink = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+    try {
+      await runReleaseReconciliation({
+        store: createMemoryStore(), logger: createAppLogger({}, waitUntil),
+        config: { allowedRepositoryIds: new Set([ID]) }, scheduledTime: START, now: AT,
+        fetchImpl: async () => new Response(CANARY, { status: 403 }),
+      });
+      expect(sink).toHaveBeenCalledTimes(1);
+      const expected = {
+        level: 'error', message: 'release_reconciliation.partial_failure', fields: {
+          examined: 1, upserted: 0, cleared: 0, notModified: 0, failed: 1,
+          failureDetails: [{ repositoryId: ID, phase: 'status', failureClass: 'http_status', httpStatus: 403 }],
+          failureDetailsOmitted: 0,
+        },
+      };
+      expect(sink).toHaveBeenCalledWith(expected);
+      expect(JSON.parse(JSON.stringify(sink.mock.calls[0]![0]))).toEqual(expected);
+      expect(JSON.stringify(sink.mock.calls)).not.toContain(CANARY);
+      expect(waitUntil).not.toHaveBeenCalled();
+    } finally {
+      sink.mockRestore();
+    }
+  });
+
+  it('does not claim that a null 2xx body was streamed', async () => {
+    const f = fixture();
+    expect((await f.run(async () => new Response(null))).failed).toBe(1);
+    expect(f.log).toHaveBeenCalledWith('error', 'release_reconciliation.partial_failure', expect.objectContaining({
+      failureDetails: [{ repositoryId: ID, phase: 'facts', failureClass: 'invalid_release', httpStatus: 200 }],
+    }));
+    expect((await readReleaseOpsState(f.base)).lastSuccessfulReconciliationAt).toBeNull();
+  });
+
   it.each([
     ['fetch rejection', () => Promise.reject(new Error(CANARY)), { phase: 'fetch', failureClass: 'fetch_rejected' }],
     ['HTTP refusal', async () => new Response(CANARY, { status: 403, headers: { 'X-Fixture': CANARY } }), { phase: 'status', failureClass: 'http_status', httpStatus: 403 }],
@@ -214,5 +250,23 @@ describe('bounded release reconciliation diagnostics', () => {
       failureDetails: RELEASE_CATALOG.slice(0, 4).map(entry => ({ repositoryId: entry.repositoryId, phase: 'status', failureClass: 'http_status', httpStatus: 503 })), failureDetailsOmitted: 9,
     }));
     expect((await readReleaseOpsState(f.base)).lastSuccessfulReconciliationAt).toBeNull();
+  });
+
+  it('includes the final catalog repository when its normal scheduled slot fails', async () => {
+    const f = fixture(); const tail = RELEASE_CATALOG.at(-1)!;
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+    const summary = await runReleaseReconciliation({
+      store: f.store, logger: { log: f.log },
+      config: { allowedRepositoryIds: new Set(RELEASE_CATALOG.map(entry => entry.repositoryId)) },
+      scheduledTime: START + (RELEASE_CATALOG.length - 1) * 60_000, fetchImpl, now: AT,
+    });
+    expect(summary).toEqual({ examined: 1, upserted: 0, cleared: 0, notModified: 0, failed: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]![0])).toContain('/repositories/' + tail.repositoryId + '/releases/latest');
+    expect(f.log).toHaveBeenCalledTimes(1);
+    expect(f.log).toHaveBeenCalledWith('error', 'release_reconciliation.partial_failure', expect.objectContaining({
+      failureDetails: [{ repositoryId: tail.repositoryId, phase: 'status', failureClass: 'http_status', httpStatus: 503 }],
+      failureDetailsOmitted: 0,
+    }));
   });
 });

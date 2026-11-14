@@ -26,6 +26,8 @@ const GITHUB_API = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const USER_AGENT = 'pegma-dev-release-reconciliation';
+// Scheduled invocations examine one repository; only explicit full passes can
+// truncate details, with the omitted count retained in the same summary.
 const MAX_FAILURE_DETAILS = 4;
 
 /** Existing summary only: finite public metadata, never error/body/header text.
@@ -146,12 +148,12 @@ async function readBoundedJson(
       return { ok: false, reason: 'too_large' };
     }
   }
-  failure.bodyBytes = 0;
-  failure.bodyBytesSource = 'streamed';
   const reader = response.body?.getReader();
   if (reader === undefined) {
     return { ok: true, value: null };
   }
+  failure.bodyBytes = 0;
+  failure.bodyBytesSource = 'streamed';
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
